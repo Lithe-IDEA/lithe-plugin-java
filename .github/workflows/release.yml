@@ -1,0 +1,101 @@
+name: Release
+
+# Push a tag v<version> matching plugin.json to publish a GitHub Release with
+# one publisher-signed archive per macOS architecture and its SHA-256 file.
+#
+# Only the "Sign, archive and publish" step receives the signing key; the
+# steps before it build and verify unsigned packages. Checkouts do not keep
+# the workflow token.
+#
+# Releases are published as pre-releases: Lithe still bundles Java Support and
+# lists it from its own official index (see MIGRATION.md). Remove --prerelease
+# below once the official index lists this repository's releases.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: Rust checks and tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Check formatting
+        run: cargo fmt --all --check
+      - name: Lint
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Test
+        run: cargo test --workspace --locked
+      - name: Check the pinned plugin SDK release
+        run: scripts/verify-sdk-lock.sh --download
+
+  release:
+    name: Publish ${{ github.ref_name }}
+    needs: test
+    runs-on: macos-26
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Check the tag matches plugin.json
+        run: |
+          set -euo pipefail
+          version=$(plutil -extract version raw -o - dev.lithe.plugin.java-support/plugin.json)
+          if [[ "$GITHUB_REF_NAME" != "v$version" ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match plugin.json version $version"
+            exit 1
+          fi
+      - name: Select Xcode 26.6
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: "26.6"
+      - name: Build the Lithe package tools
+        id: host-tools
+        run: echo "bin=$(scripts/host-tools.sh --require-pinned-swift)" >> "$GITHUB_OUTPUT"
+      - name: Build and verify both architectures
+        env:
+          HOST_TOOLS: ${{ steps.host-tools.outputs.bin }}
+        run: |
+          set -euo pipefail
+          for arch in arm64 x86_64; do
+            scripts/build-package.sh --arch "$arch" --host-tools "$HOST_TOOLS"
+          done
+      - name: Sign, archive and publish
+        env:
+          HOST_TOOLS: ${{ steps.host-tools.outputs.bin }}
+          LITHE_PLUGIN_PACKAGE_PRIVATE_KEY: ${{ secrets.LITHE_PLUGIN_PACKAGE_PRIVATE_KEY }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          checksums="$RUNNER_TEMP/checksums.txt"
+          : > "$checksums"
+          for arch in arm64 x86_64; do
+            scripts/archive-package.sh --package ".artifacts/package/$arch/dev.lithe.plugin.java-support" \
+              --arch "$arch" --sign --host-tools "$HOST_TOOLS" >> "$checksums"
+          done
+          {
+            echo "Lithe 官方 Java 插件 dev.lithe.plugin.java-support ${GITHUB_REF_NAME#v}。每个 macOS 架构一个经发布者签名的归档，附 SHA-256 文件。"
+            echo
+            echo "SHA-256："
+            echo '```'
+            sed 's#  dist/#  #' "$checksums"
+            echo '```'
+          } > "$RUNNER_TEMP/notes.md"
+          gh release create "$GITHUB_REF_NAME" dist/*.zip dist/*.zip.sha256 --verify-tag --prerelease \
+            --title "Java Support $GITHUB_REF_NAME" --notes-file "$RUNNER_TEMP/notes.md"
