@@ -1,0 +1,11 @@
+# Rust build output
+/target/
+backend/target/
+crates/*/target/
+
+# Plugin packages and downloaded, verified third-party inputs
+dist/
+.artifacts/
+.cache/
+
+.DS_Store

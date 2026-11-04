@@ -1,0 +1,44 @@
+Java Support for Lithe
+Copyright 2026 Lithe contributors
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+The plugin package built from this repository bundles third-party software that
+is downloaded at build time from pinned sources and verified by SHA-256 (see
+third_party/). Each component keeps its own license, and the license text is
+copied into the package next to the component:
+
+  Eclipse JDT Language Server   Eclipse Public License 2.0
+    https://download.eclipse.org/jdtls/
+  Project Lombok                MIT License
+    https://projectlombok.org/
+  Microsoft java-debug          Eclipse Public License 1.0
+    (vscode-java-debug)         https://github.com/microsoft/java-debug
+  Microsoft vscode-java-test    MIT License
+    (JUnit runner and plugin)   https://github.com/microsoft/vscode-java-test
+  Eclipse Temurin JDK           GNU General Public License v2 with the
+                                Classpath Exception
+    https://adoptium.net/
+
+The icons java.svg, java_dark.svg, maven.svg and maven_dark.svg in
+dev.lithe.plugin.java-support/icons/ come from the JetBrains IntelliJ Platform
+Community repository (https://github.com/JetBrains/intellij-community),
+platform/icons/src/fileTypes and plugins/maven resources, licensed under the
+Apache License, Version 2.0 (a copy is in
+dev.lithe.plugin.java-support/icons/LICENSE-APACHE-2.0.txt).
+Copyright 2000-2024 JetBrains s.r.o. and contributors.
+
+spring-boot.svg and spring-boot_dark.svg are original Lithe artwork.
+
+This product includes software derived from OpenIDEA
+(https://github.com/l0ng-ai/openidea, revision 971760f8580be4c60c13fe8f0294d2f9c48fc0bc),
+licensed under the Apache License 2.0.
+Copyright 2026 OpenIDEA contributors
+
+The derived part is the automatic JDK selection policy
+(crates/java-domain/src/execution/java_selection.rs, from
+crates/ide-sdk/src/java.rs). It was translated and modified for Lithe and moved
+here from the Lithe repository; the file names its origin.
+
+Lithe is not affiliated with OpenIDEA, JetBrains s.r.o., the Eclipse
+Foundation, Microsoft or their products.
