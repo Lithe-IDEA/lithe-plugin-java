@@ -1,6 +1,6 @@
 # 迁移说明：Java 逻辑从 Lithe 主仓库移到本仓库
 
-本文是 Java Support 插件（`dev.lithe.plugin.java-support`）从 Lithe 主仓库拆分出来的移植账本，回答四个问题：
+本文是 Java Support 插件（`io.github.lithe-idea.java-support`）从 Lithe 主仓库拆分出来的移植账本，回答四个问题：
 
 1. 主仓库里的每个 Java 相关文件或符号，现在在本仓库的哪里，状态是什么。
 2. 哪些部分在等宿主（Lithe Core 与 macOS 应用）提供通用插件 API，等的是计划里的哪个编号。
@@ -23,7 +23,7 @@
     还没有运行过，见第 10 节。
   - 18 个 fixture（共 1,234 行）放在 `fixtures/`。其中 12 个被 Rust 测试读取；另外 6 个是从主仓库复制来的契约样例，
     暂时没有 Rust 测试读取（见第 7 节）。
-  - 插件包：`dev.lithe.plugin.java-support/`，加上组装、校验、归档脚本、CI 和发布工作流。
+  - 插件包：`io.github.lithe-idea.java-support/`，加上组装、校验、归档脚本、CI 和发布工作流。
 - 领域代码的注释（`//!`、`///`）全部是英文。每个来自 Core 或 Swift 的模块在模块文档里写明来源。
 - 宿主侧还没有接线：`plugin.json` 暂时不声明 `backend`（`backend/tests/repository_pins.rs` 里有测试断言这一点），
   后端目前只把领域命令注册成插件函数，并带着跨插件函数的调用方一侧（第 5 节），等第 6 节列出的宿主 API 就位后再声明。
@@ -191,7 +191,7 @@ API-30（调试适配器）、API-37（环境与 l10n）、API-42（内置 Git �
 | `…/Models/AppModel/AppModel+JavaLaunchDecision.swift@1daaeb525`、`AppModel+JavaLaunchPreparation.swift@1daaeb525`、`Views/Run/JavaLaunchDecisionDialog.swift@1daaeb525`、`Views/Run/JavaRunConfigurationEditorView.swift@1daaeb525` | 无；规则在 `java_launch.rs`、`java_selection.rs` | 等待宿主 API（API-29） | 运行配置编辑与启动决策由宿主通用界面承载，Java 字段由插件声明 |
 | `…/Models/AppModel/AppModel+JavaIndex.swift@1daaeb525`、`Application/Features/SpringFeatureModel.swift@1daaeb525`、`MybatisFeatureModel.swift@1daaeb525`、`Core/Rust/RustJavaMavenOperations.swift@1daaeb525` | 无；索引规则在 `spring.rs`、`mybatis.rs` | 等待宿主 API（API-25） | 补全、悬浮、诊断、导航由插件作为语言提供者给出 |
 | `…/Views/Run/SpringEndpointsView.swift@1daaeb525` | 无 | 等待宿主 API（API-27） | Endpoints 面板需要插件原生界面的承载方式；本文不新增编号，落点待协调者确认 |
-| `…/Theme/JavaFileIconResolver.swift@1daaeb525` | 图标在 `dev.lithe.plugin.java-support/icons/` | 等待宿主 API（API-27） | 文件图标由插件贡献 |
+| `…/Theme/JavaFileIconResolver.swift@1daaeb525` | 图标在 `io.github.lithe-idea.java-support/icons/` | 等待宿主 API（API-27） | 文件图标由插件贡献 |
 | `…/Application/Features/JavaPluginTransition.swift@1daaeb525`、`AppModel+JavaPlugin.swift@1daaeb525` | 无 | 不移植（宿主"推荐安装 Java Support"的引导，应由商店索引取代，不是插件逻辑） | |
 | `…/Views/Language/JavaProblemsView.swift@1daaeb525`、`JavaReferencesView.swift@1daaeb525` | 无 | 不移植（宿主通用的问题和引用视图，没有 Java 领域规则，只需改名） | |
 | `…/Models/Java/{JavaDiagnosticModels,JavaNavigationModels,MybatisModels,SpringModels,ActiveTestTarget}.swift@1daaeb525` | 无；JSON 形状在 `dj/protocol/contracts.rs` | 不移植（宿主界面模型） | |
@@ -219,17 +219,17 @@ API-30（调试适配器）、API-37（环境与 l10n）、API-42（内置 Git �
 
 | 来源 | 新位置 | 状态 | 说明 |
 | --- | --- | --- | --- |
-| `Plugins/mac/Official/JavaSupport/plugin.json@1daaeb525` | `dev.lithe.plugin.java-support/plugin.json` | 已移植并有测试 | 身份、`requires`、权限、设置不变；`backend` 暂不声明，测试断言这一点 |
-| `Plugins/mac/Official/JavaSupport/{icons,templates}/**@1daaeb525` | `dev.lithe.plugin.java-support/{icons,templates}/` | 已移植并有测试 | `backend/tests/repository_pins.rs` 检查清单里每个文件都存在；Maven 图标和模板的归属见第 7 节 |
+| `Plugins/mac/Official/JavaSupport/plugin.json@1daaeb525` | `io.github.lithe-idea.java-support/plugin.json` | 已移植并有测试 | 身份改为普通插件：id 从 `dev.lithe.plugin.java-support` 变为 `io.github.lithe-idea.java-support`，`vendor` 改为 `Lithe Community`（`signatureRequirement: none`），删除 `publisherPackage`、`bundledSignatureRequirement` 和 `requires.packageTrust`，见第 9 节；版本仍是 1.1.0，权限、设置和其余 `requires` 不变；`backend` 暂不声明。`repository_pins.rs` 的 `the_manifest_keeps_the_community_identity_and_declares_no_backend_yet` 断言这两点 |
+| `Plugins/mac/Official/JavaSupport/{icons,templates}/**@1daaeb525` | `io.github.lithe-idea.java-support/{icons,templates}/` | 已移植并有测试 | `backend/tests/repository_pins.rs` 检查清单里每个文件都存在；Maven 图标和模板的归属见第 7 节 |
 | `Plugins/mac/Official/JavaSupport/assemble-package.sh@1daaeb525` | `scripts/assemble-package.sh` | 已移植无测试 | 由 `scripts/verify-package.sh` 校验产物 |
 | `scripts/macos/prepare/prepare-jdtls.sh@1daaeb525`、`prepare-jdk.sh@1daaeb525` | `scripts/prepare-jdtls.sh`、`scripts/prepare-jdk.sh` | 已移植无测试 | 来源地址和 SHA-256 固定在 `third_party/*/manifest.json`，`repository_pins.rs` 检查格式 |
 | `third_party/jdtls/manifest.json@1daaeb525`、`third_party/jdk/manifest.json@1daaeb525` | `third_party/jdtls/manifest.json`、`third_party/jdk/manifest.json` | 已移植并有测试 | 每个地址是 HTTPS，每个校验和是小写 SHA-256 |
-| `.github/workflows/ci-plugins.yml@1daaeb525`、`release-official-plugins.yml@1daaeb525` 里 Java 的部分 | `.github/workflows/ci.yml`、`release.yml` | 已移植无测试 | 发布流程只有签名步骤拿私钥，见第 9 节 |
-| `scripts/plugins/{build,verify}-official-plugins.sh@1daaeb525` 里 Java 的部分 | `scripts/build-package.sh`、`archive-package.sh`、`verify-package.sh`、`host-tools.sh` | 已移植无测试 | 宿主工具（签名器、校验器）按固定提交构建，见第 9 节 |
+| `.github/workflows/ci-plugins.yml@1daaeb525`、`release-official-plugins.yml@1daaeb525` 里 Java 的部分 | `.github/workflows/ci.yml`、`release.yml` | 已移植无测试 | 发布流程没有签名步骤，不读任何密钥，见第 9 节 |
+| `scripts/plugins/{build,verify}-official-plugins.sh@1daaeb525` 里 Java 的部分 | `scripts/build-package.sh`、`archive-package.sh`、`verify-package.sh` | 已移植无测试 | 主仓库脚本里构建并调用签名器（`LithePluginPackageSigner`）和官方校验器（`LitheOfficialPluginVerifier`）的部分不移植：普通插件包不带发布者签名，所以不需要它们，也不需要 Swift 工具链；`verify-package.sh` 改为要求 `vendor.signatureRequirement` 为 `none` 且包里没有 `lithe-plugin-signature.json`，见第 9 节 |
 | `scripts/windows/prepare/prepare-jdtls.ps1@1daaeb525`、`prepare-jdk.ps1@1daaeb525` | 无 | 不移植（Windows 插件包不在本阶段；Windows 仍在用） | `third_party/jdk/manifest.json` 保留了 Windows 条目，供以后使用 |
 | `scripts/resources/worktree-resources.json@1daaeb525` 里 Java 的条目 | 无 | 不移植（主仓库的工作树复用清单，随主仓库删除同步更新） | 见第 8 节 |
 | `scripts/architecture/verify-java-semantic-ownership.mjs@1daaeb525` | 无 | 不移植（由主仓库新的"宿主不含语言专属内容"闸门取代） | |
-| `Plugins/marketplace/official-plugins.json@1daaeb525` 的 Java 条目 | 无 | 不移植（商店索引在主仓库，发布稳定版后才改） | 第 9 节 |
+| `Plugins/marketplace/official-plugins.json@1daaeb525` 的 Java 条目 | 无 | 不移植（普通插件由 Lithe Store 收录，不进主仓库的索引；主仓库内置的官方条目在阶段 E 退役） | 第 8.2 节、第 9 节 |
 
 ### 3.6 Windows 与共享前端、功能矩阵、文案
 
@@ -457,11 +457,19 @@ Java 后端向宿主查询导出测试运行函数 ID 的已启用插件，把�
 
 - Core 的跨插件函数中转（API-35）合并，Maven/Gradle 插件导出 `languageImport.settings`。
 - 宿主的语言服务器通道（API-25）、编辑器标记（API-27）、运行与测试（API-29）合并，Java 插件声明 `backend` 并通过 e2e。
-- 本仓库发布一个签名的、支持 API 4 的版本；只有当稳定版 Lithe 支持这个 API 版本时才能转正（见第 9 节）。
+- 本仓库发布一个支持 API 4 的预发布版本（普通插件，不带发布者签名）；转为正式发布要等第 8.2 节列出的两条宿主限制取消、
+  主仓库不再内置 Java Support（见第 9 节）。
 
-### 8.2 macOS 阶段：Core 与 macOS 应用
+### 8.2 macOS 阶段（阶段 E）：Core 与 macOS 应用
+
+本仓库的 README、发布工作流和 Release 说明里说的"主仓库阶段 E"，指的就是这一节的删除。
 
 - Core：
+  - 取消两条按官方身份设的宿主限制，本插件才能作为普通插件被宿主接受：
+    - `rust/lithe-core/src/plugins/declarative.rs` 把 `languageServers[].hostIntegration`（JDT）限定给 `dev.lithe.*` 插件 ID，
+      其他 ID 得到错误 `plugin.integration.unsupported`。这个限制随 JDT 宿主集成一起，由通用 API 取代后消失。
+    - `rust/lithe-core/src/toolchain/definitions.rs` 只对带宿主验证过的官方来源的包接受 `java` 这样的短 `toolDefinitions` ID。
+      要改成对 `java` 工具 ID 使用一条不依赖官方身份的规则（Maven 插件依赖工具 ID `java`）。
   - `lsp/languages/{java_*,jdt*,project_preparation}.rs` 与 `mod.rs` 里的 re-export，`languages/{java,java_syntax,spring,mybatis}.rs`，
     `debug/java_test.rs`，`execution/{java_selection,launch_command,classpath_jar}.rs` 的 Java 部分，`protocol/contracts.rs` 里的 Java、Spring、MyBatis、Maven 模型。
   - `protocol/command.rs` 与 `runtime/dispatcher.rs` 里的 Java 命令；`engine.rs` 里的 Java 函数与 `StartServerRequest` 的 Java 字段；
@@ -476,6 +484,10 @@ Java 后端向宿主查询导出测试运行函数 ID 的已启用插件，把�
   `BuiltInModuleCatalog` 里的 Java 条目。
 - 宿主资源与脚本：
   - `Plugins/mac/Official/JavaSupport` 迁出后删除；`scripts/macos/prepare/prepare-{jdtls,jdk}.sh`（Windows 的 `.ps1` 不动）。
+  - 不再内置 Java Support：退役内置的官方条目 `dev.lithe.plugin.java-support`（`Plugins/marketplace/official-plugins.json` 里
+    `releaseEnabled: false`、`bundledUntilPublishedVersion: "1.1.0"` 的那一条），并把用户迁移到新 ID `io.github.lithe-idea.java-support`。
+    先例是 Go 和 PHP 在主仓库 [#1357](https://github.com/1lck/Lithe-IDEA/pull/1357) 改成社区插件：旧 ID 留在 `OfficialPluginCatalog`，
+    用 `communityReplacementID` 指向替代者。本插件发布稳定版之后，由 Lithe Store 自动上架，不在主仓库的索引里加条目。
   - `scripts/resources/worktree-resources.json` 里 `jdtls`、`jdk`、`jdt-maven-settings`、`java-launch-temporaries`、Java 插件包路径的条目，
     以及复用脚本的校验路由、对应测试和 `docs/ci-builds.md` 的"独立工作树的本地编译"章节，要在同一个 PR 里同步更新（AGENTS.md 的规定）。
   - `scripts/architecture/verify-java-semantic-ownership.mjs` 由新的闸门取代；`ci-plugins.yml` 里的 `jdtls: "true"`，`release-official-plugins.yml` 里的路径。
@@ -490,28 +502,66 @@ Java 后端向宿主查询导出测试运行函数 ID 的已启用插件，把�
   `scripts/windows/prepare/prepare-{jdtls,jdk}.ps1`、`tauri.jdtls.conf.json`。
 - 这些在 Windows 宿主能安装并运行本插件之前，不能删。
 
-## 9. 发布、签名与商店
+## 9. 发布与商店
+
+### 9.1 身份与收录策略
+
+- Lithe 不再区分官方插件和普通插件，所有插件都按普通插件处理，不带发布者签名。区别只在 [Lithe Store](https://github.com/Lithe-IDEA/Lithe-store)
+  怎样收录：Lithe-IDEA 组织里 `lithe-plugin-*` 仓库的稳定版（非预发布）GitHub Release 由商店机器人自动跟踪并上架；
+  组织之外的插件向 Lithe-store 提交 pull request，维护者审核后上架。
+- 本插件的 id 是 `io.github.lithe-idea.java-support`，`vendor` 是
+  `{ "id": "io.github.lithe-idea", "displayName": "Lithe Community", "signatureRequirement": "none" }`。
+  它在主仓库里原来是 `dev.lithe.plugin.java-support`，`vendor` 为 `dev.lithe`，带 `publisherPackage` 和 `bundledSignatureRequirement: sameTeamAsHost`；
+  这两项随官方身份一起删除。`requires.packageTrust` 也删除，因为它只服务 `vendor.bundledSignatureRequirement`。
+  权限、设置和其余 `requires` 不变。版本仍是 1.1.0，新 ID 下还没有发布过任何版本。
+- `backend/tests/repository_pins.rs` 的 `the_manifest_keeps_the_community_identity_and_declares_no_backend_yet` 断言这个身份
+  （`vendor`、没有 `bundledSignatureRequirement` 和 `packageTrust`）以及清单里没有 `backend`；
+  `scripts/verify-package.sh` 要求 `vendor.signatureRequirement` 为 `none`，并拒绝包里的 `lithe-plugin-signature.json`。
+  两者共同保证插件包既不携带发布者签名，也不要求宿主去验证发布者签名。
+- 主仓库里的签名器（`LithePluginPackageSigner`）和官方校验器（`LitheOfficialPluginVerifier`）没有移植，本仓库不构建也不使用它们，
+  打包不再需要 Xcode 或 Swift。
+
+### 9.2 发布流程
 
 - 标签是 `v<version>`，必须等于 `plugin.json` 的 `version`（当前 1.1.0）。发布资产是 `Lithe-Java-Support-{version}-darwin-{arm64,x64}.zip`
-  加 `.sha256`，用 `ditto --keepParent` 制作。
-- 发布工作流分成测试和发布两段，只有最后的签名步骤拿 `LITHE_PLUGIN_PACKAGE_PRIVATE_KEY`；发布标为预发布（`--prerelease`），
-  原因是主仓库仍然内置 Java Support（`official-plugins.json` 里 Java 条目 `releaseEnabled: false`，`bundledUntilPublishedVersion: "1.1.0"`），
-  而且 `pluginAPIVersion` 4 还没有随稳定版 Lithe 发布。
-- 宿主工具（`LithePluginPackageSigner`、`LitheOfficialPluginVerifier`）从 Lithe 提交 `1daaeb525831999ad518b4c6fd3b11b5b1b64b5a` 构建，
-  需要那个提交 `.swift-version` 里的 Swift 6.3.3；固定在 `host-tools.lock.json`。SDK 固定在 `sdk.lock.json`
-  （`lithe_plugin_sdk` 0.1.0，标签 `sdk-rust-v0.1.0`，提交 `e689971c000c15a044df0502052e7b2c1c6f84f`），
+  加 `.sha256`，由 `scripts/archive-package.sh` 用 `ditto --keepParent` 制作；本地开发、CI 和发布用的是同一个脚本、同一种归档。
+- `Release` 工作流先在 Ubuntu 上跑 Rust 检查，再在 macOS 上构建、校验并归档 arm64 与 x86_64 两个包，最后发布。没有任何步骤读取签名密钥。
+- CI 的 `package` 任务（macOS，草稿 PR 不跑）构建并归档同样的两个架构，把 `dist/` 作为 `java-support-archives` 上传。
+- SDK 固定在 `sdk.lock.json`（`lithe_plugin_sdk` 0.1.0，标签 `sdk-rust-v0.1.0`，提交 `e689971c000c15a044df0502052e7b2c1c6f84f`），
   `scripts/verify-sdk-lock.sh` 检查 `Cargo.lock` 解析到的是同一个提交。
-- 插件包在运行时只读：JDT LS、Lombok、java-debug、vscode-java-test 运行器和 JDK 都在构建阶段固定来源、校验哈希后放进包再签名；
-  运行时的状态只写宿主给的状态目录（`--state ${stateDir}`），不写包目录，保证 Sparkle 增量更新的基线不变。
-- 还没有登记到商店索引。登记要等稳定版 Lithe 支持这个 API 版本，并在主仓库的索引里加条目。
+
+### 9.3 为什么仍是预发布
+
+发布保持为预发布（`--prerelease`），商店的跟踪器会跳过预发布，所以目前不会上架。原因有两个：
+
+1. 主仓库仍然以旧 ID `dev.lithe.plugin.java-support` 内置 Java Support（`Plugins/marketplace/official-plugins.json` 里的条目
+   `releaseEnabled: false`，`bundledUntilPublishedVersion: "1.1.0"`）。
+2. 当前的宿主会拒绝这个包：
+   - Lithe Core 把 `languageServers[].hostIntegration`（JDT）保留给 `dev.lithe.*` 插件 ID（`rust/lithe-core/src/plugins/declarative.rs`，
+     错误 `plugin.integration.unsupported`）；
+   - 短 `toolDefinitions` ID（例如 `java`）只在宿主验证过官方来源时才接受（`rust/lithe-core/src/toolchain/definitions.rs`）。
+   本包两者都用到了。
+
+转为正式发布的条件：主仓库完成阶段 E（第 8.2 节），用通用 API 取代 JDT 宿主集成，给 `java` 工具 ID 一条不依赖官方身份的规则
+（Maven 插件依赖工具 ID `java`），并且不再内置 Java Support。之后在 `release.yml` 里去掉 `--prerelease`，商店自动上架稳定版。
+下载的 ZIP 通过 设置 → 插件 的 ⚙ 菜单 → 从磁盘安装插件… 安装，但在此之前当前宿主会按上面的原因拒绝它。
+阶段 E 还要退役内置的 `dev.lithe.plugin.java-support` 条目并把用户迁移到新 ID，见第 8.2 节。
+
+### 9.4 运行时只读
+
+插件包在运行时只读：JDT LS、Lombok、java-debug、vscode-java-test 运行器和 JDK 都在构建阶段固定来源、校验哈希后放进包里；
+运行时的状态只写宿主给的状态目录（`--state ${stateDir}`），不写包目录，保证 Sparkle 增量更新的基线不变。
+包里的 JDK 保留上游的 Apple 代码签名（macOS 只在有这个签名时才会启动它），`scripts/verify-package.sh` 检查这一点；
+这是 JDK 自己的签名，不是插件发布者的签名。
 
 ## 10. 未完成事项
 
 - 宿主没有接线：`plugin.json` 没有 `backend` 声明，第 6 节的 API 全部没有实现，三个会话命令只回答 `NotSupported`。
 - API-35 的 Java 一侧大部分已实现（第 5 节），但中转协议是暂定的；变化通知函数没有注册；没有任何地方调用 `collect_for_call`（要等 API-25 的启动解析器）。Maven profiles 的逐工程交付形状没有定。
 - `jdt_contributions.rs` 和 `plugin_functions.rs` 的 24 个测试只验证了插件内部逻辑：它们已经编译并通过，但用来对照的中转协议是暂定的，等 [#1742](https://github.com/1lck/Lithe-IDEA/pull/1742) 合入后要按最终协议复核。
-- 没有真实 JDT 的端到端测试，也没有在 Linux 上实跑过（本机没有 Docker），没有真实签名。
-- 打包的 `package` 任务只在 macOS 上构建未签名的开发归档，没有在 CI 上跑过一次完整的签名发布。
+- 没有真实 JDT 的端到端测试，也没有在 Linux 上实跑过（本机没有 Docker）。
+- CI 的 `package` 任务构建的归档和正式发布的是同一种（同一组脚本、同一个文件名规则），但还没有真正跑过一次发布工作流：
+  新 ID 下没有发布过任何版本，标签触发、预发布 Release 的创建和资产上传都没有被实际验证过。
 - Windows 插件包没有做；`third_party/jdk/manifest.json` 里保留了 Windows 条目。
 - 6 个 fixture 没有测试读取（第 7 节）。
 - Spring Endpoints 面板的插件承载方式没有落点（第 3.3 节）。

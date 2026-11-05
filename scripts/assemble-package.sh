@@ -13,7 +13,7 @@ set -euo pipefail
 # repository; see MIGRATION.md.
 
 ROOT_DIR="${0:A:h:h}"
-PLUGIN_DIR="$ROOT_DIR/dev.lithe.plugin.java-support"
+PLUGIN_DIR="$ROOT_DIR/io.github.lithe-idea.java-support"
 OUTPUT_DIR=""
 ARCH=""
 
@@ -79,7 +79,7 @@ launcher=$(/usr/bin/plutil -extract languageServers.0.launch.entry raw "$PLUGIN_
 test_runner=$(/usr/bin/plutil -extract languageServers.0.hostIntegration.resources.testRunner raw "$PLUGIN_DIR/plugin.json")
 for declared in "$launcher" "$test_runner" language-server/lombok/lombok.jar; do
     [[ -f "$OUTPUT_DIR/$declared" ]] || {
-        print -u2 -- "Java Support declares $declared, which the assembled package does not contain. Update dev.lithe.plugin.java-support/plugin.json for the pinned JDT LS version."
+        print -u2 -- "Java Support declares $declared, which the assembled package does not contain. Update io.github.lithe-idea.java-support/plugin.json for the pinned JDT LS version."
         exit 1
     }
 done

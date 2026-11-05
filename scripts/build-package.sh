@@ -2,25 +2,23 @@
 
 set -euo pipefail
 
-# Builds the unsigned Java Support package directory for one architecture:
-# copies plugin.json, assembles the pinned third-party resources next to it
+# Builds the Java Support package directory for one architecture: copies
+# plugin.json, assembles the pinned third-party resources next to it
 # (scripts/assemble-package.sh) and verifies the result
 # (scripts/verify-package.sh). Prints the package directory,
-# .artifacts/package/<arch>/dev.lithe.plugin.java-support.
+# .artifacts/package/<arch>/io.github.lithe-idea.java-support.
 #
-# Signing and archiving are a separate step (scripts/archive-package.sh) so
-# that the release workflow only exposes the signing key to that step.
+# This only builds the directory. Archiving it into the release asset is the
+# separate step scripts/archive-package.sh.
 
 ROOT_DIR="${0:A:h:h}"
-PLUGIN_ID="dev.lithe.plugin.java-support"
+PLUGIN_ID="io.github.lithe-idea.java-support"
 ARCH=""
-HOST_TOOLS=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --arch) ARCH="$2"; shift 2 ;;
-        --host-tools) HOST_TOOLS="$2"; shift 2 ;;
-        *) print -u2 -- "Usage: $0 --arch arm64|x86_64 [--host-tools bin-directory]"; exit 2 ;;
+        *) print -u2 -- "Usage: $0 --arch arm64|x86_64"; exit 2 ;;
     esac
 done
 # Each release asset targets one macOS architecture; the store lists them as
@@ -36,7 +34,5 @@ mkdir -p "$package_dir"
 cp "$ROOT_DIR/$PLUGIN_ID/plugin.json" "$package_dir/plugin.json"
 "$ROOT_DIR/scripts/assemble-package.sh" --output "$package_dir" --arch "$ARCH" >&2
 
-verify_args=(--package "$package_dir" --arch "$ARCH")
-[[ -z "$HOST_TOOLS" ]] || verify_args+=(--host-tools "$HOST_TOOLS")
-"$ROOT_DIR/scripts/verify-package.sh" "${verify_args[@]}"
+"$ROOT_DIR/scripts/verify-package.sh" --package "$package_dir" --arch "$ARCH"
 print -r -- "$package_dir"

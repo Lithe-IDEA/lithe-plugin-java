@@ -265,11 +265,11 @@ mod tests {
     fn fragments_follow_plugin_id_order_not_arrival_order() {
         let mut contributions = Contributions::default();
         contributions.record_settings(
-            "dev.lithe.plugin.maven",
+            "io.github.lithe-idea.maven-build",
             accepted(json!({ "java.import.maven.enabled": true })),
         );
         contributions.record_settings(
-            "dev.lithe.plugin.gradle",
+            "io.github.lithe-idea.gradle-build",
             accepted(json!({ "java.import.gradle.offline.enabled": true })),
         );
         assert_eq!(
@@ -284,7 +284,7 @@ mod tests {
     #[test]
     fn a_change_replaces_the_providers_slot_and_removes_old_settings() {
         let mut contributions = Contributions::default();
-        let maven = "dev.lithe.plugin.maven";
+        let maven = "io.github.lithe-idea.maven-build";
         contributions.record_settings(
             maven,
             accepted(json!({
@@ -307,16 +307,16 @@ mod tests {
         let mut contributions = Contributions::default();
         assert_eq!(contributions.status(), ContributedSettingsStatus::Settled);
 
-        contributions.record_failure("dev.lithe.plugin.maven", "The call timed out.");
+        contributions.record_failure("io.github.lithe-idea.maven-build", "The call timed out.");
         assert_eq!(contributions.status(), ContributedSettingsStatus::Failed);
         assert_eq!(
             contributions.failures(),
-            [("dev.lithe.plugin.maven", "The call timed out.")]
+            [("io.github.lithe-idea.maven-build", "The call timed out.")]
         );
         assert!(contributions.fragments().is_empty());
 
         contributions.record_settings(
-            "dev.lithe.plugin.maven",
+            "io.github.lithe-idea.maven-build",
             accepted(json!({ "java.import.maven.enabled": true })),
         );
         assert_eq!(contributions.status(), ContributedSettingsStatus::Settled);
@@ -340,12 +340,12 @@ mod tests {
     fn forgetting_a_provider_drops_its_settings_and_its_failure() {
         let mut contributions = Contributions::default();
         contributions.record_settings(
-            "dev.lithe.plugin.gradle",
+            "io.github.lithe-idea.gradle-build",
             accepted(json!({ "java.import.gradle.offline.enabled": true })),
         );
-        contributions.record_failure("dev.lithe.plugin.maven", "The call failed.");
-        contributions.forget("dev.lithe.plugin.gradle");
-        contributions.forget("dev.lithe.plugin.maven");
+        contributions.record_failure("io.github.lithe-idea.maven-build", "The call failed.");
+        contributions.forget("io.github.lithe-idea.gradle-build");
+        contributions.forget("io.github.lithe-idea.maven-build");
         assert!(contributions.fragments().is_empty());
         assert_eq!(contributions.status(), ContributedSettingsStatus::Settled);
     }
