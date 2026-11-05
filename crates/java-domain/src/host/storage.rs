@@ -2,13 +2,14 @@
 //!
 //! Rust Core recorded failed cleanups as one `app.storage.cleanup_failed`
 //! diagnostics event per batch. The plugin keeps the same fixed-size summary
-//! and reports it on its own log channel (standard error of the backend).
+//! and reports it to the plugin's unified log through
+//! [`host::diagnostics`](super::diagnostics): once per batch, carrying only the
+//! stage category and the number of failed removals.
 
 /// Fixed-size cleanup summary: batch callers emit once rather than once per file.
 #[derive(Debug, Default)]
 pub struct StorageCleanup {
     count: i64,
-    first: Option<std::io::ErrorKind>,
 }
 
 impl StorageCleanup {
@@ -18,10 +19,7 @@ impl StorageCleanup {
         match result {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => {
-                self.count = self.count.saturating_add(1);
-                self.first.get_or_insert(error.kind());
-            }
+            Err(_) => self.count = self.count.saturating_add(1),
         }
     }
 
@@ -42,16 +40,14 @@ impl StorageCleanup {
         self.count
     }
 
-    /// Reports the batch once, preserving the caller's normal result.
-    // TODO(host-api: API-22 log and progress): plugin log channel — report
-    // through the host's structured plugin log instead of standard error once
-    // it is available.
+    /// Reports the batch once when anything failed, preserving the caller's
+    /// normal result. `stage` names the cleanup and becomes part of the log
+    /// category (`storage.cleanup_failed.<stage>`), so it must be a fixed
+    /// identifier, never a path or user content.
     pub fn finish(self, stage: &str) {
-        if let Some(kind) = self.first {
-            eprintln!(
-                "storage cleanup failed: stage={stage} count={} error_code={kind:?}",
-                self.count
-            );
+        let count = u64::try_from(self.count).unwrap_or(0);
+        if count > 0 {
+            crate::host::diagnostics::cleanup_failed(stage, count);
         }
     }
 }

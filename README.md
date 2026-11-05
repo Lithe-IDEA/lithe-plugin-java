@@ -31,7 +31,7 @@
 ## 工作方式
 
 - **领域规则**在 `crates/java-domain`，不依赖宿主：命令的 JSON 载荷和错误码与主仓库 Core 一一对应。
-  所有宿主差异（存储、日志、Git、语言服务器通道）都是带 `TODO(host-api: API-NN)` 的占位。
+  所有宿主差异（存储、Git、语言服务器通道）都是带 `TODO(host-api: API-NN)` 的占位；日志已接入宿主统一日志，见“日志”一节。
 - **插件后端**在 `backend/`：基于固定版本的 Rust SDK（`sdk.lock.json`），把每条领域命令注册为同名插件函数，
   并带着跨插件函数的调用方一侧。
 - **跨插件函数**：启动 JDT LS 之前，后端通过 Core 中转发现所有导出 `languageImport.settings` 的插件（Maven、Gradle），
@@ -40,6 +40,25 @@
   细节见 `MIGRATION.md` 第 5 节。
 - **运行时只读**：插件包安装后在运行时只读。JDT LS、Lombok、java-debug、测试运行器和 JDK 都在构建阶段固定来源、校验哈希后放进包里，
   运行时状态只写宿主提供的状态目录，不写包目录。
+
+## 日志
+
+后端把日志交给宿主的统一日志 `litheLogging` 1，不写 stderr。函数 ID 都是编译期常量，注册只会因 ID 写错、重复或超出 SDK
+上限而失败，单元测试 `the_backend_builds_with_every_command_registered` 在 CI 里挡住这种构建；万一发生，进程在握手前以状态 1 退出，
+由宿主记录启动失败（`backend/src/main.rs`）。Rust SDK 0.2.0 要求宿主提供 `litheLogging` 1，
+不提供的 Lithe 版本会拒绝启动后端；目前只有 Lithe 最新 `preview` 提供，稳定版还没有。
+
+| 事实 | 级别 | 来源 | 内容 |
+| --- | --- | --- | --- |
+| 关键操作成功：`runConfig.selectJava`、`debug.javaTestLaunch`、`execution.planLaunchCommand`、`java.prepareLaunch`（`backend/src/lib.rs` 的 `KEY_OPERATIONS`） | INFO | SDK 自动 | 操作 ID、耗时 |
+| 其余函数成功（编辑器驱动或启动时的读取，如 `java.runMarkers`、`java.codeVision`、`spring.index`） | 不记录 | `suppress_success_diagnostics`（`backend/src/lib.rs`） | — |
+| 任一函数失败 | ERROR | SDK 自动 | 类别为 `pluginErrorCode`（如 `java.invalidRequest`）、耗时；不含消息与 `details` |
+| 取消 | 不记录 | SDK | — |
+| 列出 `languageImport.settings` 提供方失败、单个提供方失败或超时、答复不可用、答复含越界键 | WARN（`degraded`） | `backend/src/plugin_functions.rs` | 类别 `relay.providers_unavailable`、`relay.provider_failed`、`relay.provider_timed_out`、`relay.settings_rejected`、`relay.keys_rejected`，计数；不含提供方 ID |
+| 插件存储清理失败 | WARN（`degraded`） | `crates/java-domain/src/host/diagnostics.rs`（`host::diagnostics`） | 类别 `storage.cleanup_failed.<阶段>`（阶段为 `jdt-configuration`、`jdt-settings`、`java-argfile-remove`），计数 |
+| JDT LS 自身日志 | 上游，默认 WARNING | `plugin.json` 的 `-Dosgi.logfile=${logDir}/jdt.log` | 只写宿主提供的会话日志目录，单文件 1 MB、保留 2 个备份；用户可在设置里调 `logLevel` |
+
+日志事实只带类别、计数和耗时，不含路径、源码、工具输出或用户内容。`${logDir}` 由宿主经可写存储适配器提供，不写插件包或 app bundle。
 
 ## 安装
 
@@ -103,9 +122,11 @@ scripts/archive-package.sh --package <上一步打印的目录> --arch arm64   #
 
 3. `Release` 工作流先在 Ubuntu 上跑 Rust 检查，再在 macOS 上构建、校验并归档 arm64 与 x86_64 两个包，然后发布。
    发布资产是 `Lithe-Java-Support-<版本>-darwin-{arm64,x64}.zip` 和对应的 `.sha256`。没有任何步骤读取签名密钥，包也不带发布者签名。
-4. 发布保持为预发布（`--prerelease`）：Lithe Store 的自动跟踪会跳过预发布，而目前的 Lithe 一是仍然内置旧 ID 的 Java Support，
-   二是只允许 `dev.lithe.*` 插件使用 JDT 宿主集成、只对带官方来源的包接受短工具 ID `java`。等 Lithe 主仓库的阶段 E 完成
-   （`MIGRATION.md` 第 8.2 节）后，去掉 `--prerelease`，商店就会自动上架稳定版。细节见 `MIGRATION.md` 第 9 节。
+4. 发布保持为预发布（`--prerelease`）：Lithe Store 的自动跟踪会跳过预发布，原因有三个。目前的 Lithe 一是仍然内置旧 ID 的 Java Support，
+   二是只允许 `dev.lithe.*` 插件使用 JDT 宿主集成、只对带官方来源的包接受短工具 ID `java`，
+   三是后端链接的 Rust SDK 0.2.0 需要宿主提供 `litheLogging` 1，目前只有 Lithe 最新 `preview` 提供，稳定版还没有。
+   等 Lithe 主仓库的阶段 E 完成（`MIGRATION.md` 第 8.2 节）、并且 Lithe 稳定版提供 `litheLogging` 1 后，去掉 `--prerelease`，
+   商店就会自动上架稳定版。细节见 `MIGRATION.md` 第 9 节。
 
 ## 许可
 

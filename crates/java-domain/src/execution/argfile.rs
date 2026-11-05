@@ -74,11 +74,7 @@ impl Drop for ArgumentFileLease {
         match fs::remove_file(&self.path) {
             Ok(()) => {}
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            // TODO(host-api: API-22 log and progress): plugin log channel.
-            Err(error) => eprintln!(
-                "storage cleanup failed: stage=java-argfile-remove error_code={:?}",
-                error.kind()
-            ),
+            Err(_) => crate::host::diagnostics::cleanup_failed("java-argfile-remove", 1),
         }
     }
 }

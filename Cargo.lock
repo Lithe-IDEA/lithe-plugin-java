@@ -27,6 +27,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "base64"
+version = "0.22.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
+
+[[package]]
 name = "block-buffer"
 version = "0.10.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -333,9 +339,10 @@ dependencies = [
 
 [[package]]
 name = "lithe-plugin-sdk"
-version = "0.1.0"
-source = "git+https://github.com/Lithe-IDEA/lithe-plugin-docs?tag=sdk-rust-v0.1.0#e689971c000c15a044df0502052fe7b2c1c6f84f"
+version = "0.2.0"
+source = "git+https://github.com/Lithe-IDEA/lithe-plugin-docs?tag=sdk-rust-v0.2.0#940394fcd8455186ee985e6c34a319032414607f"
 dependencies = [
+ "base64",
  "serde_json",
 ]
 
