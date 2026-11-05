@@ -53,7 +53,7 @@
   否则调用链 A→B→A 会被 Core 当作环路拒绝。
 - 信任不传递：被调方用自己的权限执行，调用方不获得任何权限。
 
-中转本身由另一个 PR 在 Core 里实现。本仓库实现了 Java 一侧：接口常量、答案校验与合并（`jdt_contributions.rs`），以及发现并调用提供方的
+中转本身由主仓库 [#1742](https://github.com/1lck/Lithe-IDEA/pull/1742) 在 Core 里实现。本仓库实现了 Java 一侧：接口常量、答案校验与合并（`jdt_contributions.rs`），以及发现并调用提供方的
 后端模块（`plugin_functions.rs`，中转协议暂按设计简报写，集中在这一个文件里，见第 5 节）。中转没有合并之前这些代码不会被宿主调用，
 缺的部分在代码里写 `TODO(host-api: API-35 跨插件函数)`。
 
@@ -257,17 +257,16 @@ API-30（调试适配器）、API-37（环境与 l10n）、API-42（内置 Git �
 - `rust/lithe-core/src/build/language_import.rs`，以及主仓库 `jdt-maven-settings` 工作树资源（`<platform-cache>/jdtls/<workspace-state>/.lithe/maven/`）。
 - `lib.rs` 公开的 `settings_with_local_repository`（把本地仓库路径写进派生 settings.xml）。
 
-### 4.2 交付目录
+### 4.2 交付来源
 
-交付给 Maven/Gradle 插件的原始文件放在本仓库之外：
+交给 Maven/Gradle 插件的代码以主仓库的原文件为准，固定在 preview 提交 `dbe8441e2`：
 
-`/Users/yaoyao/.claude/jobs/3ce6f54e/tmp/java-extraction/maven-gradle-handover/`
-
-- `jdt_maven_settings.rs`（26 KB，含 12 个测试）：Maven settings 的生成与合并。
-- `host_maven.rs`：`MavenJdtConfiguration`（`profiles`、`settings_path`、`global_settings_path`、`local_repository_path`、`project_paths`、`source_paths`）
-  和 `settings_with_local_repository`。
-- `pre-correction/`：改造之前的 `commands.rs`、`host_mod.rs`、`lsp_languages_jdt.rs`、`lsp_languages_jdt_build.rs`、
-  `lsp_languages_mod.rs`、`lsp_languages_project_preparation.rs`，Maven 插件移植时可以对照。
+- [`lsp/languages/jdt_maven_settings.rs`](https://github.com/1lck/Lithe-IDEA/blob/dbe8441e27486fef26f0e915e8c6a862c307e180/rust/lithe-core/src/lsp/languages/jdt_maven_settings.rs)：Maven settings 的生成与合并，含测试。
+- [`project/maven.rs`](https://github.com/1lck/Lithe-IDEA/blob/dbe8441e27486fef26f0e915e8c6a862c307e180/rust/lithe-core/src/project/maven.rs)：`MavenJdtConfiguration`（`profiles`、`settings_path`、`global_settings_path`、
+  `local_repository_path`、`project_paths`、`source_paths`）和 `settings_with_local_repository`。
+- 移植时对照的改造前版本：同一提交下的 [`lsp/languages/jdt.rs`](https://github.com/1lck/Lithe-IDEA/blob/dbe8441e27486fef26f0e915e8c6a862c307e180/rust/lithe-core/src/lsp/languages/jdt.rs)、
+  [`jdt_build.rs`](https://github.com/1lck/Lithe-IDEA/blob/dbe8441e27486fef26f0e915e8c6a862c307e180/rust/lithe-core/src/lsp/languages/jdt_build.rs)、[`project_preparation.rs`](https://github.com/1lck/Lithe-IDEA/blob/dbe8441e27486fef26f0e915e8c6a862c307e180/rust/lithe-core/src/lsp/languages/project_preparation.rs)、
+  [`mod.rs`](https://github.com/1lck/Lithe-IDEA/blob/dbe8441e27486fef26f0e915e8c6a862c307e180/rust/lithe-core/src/lsp/languages/mod.rs) 和 [`build/language_import.rs`](https://github.com/1lck/Lithe-IDEA/blob/dbe8441e27486fef26f0e915e8c6a862c307e180/rust/lithe-core/src/build/language_import.rs)。
 
 ### 4.3 键归属表
 
@@ -284,7 +283,7 @@ API-30（调试适配器）、API-37（环境与 l10n）、API-42（内置 Git �
 ## 5. 跨插件函数设计（API-35）
 
 Java 一侧已经实现：接口常量、答案校验与合并在 `dj/lsp/languages/jdt_contributions.rs`（纯逻辑，不依赖 SDK），
-发现并调用提供方在 `backend/src/plugin_functions.rs`。宿主中转由 Core 的另一个 PR 实现，在它合并之前，下面标"暂定"的协议形状可能改，
+发现并调用提供方在 `backend/src/plugin_functions.rs`。宿主中转由 Core 的 [#1742](https://github.com/1lck/Lithe-IDEA/pull/1742) 实现，在它合并之前，下面标"暂定"的协议形状可能改，
 缺失的宿主能力在代码里是 `TODO(host-api: API-35 跨插件函数)`。
 
 ### 5.1 接口函数 ID
@@ -344,7 +343,7 @@ Java 后端向宿主查询导出测试运行函数 ID 的已启用插件，把�
 
 ### 5.7 中转协议形状（暂定）与清单声明
 
-`backend/src/plugin_functions.rs` 是后端里唯一知道中转协议的地方。方法名与形状按设计简报写，Core 的中转 PR 还没定稿；
+`backend/src/plugin_functions.rs` 是后端里唯一知道中转协议的地方。方法名与形状按设计简报写，Core 的中转 PR [#1742](https://github.com/1lck/Lithe-IDEA/pull/1742) 还没定稿；
 改名或改形状只动这个文件里的两个方法名常量、两个参数构造函数和两个结果解析函数，收集逻辑和它的测试不变。
 
 | 宿主方法 | 参数 | 结果 |
@@ -371,6 +370,17 @@ Java 后端向宿主查询导出测试运行函数 ID 的已启用插件，把�
 ## 6. `TODO(host-api)` 清单
 
 每条都是代码里的占位注释，格式 `TODO(host-api: API-NN 说明)`；`†` 的含义见第 2.3 节。
+
+主仓库里对应的宿主 PR（状态以 PR 页面为准）：
+
+| 计划编号 | 宿主 PR |
+| --- | --- |
+| API-25 语言服务器会话、后端决定启动方式（含 API-12、20、22） | [#1745](https://github.com/1lck/Lithe-IDEA/pull/1745) |
+| API-25、API-27 编辑器 Provider 与编辑器动作 | [#1730](https://github.com/1lck/Lithe-IDEA/pull/1730) |
+| API-22、23、30 后端发起运行与调试、调试适配器行为、输出链接 | [#1746](https://github.com/1lck/Lithe-IDEA/pull/1746) |
+| API-33 项目生成器通用工具字段 | [#1740](https://github.com/1lck/Lithe-IDEA/pull/1740) |
+| API-35 跨插件函数中转（第一阶段） | [#1742](https://github.com/1lck/Lithe-IDEA/pull/1742) |
+| 宿主语言特定内容闸门（已合入） | [#1727](https://github.com/1lck/Lithe-IDEA/pull/1727) |
 
 ### API-25 语言服务器
 
@@ -403,7 +413,7 @@ Java 后端向宿主查询导出测试运行函数 ID 的已启用插件，把�
 
 ### API-35 跨插件函数
 
-- `backend/src/plugin_functions.rs`：中转协议（方法名和形状）是暂定的，等 Core 的中转 PR 定稿（第 5.7 节）。
+- `backend/src/plugin_functions.rs`：中转协议（方法名和形状）是暂定的，等 Core 的中转 PR [#1742](https://github.com/1lck/Lithe-IDEA/pull/1742) 定稿（第 5.7 节）。
 - `backend/src/plugin_functions.rs`：`languageImport.settingsChanged` 还没有注册，等 SDK 或中转暴露调用方插件 ID（第 5.7 节）。
 - `dj/lsp/languages/jdt.rs`：没有中转时 `CONTRIBUTED_SETTINGS_KEYS` 的贡献者不会出现（第 5.1 到 5.3 节）。
 - `dj/lsp/languages/jdt.rs`：Maven profiles 缺口（第 5.4 节）。
