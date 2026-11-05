@@ -1,15 +1,14 @@
 {
   "schemaVersion": 2,
-  "id": "dev.lithe.plugin.java-support",
+  "id": "io.github.lithe-idea.java-support",
   "displayName": "Java Support",
   "version": "1.1.0",
   "pluginAPIVersion": 4,
-  "requires": {"debugAdapters": 1, "languages": 1, "languageServers": 1, "serverProcess": 1, "settings": 2, "projectGenerators": 1, "packageTrust": 1, "toolDefinitions": 1, "executableResolution": 2},
+  "requires": {"debugAdapters": 1, "languages": 1, "languageServers": 1, "serverProcess": 1, "settings": 2, "projectGenerators": 1, "toolDefinitions": 1, "executableResolution": 2},
   "vendor": {
-    "id": "dev.lithe",
-    "displayName": "Lithe",
-    "signatureRequirement": "publisherPackage",
-    "bundledSignatureRequirement": "sameTeamAsHost"
+    "id": "io.github.lithe-idea",
+    "displayName": "Lithe Community",
+    "signatureRequirement": "none"
   },
   "permissions": ["languageServer.launch", "project.generate", "debug.launch", "debug.attach"],
   "activationEvents": ["onLanguage:java", "onDebug:java"],

@@ -1,6 +1,0 @@
-{
-  "comment": "Lithe revision whose package tools sign and verify this plugin. LithePluginPackageSigner holds the trusted publisher keys and LitheOfficialPluginVerifier checks a package against the host's plugin contract, so both must come from Lithe itself. scripts/host-tools.sh builds them from this exact commit; update it when the plugin needs a newer contract.",
-  "repository": "https://github.com/1lck/Lithe-IDEA",
-  "revision": "1daaeb525831999ad518b4c6fd3b11b5b1b64b5a",
-  "products": ["LithePluginPackageSigner", "LitheOfficialPluginVerifier"]
-}

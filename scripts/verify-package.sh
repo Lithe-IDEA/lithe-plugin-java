@@ -2,32 +2,25 @@
 
 set -euo pipefail
 
-# Verifies an assembled Java Support package directory before it is signed or
-# archived:
-#   - plugin.json is the repository manifest, unchanged;
+# Verifies an assembled Java Support package directory before it is archived:
+#   - plugin.json is the repository manifest, unchanged, and declares a
+#     plugin without a publisher signature (vendor.signatureRequirement "none");
 #   - the package holds only the declared top-level entries and no symbolic
 #     links, and nothing outside runtime/ is executable;
 #   - every file plugin.json names for the language server exists;
 #   - the packaged JDK is the requested architecture and keeps its upstream
-#     code signature (the publisher signature alone does not prove macOS can
-#     launch it).
-# With --host-tools it also runs Lithe's official package verifier and, when
-# the package is signed, checks the publisher signature.
+#     code signature (macOS only launches the JDK if it does).
 
 ROOT_DIR="${0:A:h:h}"
-PLUGIN_ID="dev.lithe.plugin.java-support"
+PLUGIN_ID="io.github.lithe-idea.java-support"
 PACKAGE=""
 ARCH=""
-HOST_TOOLS=""
-REQUIRE_SIGNATURE=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --package) PACKAGE="$2"; shift 2 ;;
         --arch) ARCH="$2"; shift 2 ;;
-        --host-tools) HOST_TOOLS="$2"; shift 2 ;;
-        --require-signature) REQUIRE_SIGNATURE=true; shift ;;
-        *) print -u2 -- "Usage: $0 --package directory --arch arm64|x86_64|universal [--host-tools bin-directory] [--require-signature]"; exit 2 ;;
+        *) print -u2 -- "Usage: $0 --package directory --arch arm64|x86_64|universal"; exit 2 ;;
     esac
 done
 [[ -d "$PACKAGE" ]] || { print -u2 -- "--package must name an assembled package directory"; exit 2; }
@@ -47,10 +40,12 @@ cmp -s "$manifest" "$ROOT_DIR/$PLUGIN_ID/plugin.json" ||
     fail "plugin.json differs from $PLUGIN_ID/plugin.json"
 [[ "$(/usr/bin/plutil -extract id raw -o - "$manifest")" == "$PLUGIN_ID" ]] ||
     fail "plugin.json does not declare $PLUGIN_ID"
+[[ "$(/usr/bin/plutil -extract vendor.signatureRequirement raw -o - "$manifest")" == "none" ]] ||
+    fail "plugin.json must declare vendor.signatureRequirement none; Lithe Store lists only packages without a publisher signature"
 [[ "${PACKAGE:A:t}" == "$PLUGIN_ID" ]] ||
     fail "the package directory must be named $PLUGIN_ID"
 
-allowed=(plugin.json icons templates language-server runtime lithe-plugin-signature.json)
+allowed=(plugin.json icons templates language-server runtime)
 for entry in "$PACKAGE"/*(DN); do
     (( ${allowed[(Ie)${entry:t}]} )) || fail "undeclared top-level entry ${entry:t}"
 done
@@ -92,14 +87,4 @@ for runtime_arch in "${runtime_architectures[@]}"; do
         fail "$runtime/lib/server/libjvm.dylib lost its upstream code signature"
 done
 
-signature="$PACKAGE/lithe-plugin-signature.json"
-if [[ "$REQUIRE_SIGNATURE" == true && ! -f "$signature" ]]; then
-    fail "the package is not publisher-signed"
-fi
-if [[ -n "$HOST_TOOLS" ]]; then
-    "$HOST_TOOLS/LitheOfficialPluginVerifier" "$PACKAGE"
-    if [[ -f "$signature" ]]; then
-        "$HOST_TOOLS/LithePluginPackageSigner" --verify "$PACKAGE"
-    fi
-fi
 print -u2 -- "Verified Java Support package $PACKAGE ($ARCH)"

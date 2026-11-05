@@ -1,15 +1,21 @@
 name: Release
 
 # Push a tag v<version> matching plugin.json to publish a GitHub Release with
-# one publisher-signed archive per macOS architecture and its SHA-256 file.
+# one unsigned plugin archive per macOS architecture and its SHA-256 file.
 #
-# Only the "Sign, archive and publish" step receives the signing key; the
-# steps before it build and verify unsigned packages. Checkouts do not keep
-# the workflow token.
+# No step receives a signing key. Checkouts do not keep the workflow token.
 #
-# Releases are published as pre-releases: Lithe still bundles Java Support and
-# lists it from its own official index (see MIGRATION.md). Remove --prerelease
-# below once the official index lists this repository's releases.
+# Releases stay pre-releases, which Lithe Store's tracker skips, for two
+# reasons:
+#   1. Lithe still bundles Java Support under the old ID
+#      dev.lithe.plugin.java-support.
+#   2. Current Lithe hosts reserve languageServers[].hostIntegration (the JDT
+#      integration) to dev.lithe.* plugin IDs and accept the short tool ID
+#      "java" only from verified official provenance, so they reject this
+#      package.
+# Remove --prerelease below once a stable Lithe accepts the package (stage E in
+# MIGRATION.md) and stops bundling Java Support. The Store then lists stable
+# releases of this repository automatically.
 on:
   push:
     tags: ["v*"]
@@ -56,41 +62,34 @@ jobs:
       - name: Check the tag matches plugin.json
         run: |
           set -euo pipefail
-          version=$(plutil -extract version raw -o - dev.lithe.plugin.java-support/plugin.json)
+          version=$(plutil -extract version raw -o - io.github.lithe-idea.java-support/plugin.json)
           if [[ "$GITHUB_REF_NAME" != "v$version" ]]; then
             echo "::error::Tag $GITHUB_REF_NAME does not match plugin.json version $version"
             exit 1
           fi
-      - name: Select Xcode 26.6
-        uses: maxim-lobanov/setup-xcode@v1
-        with:
-          xcode-version: "26.6"
-      - name: Build the Lithe package tools
-        id: host-tools
-        run: echo "bin=$(scripts/host-tools.sh --require-pinned-swift)" >> "$GITHUB_OUTPUT"
       - name: Build and verify both architectures
-        env:
-          HOST_TOOLS: ${{ steps.host-tools.outputs.bin }}
         run: |
           set -euo pipefail
           for arch in arm64 x86_64; do
-            scripts/build-package.sh --arch "$arch" --host-tools "$HOST_TOOLS"
+            scripts/build-package.sh --arch "$arch"
           done
-      - name: Sign, archive and publish
+      - name: Archive and publish
         env:
-          HOST_TOOLS: ${{ steps.host-tools.outputs.bin }}
-          LITHE_PLUGIN_PACKAGE_PRIVATE_KEY: ${{ secrets.LITHE_PLUGIN_PACKAGE_PRIVATE_KEY }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           checksums="$RUNNER_TEMP/checksums.txt"
           : > "$checksums"
           for arch in arm64 x86_64; do
-            scripts/archive-package.sh --package ".artifacts/package/$arch/dev.lithe.plugin.java-support" \
-              --arch "$arch" --sign --host-tools "$HOST_TOOLS" >> "$checksums"
+            scripts/archive-package.sh --package ".artifacts/package/$arch/io.github.lithe-idea.java-support" \
+              --arch "$arch" >> "$checksums"
           done
           {
-            echo "Lithe 官方 Java 插件 dev.lithe.plugin.java-support ${GITHUB_REF_NAME#v}。每个 macOS 架构一个经发布者签名的归档，附 SHA-256 文件。"
+            echo "Java Support（\`io.github.lithe-idea.java-support\`）${GITHUB_REF_NAME#v}。每个 macOS 架构一个归档，附 SHA-256 文件。"
+            echo
+            echo "兼容性：目前的 Lithe 仍内置 Java Support，并且只允许 \`dev.lithe.*\` 插件使用 JDT 宿主集成和短工具 ID \`java\`，所以会拒绝安装这个包；要等 Lithe 主仓库完成 Java 拆分的阶段 E。"
+            echo
+            echo "安装：预发布版本，Lithe Store 自动追踪会跳过。宿主支持后下载对应架构的 ZIP，在 设置 → 插件 的 ⚙ 菜单中选择 从磁盘安装插件…。"
             echo
             echo "SHA-256："
             echo '```'

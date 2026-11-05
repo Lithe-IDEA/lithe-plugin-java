@@ -436,12 +436,12 @@ mod tests {
         );
         assert_eq!(
             invoke_params(
-                "dev.lithe.plugin.maven",
+                "io.github.lithe-idea.maven-build",
                 &SETTINGS_FUNCTION,
                 json!({ "workspaceRoot": "/work/app" })
             ),
             json!({
-                "pluginID": "dev.lithe.plugin.maven",
+                "pluginID": "io.github.lithe-idea.maven-build",
                 "functionID": "languageImport.settings",
                 "version": 1,
                 "params": { "workspaceRoot": "/work/app" },
@@ -478,16 +478,19 @@ mod tests {
     #[test]
     fn providers_are_called_once_each_in_plugin_id_order() {
         let relay = FakeRelay::new(&[
-            "dev.lithe.plugin.maven",
-            "dev.lithe.plugin.gradle",
-            "dev.lithe.plugin.maven",
+            "io.github.lithe-idea.maven-build",
+            "io.github.lithe-idea.gradle-build",
+            "io.github.lithe-idea.maven-build",
         ])
-        .answering("dev.lithe.plugin.maven", settings(json!({})))
-        .answering("dev.lithe.plugin.gradle", settings(json!({})));
+        .answering("io.github.lithe-idea.maven-build", settings(json!({})))
+        .answering("io.github.lithe-idea.gradle-build", settings(json!({})));
         collect(&relay);
         assert_eq!(
             relay.called_providers(),
-            ["dev.lithe.plugin.gradle", "dev.lithe.plugin.maven"]
+            [
+                "io.github.lithe-idea.gradle-build",
+                "io.github.lithe-idea.maven-build"
+            ]
         );
         for (_, params) in relay.calls.borrow().iter() {
             assert_eq!(params, &json!({ "workspaceRoot": "/work/app" }));
@@ -496,15 +499,18 @@ mod tests {
 
     #[test]
     fn answers_are_merged_in_plugin_id_order() {
-        let relay = FakeRelay::new(&["dev.lithe.plugin.maven", "dev.lithe.plugin.gradle"])
-            .answering(
-                "dev.lithe.plugin.maven",
-                settings(json!({ "java.configuration.maven.userSettings": "/m/settings.xml" })),
-            )
-            .answering(
-                "dev.lithe.plugin.gradle",
-                settings(json!({ "java.import.gradle.offline.enabled": true })),
-            );
+        let relay = FakeRelay::new(&[
+            "io.github.lithe-idea.maven-build",
+            "io.github.lithe-idea.gradle-build",
+        ])
+        .answering(
+            "io.github.lithe-idea.maven-build",
+            settings(json!({ "java.configuration.maven.userSettings": "/m/settings.xml" })),
+        )
+        .answering(
+            "io.github.lithe-idea.gradle-build",
+            settings(json!({ "java.import.gradle.offline.enabled": true })),
+        );
         let contributions = collect(&relay);
         assert_eq!(contributions.status(), ContributedSettingsStatus::Settled);
         assert_eq!(
@@ -527,18 +533,21 @@ mod tests {
 
     #[test]
     fn a_failing_provider_does_not_stop_the_others() {
-        let relay = FakeRelay::new(&["dev.lithe.plugin.gradle", "dev.lithe.plugin.maven"])
-            .answering(
-                "dev.lithe.plugin.gradle",
-                Err(RelayFailure::new(
-                    "plugin.host.timeout",
-                    "/home/dev/.gradle is slow",
-                )),
-            )
-            .answering(
-                "dev.lithe.plugin.maven",
-                settings(json!({ "java.import.maven.enabled": true })),
-            );
+        let relay = FakeRelay::new(&[
+            "io.github.lithe-idea.gradle-build",
+            "io.github.lithe-idea.maven-build",
+        ])
+        .answering(
+            "io.github.lithe-idea.gradle-build",
+            Err(RelayFailure::new(
+                "plugin.host.timeout",
+                "/home/dev/.gradle is slow",
+            )),
+        )
+        .answering(
+            "io.github.lithe-idea.maven-build",
+            settings(json!({ "java.import.maven.enabled": true })),
+        );
         let contributions = collect(&relay);
         assert_eq!(contributions.status(), ContributedSettingsStatus::Failed);
         assert_eq!(
@@ -549,7 +558,7 @@ mod tests {
         assert_eq!(
             contributions.failures(),
             [(
-                "dev.lithe.plugin.gradle",
+                "io.github.lithe-idea.gradle-build",
                 "The call failed (plugin.host.timeout)."
             )]
         );
@@ -557,26 +566,32 @@ mod tests {
 
     #[test]
     fn an_unusable_answer_marks_only_that_provider_failed() {
-        let relay = FakeRelay::new(&["dev.lithe.plugin.gradle", "dev.lithe.plugin.maven"])
-            .answering(
-                "dev.lithe.plugin.gradle",
-                Ok(json!({ "settings": "offline" })),
-            )
-            .answering(
-                "dev.lithe.plugin.maven",
-                settings(json!({ "java.import.maven.enabled": true })),
-            );
+        let relay = FakeRelay::new(&[
+            "io.github.lithe-idea.gradle-build",
+            "io.github.lithe-idea.maven-build",
+        ])
+        .answering(
+            "io.github.lithe-idea.gradle-build",
+            Ok(json!({ "settings": "offline" })),
+        )
+        .answering(
+            "io.github.lithe-idea.maven-build",
+            settings(json!({ "java.import.maven.enabled": true })),
+        );
         let contributions = collect(&relay);
         assert_eq!(contributions.status(), ContributedSettingsStatus::Failed);
         assert_eq!(contributions.failures().len(), 1);
-        assert_eq!(contributions.failures()[0].0, "dev.lithe.plugin.gradle");
+        assert_eq!(
+            contributions.failures()[0].0,
+            "io.github.lithe-idea.gradle-build"
+        );
         assert_eq!(contributions.fragments().len(), 1);
     }
 
     #[test]
     fn rejected_keys_are_logged_by_name_and_never_stored() {
-        let relay = FakeRelay::new(&["dev.lithe.plugin.maven"]).answering(
-            "dev.lithe.plugin.maven",
+        let relay = FakeRelay::new(&["io.github.lithe-idea.maven-build"]).answering(
+            "io.github.lithe-idea.maven-build",
             settings(json!({
                 "java.import.maven.enabled": true,
                 "java.home": "/opt/other-jdk"
@@ -614,7 +629,7 @@ mod tests {
     #[test]
     fn at_most_max_providers_are_asked() {
         let ids: Vec<String> = (0..MAX_PROVIDERS + 4)
-            .map(|index| format!("dev.lithe.plugin.p{index:02}"))
+            .map(|index| format!("io.github.lithe-idea.p{index:02}"))
             .collect();
         let relay = FakeRelay::new(&ids.iter().map(String::as_str).collect::<Vec<_>>());
         collect(&relay);
@@ -623,16 +638,19 @@ mod tests {
 
     #[test]
     fn a_request_that_ran_out_of_time_fails_only_its_provider() {
-        let relay = FakeRelay::new(&["dev.lithe.plugin.gradle", "dev.lithe.plugin.maven"])
-            .answering("dev.lithe.plugin.gradle", Err(cancelled()))
-            .answering(
-                "dev.lithe.plugin.maven",
-                settings(json!({ "java.import.maven.enabled": true })),
-            );
+        let relay = FakeRelay::new(&[
+            "io.github.lithe-idea.gradle-build",
+            "io.github.lithe-idea.maven-build",
+        ])
+        .answering("io.github.lithe-idea.gradle-build", Err(cancelled()))
+        .answering(
+            "io.github.lithe-idea.maven-build",
+            settings(json!({ "java.import.maven.enabled": true })),
+        );
         let contributions = collect(&relay);
         assert_eq!(
             contributions.failures(),
-            [("dev.lithe.plugin.gradle", "The call timed out.")]
+            [("io.github.lithe-idea.gradle-build", "The call timed out.")]
         );
         assert_eq!(contributions.fragments().len(), 1);
     }
@@ -641,19 +659,25 @@ mod tests {
     fn cancelling_the_function_call_ends_the_collection() {
         let cancellation = Cancellation::new();
         cancellation.cancel();
-        let relay = FakeRelay::new(&["dev.lithe.plugin.maven"]);
+        let relay = FakeRelay::new(&["io.github.lithe-idea.maven-build"]);
         let outcome = collect_contributions(&relay, "/work/app", &cancellation, &|_| {});
         assert!(outcome.is_err());
         assert!(relay.called_providers().is_empty());
 
         // Cancelled while a provider is being called: stop before the next one.
         let cancellation = Cancellation::new();
-        let mut relay = FakeRelay::new(&["dev.lithe.plugin.gradle", "dev.lithe.plugin.maven"])
-            .answering("dev.lithe.plugin.gradle", Err(cancelled()));
+        let mut relay = FakeRelay::new(&[
+            "io.github.lithe-idea.gradle-build",
+            "io.github.lithe-idea.maven-build",
+        ])
+        .answering("io.github.lithe-idea.gradle-build", Err(cancelled()));
         relay.cancel_on_invoke = Some(cancellation.clone());
         let outcome = collect_contributions(&relay, "/work/app", &cancellation, &|_| {});
         assert!(outcome.is_err());
-        assert_eq!(relay.called_providers(), ["dev.lithe.plugin.gradle"]);
+        assert_eq!(
+            relay.called_providers(),
+            ["io.github.lithe-idea.gradle-build"]
+        );
     }
 
     #[test]

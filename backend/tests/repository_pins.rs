@@ -10,7 +10,7 @@ use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const PLUGIN_ID: &str = "dev.lithe.plugin.java-support";
+const PLUGIN_ID: &str = "io.github.lithe-idea.java-support";
 
 fn repository_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -65,14 +65,24 @@ fn cargo_resolves_the_sdk_commit_recorded_in_the_lock() {
 }
 
 #[test]
-fn the_manifest_keeps_the_official_identity_and_declares_no_backend_yet() {
+fn the_manifest_keeps_the_community_identity_and_declares_no_backend_yet() {
     let manifest = read_json(&format!("{PLUGIN_ID}/plugin.json"));
     assert_eq!(text(&manifest, "id"), PLUGIN_ID);
     assert_eq!(manifest["schemaVersion"], 2);
-    assert_eq!(text(&manifest["vendor"], "id"), "dev.lithe");
-    assert_eq!(
-        text(&manifest["vendor"], "signatureRequirement"),
-        "publisherPackage"
+    // Lithe Store lists only unsigned community packages: the vendor is the
+    // organization namespace and the package carries no publisher signature,
+    // so nothing may require one or ask the host to check it.
+    let vendor = &manifest["vendor"];
+    assert_eq!(text(vendor, "id"), "io.github.lithe-idea");
+    assert_eq!(text(vendor, "displayName"), "Lithe Community");
+    assert_eq!(text(vendor, "signatureRequirement"), "none");
+    assert!(
+        vendor.get("bundledSignatureRequirement").is_none(),
+        "a community package has no bundled signature requirement"
+    );
+    assert!(
+        manifest["requires"].get("packageTrust").is_none(),
+        "packageTrust only serves vendor.bundledSignatureRequirement"
     );
     let version = text(&manifest, "version");
     assert!(
