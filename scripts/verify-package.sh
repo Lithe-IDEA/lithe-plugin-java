@@ -13,6 +13,9 @@ set -euo pipefail
 #     launch it).
 # With --host-tools it also runs Lithe's official package verifier and, when
 # the package is signed, checks the publisher signature.
+# Everything it reports goes to stderr, so a caller that captures stdout (as
+# scripts/build-package.sh's callers capture the package path) gets nothing
+# from it.
 
 ROOT_DIR="${0:A:h:h}"
 PLUGIN_ID="dev.lithe.plugin.java-support"
@@ -97,9 +100,9 @@ if [[ "$REQUIRE_SIGNATURE" == true && ! -f "$signature" ]]; then
     fail "the package is not publisher-signed"
 fi
 if [[ -n "$HOST_TOOLS" ]]; then
-    "$HOST_TOOLS/LitheOfficialPluginVerifier" "$PACKAGE"
+    "$HOST_TOOLS/LitheOfficialPluginVerifier" "$PACKAGE" >&2
     if [[ -f "$signature" ]]; then
-        "$HOST_TOOLS/LithePluginPackageSigner" --verify "$PACKAGE"
+        "$HOST_TOOLS/LithePluginPackageSigner" --verify "$PACKAGE" >&2
     fi
 fi
 print -u2 -- "Verified Java Support package $PACKAGE ($ARCH)"
