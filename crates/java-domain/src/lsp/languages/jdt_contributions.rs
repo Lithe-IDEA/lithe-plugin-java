@@ -22,16 +22,22 @@
 //!
 //! This module is the pure part of that design: contract constants, answer
 //! validation and bookkeeping. The calls themselves are in the backend's
-//! `plugin_functions` module.
+//! `plugin_functions` module, and the push of the merged result to JDT LS is
+//! in its `settings_session` module.
 //!
-//! Both answers and change calls carry the same object:
+//! Both answers and change calls carry this object:
 //!
 //! ```json
 //! { "settings": { "java.import.maven.enabled": true } }
 //! ```
 //!
-//! `settings` may nest objects or use dotted keys. Unknown sibling fields are
-//! ignored, so a later version can add fields without breaking this one.
+//! `settings` may nest objects or use dotted keys. [`accept_answer`] reads
+//! only `settings` and ignores unknown sibling fields, so a later version can
+//! add fields to an answer without breaking this one. A change call also
+//! carries an optional `projects` list, and the backend is stricter with it:
+//! it refuses params with a field this version does not define, because a
+//! change applied only in part would leave JDT LS out of step with the build
+//! system.
 
 use super::jdt::{accept_contributed_settings, ContributedSettingsStatus};
 use serde_json::{json, Value};
@@ -170,6 +176,13 @@ impl Contributions {
     /// Why the providers could not be listed, if they could not.
     pub fn discovery_failure(&self) -> Option<&str> {
         self.discovery_failure.as_deref()
+    }
+
+    /// Whether any provider holds a slot, answered or failed. A workspace
+    /// without providers is a plain Java workspace, and a failed discovery
+    /// alone does not make a provider appear.
+    pub fn has_providers(&self) -> bool {
+        !self.slots.is_empty()
     }
 
     /// [`Failed`](ContributedSettingsStatus::Failed) while the providers
@@ -334,6 +347,27 @@ mod tests {
         );
         assert!(contributions.failures().is_empty());
         assert!(contributions.fragments().is_empty());
+    }
+
+    #[test]
+    fn a_provider_exists_once_it_has_a_slot_of_either_kind() {
+        let mut contributions = Contributions::default();
+        assert!(!contributions.has_providers());
+
+        // A failed discovery does not name any provider.
+        contributions.record_discovery_failure("The host could not list providers.");
+        assert!(!contributions.has_providers());
+
+        contributions.record_failure("io.github.lithe-idea.maven-build", "The call failed.");
+        assert!(contributions.has_providers());
+
+        contributions.forget("io.github.lithe-idea.maven-build");
+        assert!(!contributions.has_providers());
+        contributions.record_settings(
+            "io.github.lithe-idea.gradle-build",
+            accepted(json!({ "java.import.gradle.offline.enabled": true })),
+        );
+        assert!(contributions.has_providers());
     }
 
     #[test]

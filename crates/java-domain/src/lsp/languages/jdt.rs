@@ -125,26 +125,24 @@ pub struct JdtStartContext {
 /// `java.project.sourcePaths` is listed because Rust Core sent the source
 /// folders it read from Maven POMs under that key.
 // The contributions arrive through cross-plugin function calls that the host
-// relays (this plugin, Core, the build-system plugin); the interface is in
-// `jdt_contributions` and the calls are in the backend's `plugin_functions`
-// module.
-//
-// TODO(host-api: API-35 cross-plugin function): the relay does not exist in
-// the host yet, so no provider can be discovered or called. When it does,
-// the backend discovers every enabled provider of `languageImport.settings`
-// before JDT LS starts, merges the answers and passes them in
-// `JdtSettings::contributed`. Later changes work the other way round: the
+// relays (this plugin, Core, the build-system plugin). The interface is in
+// `jdt_contributions`, the calls are in the backend's `plugin_functions`
+// module, and the backend's `settings_session` module sends the merged result
+// to JDT LS. When the host reports that JDT LS is running, the backend asks
+// every enabled provider of `languageImport.settings` and passes the answers
+// in `JdtSettings::contributed`. Later changes work the other way round: the
 // build-system plugin calls the change function this plugin exports and
-// passes the new values in the call. The backend then sends
-// `workspace/didChangeConfiguration` through the language-server channel,
-// which needs the API-25 language-server API. See `MIGRATION.md`.
+// passes the complete new values in the call. In both cases the backend sends
+// them as `workspace/didChangeConfiguration` through the host's
+// language-server channel.
 //
-// TODO(host-api: API-35 cross-plugin function): JDT LS has no settings key
-// for Maven profiles. Rust Core applied them per project with the
-// `java.project.updateSettings` command and
+// JDT LS has no settings key for Maven profiles. Rust Core applied them per
+// project with the `java.project.updateSettings` command and
 // `org.eclipse.m2e.core.selectedProfiles`, which a settings fragment cannot
-// express. The Maven plugin computes the profiles; delivering them needs a
-// per-project entry in the same change function (see `MIGRATION.md`).
+// express. The Maven plugin computes the profiles, so the same change
+// function carries a per-project list, and the backend sends one
+// `workspace/executeCommand` per project after the settings (see
+// `settings_session`).
 pub const CONTRIBUTED_SETTINGS_KEYS: &[&str] = &[
     "java.configuration.maven.",
     "java.import.maven.",
@@ -222,8 +220,10 @@ fn is_contributable_key(key: &str) -> bool {
 // from the provider calls: a call that failed or timed out marks its provider
 // as failed, and the user-visible message names that plugin.
 //
-// TODO(host-api: API-35 cross-plugin function): `Pending` is reported by the
-// backend while provider calls are outstanding, once the host relays them.
+// `Pending` is not derived by `Contributions`. The backend's `settings_session`
+// module holds the contributions only after every provider call has ended, so
+// nothing reports `Pending` today; it stays for a status surface that wants
+// to show a collection in progress.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum ContributedSettingsStatus {
     /// Every associated plugin answered, or none is associated.

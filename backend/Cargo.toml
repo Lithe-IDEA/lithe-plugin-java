@@ -15,5 +15,5 @@ lithe-java-domain = { path = "../crates/java-domain" }
 # Pinned to the published Rust SDK release; ../sdk.lock.json records the
 # matching commit, crate archive and SHA-256; scripts/verify-sdk-lock.sh
 # checks that Cargo.lock resolved this exact commit.
-lithe-plugin-sdk = { git = "https://github.com/Lithe-IDEA/lithe-plugin-docs", tag = "sdk-rust-v0.2.0" }
+lithe-plugin-sdk = { git = "https://github.com/Lithe-IDEA/lithe-plugin-docs", tag = "sdk-rust-v0.3.0" }
 serde_json.workspace = true

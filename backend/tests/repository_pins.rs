@@ -65,7 +65,7 @@ fn cargo_resolves_the_sdk_commit_recorded_in_the_lock() {
 }
 
 #[test]
-fn the_manifest_keeps_the_community_identity_and_declares_no_backend_yet() {
+fn the_manifest_keeps_the_community_identity_and_launches_the_packaged_backend() {
     let manifest = read_json(&format!("{PLUGIN_ID}/plugin.json"));
     assert_eq!(text(&manifest, "id"), PLUGIN_ID);
     assert_eq!(manifest["schemaVersion"], 2);
@@ -92,11 +92,14 @@ fn the_manifest_keeps_the_community_identity_and_declares_no_backend_yet() {
                 .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit())),
         "plugin version must be major.minor.patch: {version}"
     );
-    // The backend is declared once the host exposes the APIs it serves; a
-    // declaration before that would start a process nothing calls.
-    assert!(
-        manifest.get("backend").is_none(),
-        "declare the backend together with the host APIs it needs (see MIGRATION.md)"
+    // The host starts the binary this crate builds; scripts/assemble-package.sh
+    // copies it to the path the manifest names, so the two must not drift.
+    let launch = &manifest["backend"]["launch"];
+    assert_eq!(text(launch, "kind"), "packaged");
+    assert_eq!(
+        text(launch, "path"),
+        concat!("bin/", env!("CARGO_PKG_NAME")),
+        "backend.launch.path must name the lithe-java-backend binary in bin/"
     );
 }
 
@@ -121,8 +124,10 @@ fn every_file_the_manifest_ships_from_the_repository_exists() {
             }
         }
     }
+    // Java (two icons, three plain templates) and Spring Boot (two icons);
+    // the Maven and Gradle templates belong to their build plugins.
     assert!(
-        checked >= 15,
+        checked >= 7,
         "expected icons and templates, checked {checked}"
     );
 }

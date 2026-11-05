@@ -20,10 +20,10 @@ copied into the package next to the component:
                                 Classpath Exception
     https://adoptium.net/
 
-The icons java.svg, java_dark.svg, maven.svg and maven_dark.svg in
+The icons java.svg and java_dark.svg in
 io.github.lithe-idea.java-support/icons/ come from the JetBrains IntelliJ Platform
 Community repository (https://github.com/JetBrains/intellij-community),
-platform/icons/src/fileTypes and plugins/maven resources, licensed under the
+platform/icons/src/fileTypes, licensed under the
 Apache License, Version 2.0 (a copy is in
 io.github.lithe-idea.java-support/icons/LICENSE-APACHE-2.0.txt).
 Copyright 2000-2024 JetBrains s.r.o. and contributors.
