@@ -1,0 +1,82 @@
+name: CI
+
+# Draft pull requests only run the Linux checks. The macOS package job starts
+# when a pull request is ready for review and on every push to main.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    name: Rust checks and tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Check formatting
+        run: cargo fmt --all --check
+      - name: Lint
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Test
+        run: cargo test --workspace --locked
+      - name: Check the pinned plugin SDK release
+        run: scripts/verify-sdk-lock.sh --download
+
+  package:
+    name: Build and verify the macOS packages
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      # The host tools build with the Swift compiler of the pinned Lithe
+      # revision; scripts/host-tools.sh --require-pinned-swift checks it.
+      - name: Select Xcode 26.6
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: "26.6"
+      # Downloads are named by their SHA-256 and verified again before use.
+      - name: Restore verified third-party downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            .artifacts/jdtls-downloads
+            .artifacts/jdk-downloads
+          key: third-party-${{ hashFiles('third_party/*/manifest.json') }}
+      - name: Build the Lithe package tools
+        id: host-tools
+        run: echo "bin=$(scripts/host-tools.sh --require-pinned-swift)" >> "$GITHUB_OUTPUT"
+      - name: Build, verify and archive both architectures
+        env:
+          HOST_TOOLS: ${{ steps.host-tools.outputs.bin }}
+        run: |
+          set -euo pipefail
+          for arch in arm64 x86_64; do
+            package=$(scripts/build-package.sh --arch "$arch" --host-tools "$HOST_TOOLS")
+            scripts/archive-package.sh --package "$package" --arch "$arch" \
+              --development-unsigned --host-tools "$HOST_TOOLS"
+          done
+      - name: Upload the unsigned development archives
+        uses: actions/upload-artifact@v4
+        with:
+          name: java-support-unsigned
+          path: dist/
+          retention-days: 7
+          if-no-files-found: error

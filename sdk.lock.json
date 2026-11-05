@@ -1,0 +1,9 @@
+{
+  "comment": "Lithe Rust plugin SDK used by backend/. backend/Cargo.toml depends on the git tag; the backend tests require Cargo.lock to resolve exactly this commit, and scripts/verify-sdk-lock.sh --download also checks the published crate archive against sha256.",
+  "version": "0.1.0",
+  "repository": "https://github.com/Lithe-IDEA/lithe-plugin-docs",
+  "tag": "sdk-rust-v0.1.0",
+  "commit": "e689971c000c15a044df0502052fe7b2c1c6f84f",
+  "url": "https://github.com/Lithe-IDEA/lithe-plugin-docs/releases/download/sdk-rust-v0.1.0/lithe-plugin-sdk-rust-0.1.0.crate",
+  "sha256": "8a8001ca6557863f1f231bcdbfee1db4e2ce4ab5eefd1a8ba2bf888159ebc8e9"
+}
