@@ -5,21 +5,26 @@ name: Release
 #
 # No step receives a signing key. Checkouts do not keep the workflow token.
 #
-# Releases stay pre-releases, which Lithe Store's tracker skips, for three
+# Releases stay pre-releases, which Lithe Store's tracker skips, for these
 # reasons:
 #   1. Lithe still bundles Java Support under the old ID
 #      dev.lithe.plugin.java-support.
-#   2. Current Lithe hosts reserve languageServers[].hostIntegration (the JDT
-#      integration) to dev.lithe.* plugin IDs and accept the short tool ID
-#      "java" only from verified official provenance, so they reject this
-#      package.
-#   3. The backend links Rust plugin SDK 0.2.0, which requires the host to
-#      offer litheLogging 1 and refuses to start without it. Only the latest
-#      Lithe preview offers it so far; no stable Lithe does.
+#   2. The package declares the Rust backend (backend 2), plugin-owned
+#      language server sessions (languageServers 3, requestMethods and
+#      commands) and plugin functions (pluginFunctions 1), and the backend
+#      links the Rust plugin SDK 0.3.0 (plugin function protocol 4). A host
+#      that predates the Lithe changes #1745 and #1746 does not offer them and
+#      rejects the package. Only the latest Lithe preview contains them so far;
+#      no stable Lithe does. The SDK also requires the host to offer
+#      litheLogging 1 and refuses to start without it.
+#   3. The Maven and Gradle project templates have moved to lithe-plugin-maven
+#      and lithe-plugin-gradle. Until those plugins carry them, a release
+#      would drop the Maven and Gradle choices from New Project.
 # Remove --prerelease below once a stable Lithe accepts the package (stage E in
-# MIGRATION.md), stops bundling Java Support, and offers litheLogging 1 (Rust
-# SDK 0.2.0 requires it). The Store then lists stable releases of this
-# repository automatically.
+# MIGRATION.md), stops bundling Java Support, and offers backend 2,
+# languageServers 3, pluginFunctions 1 and litheLogging 1, and once the Maven
+# and Gradle plugins are published. The Store then lists stable releases of
+# this repository automatically.
 on:
   push:
     tags: ["v*"]
@@ -63,6 +68,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      # scripts/assemble-package.sh compiles the plugin backend for each
+      # architecture it packages.
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
       - name: Check the tag matches plugin.json
         run: |
           set -euo pipefail
@@ -91,7 +101,7 @@ jobs:
           {
             echo "Java Support（\`io.github.lithe-idea.java-support\`）${GITHUB_REF_NAME#v}。每个 macOS 架构一个归档，附 SHA-256 文件。"
             echo
-            echo "兼容性：目前的 Lithe 仍内置 Java Support，并且只允许 \`dev.lithe.*\` 插件使用 JDT 宿主集成和短工具 ID \`java\`，所以会拒绝安装这个包；要等 Lithe 主仓库完成 Java 拆分的阶段 E。"
+            echo "兼容性：目前的 Lithe 仍内置 Java Support；这个包还需要宿主提供 \`backend\` 2、\`languageServers\` 3、\`pluginFunctions\` 1 和 \`litheLogging\` 1（含 #1745、#1746 的 Lithe 预览版之后），不满足的版本会拒绝安装；稳定版要等 Lithe 主仓库完成 Java 拆分的阶段 E。Maven 与 Gradle 的新建项目模板已移交 lithe-plugin-maven 和 lithe-plugin-gradle，这两个插件接手前，这个包的新建项目里没有 Maven 和 Gradle 选项。"
             echo
             echo "安装：预发布版本，Lithe Store 自动追踪会跳过。宿主支持后下载对应架构的 ZIP，在 设置 → 插件 的 ⚙ 菜单中选择 从磁盘安装插件…。"
             echo

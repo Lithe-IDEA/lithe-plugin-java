@@ -3,8 +3,10 @@
 set -euo pipefail
 
 # Builds the Java Support package directory for one architecture: copies
-# plugin.json, assembles the pinned third-party resources next to it
-# (scripts/assemble-package.sh) and verifies the result
+# plugin.json, assembles the pinned third-party resources and the plugin
+# backend (the Rust binary lithe-java-backend, compiled with cargo for the
+# matching Apple target, so the Rust toolchain and that target must be
+# installed) next to it (scripts/assemble-package.sh) and verifies the result
 # (scripts/verify-package.sh). Prints the package directory,
 # .artifacts/package/<arch>/io.github.lithe-idea.java-support.
 #

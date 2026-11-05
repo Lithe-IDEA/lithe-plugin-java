@@ -339,8 +339,8 @@ dependencies = [
 
 [[package]]
 name = "lithe-plugin-sdk"
-version = "0.2.0"
-source = "git+https://github.com/Lithe-IDEA/lithe-plugin-docs?tag=sdk-rust-v0.2.0#940394fcd8455186ee985e6c34a319032414607f"
+version = "0.3.0"
+source = "git+https://github.com/Lithe-IDEA/lithe-plugin-docs?tag=sdk-rust-v0.3.0#db17c719bad755b420600c897615c67ed8cab67c"
 dependencies = [
  "base64",
  "serde_json",

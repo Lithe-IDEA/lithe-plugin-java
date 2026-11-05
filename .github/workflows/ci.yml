@@ -46,6 +46,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      # scripts/assemble-package.sh compiles the plugin backend for each
+      # architecture it packages.
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
       # Downloads are named by their SHA-256 and verified again before use.
       - name: Restore verified third-party downloads
         uses: actions/cache@v4

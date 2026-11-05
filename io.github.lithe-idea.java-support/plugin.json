@@ -4,14 +4,14 @@
   "displayName": "Java Support",
   "version": "1.1.0",
   "pluginAPIVersion": 4,
-  "requires": {"debugAdapters": 1, "languages": 1, "languageServers": 1, "serverProcess": 1, "settings": 2, "projectGenerators": 1, "toolDefinitions": 1, "executableResolution": 2},
+  "requires": {"backend": 2, "debugAdapters": 1, "languages": 1, "languageServers": 3, "pluginFunctions": 1, "serverProcess": 1, "settings": 2, "projectGenerators": 1, "toolDefinitions": 1, "executableResolution": 2},
   "vendor": {
     "id": "io.github.lithe-idea",
     "displayName": "Lithe Community",
     "signatureRequirement": "none"
   },
-  "permissions": ["languageServer.launch", "project.generate", "debug.launch", "debug.attach"],
-  "activationEvents": ["onLanguage:java", "onDebug:java"],
+  "permissions": ["backend.launch", "languageServer.launch", "languageServer.request", "project.generate", "debug.launch", "debug.attach", "workspace.metadata"],
+  "activationEvents": ["onLanguage:java", "onDebug:java", "onWorkspaceOpen"],
   "toolDefinitions": [
     {
       "id": "java",
@@ -227,6 +227,8 @@
         ],
         "entry": "language-server/plugins/org.eclipse.equinox.launcher_1.8.0.v20260804-1928.jar"
       },
+      "requestMethods": ["workspace/executeCommand"],
+      "commands": ["java.project.updateSettings"],
       "hostIntegration": {
         "id": "jdt",
         "capabilities": ["debug", "run", "testing"],
@@ -242,38 +244,29 @@
       }
     }
   ],
+  "pluginFunctions": {
+    "calls": [
+      {"id": "languageImport.settings", "version": 1}
+    ],
+    "exports": [
+      {"id": "languageImport.settingsChanged", "version": 1, "context": "workspace"}
+    ]
+  },
+  "backend": {
+    "launch": {
+      "kind": "packaged",
+      "path": "bin/lithe-java-backend"
+    }
+  },
   "projectGenerators": [
     {
       "id": "java",
       "displayName": "Java",
-      "description": "A Java project with no build tool, Maven, or Gradle.",
+      "description": "A Java project without a build tool.",
       "section": "project",
       "order": 10,
       "icon": {"path": "icons/java.svg", "darkPath": "icons/java_dark.svg", "mode": "original"},
       "fields": [
-        {
-          "id": "buildSystem",
-          "type": "enum",
-          "title": "Build system",
-          "presentation": "segmented",
-          "default": "maven",
-          "options": [
-            {"value": "none", "title": "Lithe"},
-            {"value": "maven", "title": "Maven"},
-            {"value": "gradle", "title": "Gradle"}
-          ]
-        },
-        {
-          "id": "gradleDsl",
-          "type": "enum",
-          "title": "Gradle DSL",
-          "presentation": "segmented",
-          "visibleWhen": {"field": "buildSystem", "equals": "gradle"},
-          "options": [
-            {"value": "kotlin", "title": "Kotlin"},
-            {"value": "groovy", "title": "Groovy"}
-          ]
-        },
         {
           "id": "jdk",
           "type": "runtime",
@@ -286,199 +279,27 @@
           "type": "boolean",
           "title": "Add sample code",
           "default": true
-        },
-        {
-          "id": "groupId",
-          "type": "text",
-          "title": "GroupId",
-          "description": "Usually the reversed domain name of your organization, such as com.example.",
-          "advanced": true,
-          "default": "org.example",
-          "pattern": "[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*",
-          "maxLength": 200,
-          "visibleWhen": {"field": "buildSystem", "oneOf": ["maven", "gradle"]}
-        },
-        {
-          "id": "artifactId",
-          "type": "text",
-          "title": "ArtifactId",
-          "description": "The name of the artifact the build produces.",
-          "advanced": true,
-          "default": "${project.name}",
-          "pattern": "[A-Za-z0-9_][A-Za-z0-9_.-]*",
-          "maxLength": 200,
-          "visibleWhen": {"field": "buildSystem", "oneOf": ["maven", "gradle"]}
         }
       ],
       "requirements": [
-        {"languageID": "java"},
-        {"buildSystemID": "maven", "when": {"field": "buildSystem", "equals": "maven"}},
-        {"buildSystemID": "gradle", "when": {"field": "buildSystem", "equals": "gradle"}}
+        {"languageID": "java"}
       ],
       "steps": [
-        {"kind": "files", "source": "templates/java/plain", "when": {"field": "buildSystem", "equals": "none"}},
+        {"kind": "files", "source": "templates/java/plain"},
         {
           "kind": "files",
           "source": "templates/java/plain-sample",
-          "when": [{"field": "buildSystem", "equals": "none"}, {"field": "addSampleCode", "equals": true}]
+          "when": {"field": "addSampleCode", "equals": true}
         },
         {
           "kind": "files",
           "source": "templates/java/plain-empty",
-          "when": [{"field": "buildSystem", "equals": "none"}, {"field": "addSampleCode", "equals": false}]
-        },
-        {"kind": "files", "source": "templates/java/maven", "when": {"field": "buildSystem", "equals": "maven"}},
-        {"kind": "files", "source": "templates/java/gradle-kotlin", "when": [{"field": "buildSystem", "equals": "gradle"}, {"field": "gradleDsl", "equals": "kotlin"}]},
-        {"kind": "files", "source": "templates/java/gradle-groovy", "when": [{"field": "buildSystem", "equals": "gradle"}, {"field": "gradleDsl", "equals": "groovy"}]},
-        {
-          "kind": "files",
-          "source": "templates/java/standard-sample",
-          "when": [{"field": "buildSystem", "oneOf": ["maven", "gradle"]}, {"field": "addSampleCode", "equals": true}]
-        },
-        {
-          "kind": "files",
-          "source": "templates/java/standard-sample-main",
-          "target": "src/main/java/${field.groupId|package|path}",
-          "when": [{"field": "buildSystem", "oneOf": ["maven", "gradle"]}, {"field": "addSampleCode", "equals": true}]
-        },
-        {
-          "kind": "files",
-          "source": "templates/java/standard-empty",
-          "when": [{"field": "buildSystem", "oneOf": ["maven", "gradle"]}, {"field": "addSampleCode", "equals": false}]
+          "when": {"field": "addSampleCode", "equals": false}
         }
       ],
       "openFiles": [
-        {"path": "src/Main.java", "when": [{"field": "buildSystem", "equals": "none"}, {"field": "addSampleCode", "equals": true}]},
-        {"path": "src/main/java/${field.groupId|package|path}/Main.java", "when": [{"field": "buildSystem", "oneOf": ["maven", "gradle"]}, {"field": "addSampleCode", "equals": true}]}
+        {"path": "src/Main.java", "when": {"field": "addSampleCode", "equals": true}}
       ]
-    },
-    {
-      "id": "maven-archetype",
-      "displayName": "Maven Archetype",
-      "description": "A project generated by Maven from an archetype.",
-      "section": "generator",
-      "order": 10,
-      "icon": {"path": "icons/maven.svg", "darkPath": "icons/maven_dark.svg", "mode": "original"},
-      "fields": [
-        {
-          "id": "jdk",
-          "type": "runtime",
-          "title": "JDK",
-          "description": "Maven runs with this JDK, and the new project uses it.",
-          "runtime": "java",
-          "minimumVersion": "11"
-        },
-        {
-          "id": "archetype",
-          "type": "enum",
-          "title": "Archetype",
-          "presentation": "menu",
-          "default": "maven-archetype-quickstart",
-          "options": [
-            {"value": "maven-archetype-quickstart", "title": "maven-archetype-quickstart"},
-            {"value": "maven-archetype-webapp", "title": "maven-archetype-webapp"},
-            {"value": "maven-archetype-simple", "title": "maven-archetype-simple"},
-            {"value": "maven-archetype-j2ee-simple", "title": "maven-archetype-j2ee-simple"},
-            {"value": "maven-archetype-plugin", "title": "maven-archetype-plugin"},
-            {"value": "maven-archetype-archetype", "title": "maven-archetype-archetype"},
-            {"value": "maven-archetype-site-simple", "title": "maven-archetype-site-simple"},
-            {"value": "custom", "title": "Custom archetype…"}
-          ]
-        },
-        {
-          "id": "archetypeGroupId",
-          "type": "text",
-          "title": "Archetype GroupId",
-          "pattern": "[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_-]*)*",
-          "maxLength": 200,
-          "placeholder": "org.example.archetypes",
-          "visibleWhen": {"field": "archetype", "equals": "custom"}
-        },
-        {
-          "id": "archetypeArtifactId",
-          "type": "text",
-          "title": "Archetype ArtifactId",
-          "pattern": "[A-Za-z0-9_][A-Za-z0-9_.-]*",
-          "maxLength": 200,
-          "placeholder": "my-archetype",
-          "visibleWhen": {"field": "archetype", "equals": "custom"}
-        },
-        {
-          "id": "archetypeVersion",
-          "type": "text",
-          "title": "Archetype version",
-          "description": "Leave empty to use the latest version Maven finds in its catalog.",
-          "optional": true,
-          "pattern": "[A-Za-z0-9_.-]+",
-          "maxLength": 64,
-          "placeholder": "Latest"
-        },
-        {
-          "id": "groupId",
-          "type": "text",
-          "title": "GroupId",
-          "advanced": true,
-          "default": "org.example",
-          "pattern": "[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*",
-          "maxLength": 200
-        },
-        {
-          "id": "artifactId",
-          "type": "text",
-          "title": "ArtifactId",
-          "advanced": true,
-          "default": "${project.name}",
-          "pattern": "[A-Za-z0-9_][A-Za-z0-9_.-]*",
-          "maxLength": 200
-        },
-        {
-          "id": "version",
-          "type": "text",
-          "title": "Version",
-          "advanced": true,
-          "default": "1.0-SNAPSHOT",
-          "pattern": "[A-Za-z0-9_.-]+",
-          "maxLength": 64
-        },
-        {
-          "id": "packageName",
-          "type": "text",
-          "title": "Package",
-          "advanced": true,
-          "default": "${field.groupId}.${field.artifactId|package}",
-          "pattern": "[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*",
-          "maxLength": 200
-        }
-      ],
-      "requirements": [
-        {"languageID": "java"},
-        {"buildSystemID": "maven"}
-      ],
-      "steps": [
-        {
-          "kind": "command",
-          "command": "mvn",
-          "arguments": [
-            "-B",
-            "org.apache.maven.plugins:maven-archetype-plugin:3.3.1:generate",
-            "-DinteractiveMode=false",
-            {"value": "-DarchetypeGroupId=org.apache.maven.archetypes", "when": {"field": "archetype", "notEquals": "custom"}},
-            {"value": "-DarchetypeArtifactId=${field.archetype}", "when": {"field": "archetype", "notEquals": "custom"}},
-            {"value": "-DarchetypeGroupId=${field.archetypeGroupId}", "when": {"field": "archetype", "equals": "custom"}},
-            {"value": "-DarchetypeArtifactId=${field.archetypeArtifactId}", "when": {"field": "archetype", "equals": "custom"}},
-            {"value": "-DarchetypeVersion=${field.archetypeVersion}", "when": {"field": "archetypeVersion", "notEquals": ""}},
-            "-DgroupId=${field.groupId}",
-            "-DartifactId=${field.artifactId}",
-            "-Dversion=${field.version}",
-            "-Dpackage=${field.packageName}"
-          ],
-          "environment": {"JAVA_HOME": "${field.jdk}"},
-          "collect": "${field.artifactId}",
-          "mayUseNetwork": true,
-          "timeoutSeconds": 900
-        }
-      ],
-      "openFiles": ["pom.xml"]
     },
     {
       "id": "spring-boot",

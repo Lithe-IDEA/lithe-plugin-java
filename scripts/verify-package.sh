@@ -6,8 +6,10 @@ set -euo pipefail
 #   - plugin.json is the repository manifest, unchanged, and declares a
 #     plugin without a publisher signature (vendor.signatureRequirement "none");
 #   - the package holds only the declared top-level entries and no symbolic
-#     links, and nothing outside runtime/ is executable;
+#     links, and nothing outside runtime/ and bin/ is executable;
 #   - every file plugin.json names for the language server exists;
+#   - the plugin backend (backend.launch.path in plugin.json) is the only file
+#     in bin/, is executable, and contains exactly the requested architectures;
 #   - the packaged JDK is the requested architecture and keeps its upstream
 #     code signature (macOS only launches the JDK if it does).
 
@@ -45,14 +47,31 @@ cmp -s "$manifest" "$ROOT_DIR/$PLUGIN_ID/plugin.json" ||
 [[ "${PACKAGE:A:t}" == "$PLUGIN_ID" ]] ||
     fail "the package directory must be named $PLUGIN_ID"
 
-allowed=(plugin.json icons templates language-server runtime)
+allowed=(plugin.json bin icons templates language-server runtime)
 for entry in "$PACKAGE"/*(DN); do
     (( ${allowed[(Ie)${entry:t}]} )) || fail "undeclared top-level entry ${entry:t}"
 done
 symlink=$(find "$PACKAGE" -type l -print -quit)
 [[ -z "$symlink" ]] || fail "symbolic link $symlink"
-outside_runtime=$(find "$PACKAGE" -path "$PACKAGE/runtime" -prune -o -type f -perm -u+x -print -quit)
-[[ -z "$outside_runtime" ]] || fail "executable file outside runtime/: $outside_runtime"
+# runtime/ holds the JDK and bin/ holds the plugin backend; no other directory
+# may carry an executable (the backend itself is pinned down below).
+outside_runtime=$(find "$PACKAGE" \( -path "$PACKAGE/runtime" -o -path "$PACKAGE/bin" \) -prune -o -type f -perm -u+x -print -quit)
+[[ -z "$outside_runtime" ]] || fail "executable file outside runtime/ and bin/: $outside_runtime"
+
+backend_path=$(/usr/bin/plutil -extract backend.launch.path raw -o - "$manifest")
+[[ "$backend_path" == bin/* && "$backend_path" != *..* ]] ||
+    fail "plugin.json backend.launch.path must name a file inside bin/, found: $backend_path"
+backend="$PACKAGE/$backend_path"
+[[ -f "$backend" && -x "$backend" ]] ||
+    fail "plugin.json declares the backend $backend_path, which the package does not contain as an executable file"
+packaged_backend_files=("$PACKAGE"/bin/**/*(.DN))
+[[ "${#packaged_backend_files}" == 1 && "${packaged_backend_files[1]}" == "$backend" ]] ||
+    fail "bin/ must hold only the backend $backend_path, found: ${packaged_backend_files[*]:-nothing}"
+backend_archs_text=$(/usr/bin/lipo -archs "$backend" 2>/dev/null) ||
+    fail "$backend_path is not a Mach-O binary"
+backend_archs=(${=backend_archs_text})
+[[ "${(j: :)${(o)backend_archs}}" == "${(j: :)${(o)runtime_architectures}}" ]] ||
+    fail "$backend_path contains ${backend_archs[*]:-no architectures}, expected ${runtime_architectures[*]}"
 
 launcher=$(/usr/bin/plutil -extract languageServers.0.launch.entry raw -o - "$manifest")
 lombok=$(/usr/bin/plutil -extract languageServers.0.hostIntegration.resources.lombokAgent raw -o - "$manifest")
