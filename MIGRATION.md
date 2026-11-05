@@ -509,7 +509,7 @@ Java 后端向宿主查询导出测试运行函数 ID 的已启用插件，把�
 
 - 宿主没有接线：`plugin.json` 没有 `backend` 声明，第 6 节的 API 全部没有实现，三个会话命令只回答 `NotSupported`。
 - API-35 的 Java 一侧大部分已实现（第 5 节），但中转协议是暂定的；变化通知函数没有注册；没有任何地方调用 `collect_for_call`（要等 API-25 的启动解析器）。Maven profiles 的逐工程交付形状没有定。
-- `jdt_contributions.rs` 和 `plugin_functions.rs` 的 24 个测试是在不允许编译的约束下写成的，还没有编译或运行过；合并前要在主会话跑一遍 `cargo fmt --all --check`、`cargo clippy --workspace --all-targets --locked -- -D warnings` 和 `cargo test --workspace --locked`。
+- `jdt_contributions.rs` 和 `plugin_functions.rs` 的 24 个测试只验证了插件内部逻辑：它们已经编译并通过，但用来对照的中转协议是暂定的，等 #1742 合入后要按最终协议复核。
 - 没有真实 JDT 的端到端测试，也没有在 Linux 上实跑过（本机没有 Docker），没有真实签名。
 - 打包的 `package` 任务只在 macOS 上构建未签名的开发归档，没有在 CI 上跑过一次完整的签名发布。
 - Windows 插件包没有做；`third_party/jdk/manifest.json` 里保留了 Windows 条目。
