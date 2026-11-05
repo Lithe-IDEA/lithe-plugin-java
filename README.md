@@ -43,8 +43,9 @@
 
 ## 日志
 
-后端把日志交给宿主的统一日志 `litheLogging` 1，不写 stderr；唯一例外是协议开始前注册函数失败，
-这时打印一行带 SDK 错误码的固定文本后退出（`backend/src/main.rs`）。Rust SDK 0.2.0 要求宿主提供 `litheLogging` 1，
+后端把日志交给宿主的统一日志 `litheLogging` 1，不写 stderr。函数 ID 都是编译期常量，注册只会因 ID 写错、重复或超出 SDK
+上限而失败，单元测试 `the_backend_builds_with_every_command_registered` 在 CI 里挡住这种构建；万一发生，进程在握手前以状态 1 退出，
+由宿主记录启动失败（`backend/src/main.rs`）。Rust SDK 0.2.0 要求宿主提供 `litheLogging` 1，
 不提供的 Lithe 版本会拒绝启动后端；目前只有 Lithe 最新 `preview` 提供，稳定版还没有。
 
 | 事实 | 级别 | 来源 | 内容 |

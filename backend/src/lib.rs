@@ -27,8 +27,8 @@
 //! `operationFinished` except for the functions outside [`KEY_OPERATIONS`],
 //! whose success is suppressed. Failures the domain layer handled and
 //! recovered from are reported as `degraded` through
-//! `lithe_java_domain::host::diagnostics`. The backend never writes stderr
-//! logs, and a fact carries no path, source or tool output.
+//! `lithe_java_domain::host::diagnostics`. The backend never writes to
+//! stderr, and a fact carries no path, source or tool output.
 
 pub mod plugin_functions;
 
@@ -58,6 +58,11 @@ pub const KEY_OPERATIONS: &[&str] = &[
 /// A function can only be suppressed once it is registered, so the successes
 /// of the functions outside [`KEY_OPERATIONS`] are suppressed after the
 /// registration loop.
+///
+/// Every input is a compile-time constant, so the result is the same on each
+/// run: it fails only when a function ID is invalid, repeated or over the
+/// SDK's limit, which the test `the_backend_builds_with_every_command_registered`
+/// rejects.
 pub fn backend() -> Result<Backend, SdkError> {
     let mut backend = Backend::new(BACKEND_NAME).version(env!("CARGO_PKG_VERSION"));
     for command in SUPPORTED_COMMANDS.iter().chain(SESSION_COMMANDS) {
@@ -182,12 +187,16 @@ mod tests {
             .all(|code| lithe_plugin_sdk::is_plugin_error_code(code)));
     }
 
+    /// `main` exits without a message when [`backend`] fails, so this test is
+    /// what keeps that branch out of every build that passed CI.
     #[test]
-    fn every_command_is_a_valid_function_id() {
+    fn the_backend_builds_with_every_command_registered() {
         for command in SUPPORTED_COMMANDS.iter().chain(SESSION_COMMANDS) {
             assert!(lithe_plugin_sdk::is_function_id(command), "{command}");
         }
-        assert!(backend().is_ok());
+        if let Err(error) = backend() {
+            panic!("the backend does not build: {}", error.code());
+        }
     }
 
     #[test]
