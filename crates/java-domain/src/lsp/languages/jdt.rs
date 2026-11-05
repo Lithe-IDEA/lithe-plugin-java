@@ -891,7 +891,7 @@ fn take_plugin_choice(
     let choice = arguments
         .iter()
         .rev()
-        .find(|argument| argument.strip_prefix(prefix).is_some_and(&acceptable))
+        .find(|argument| argument.strip_prefix(prefix).is_some_and(acceptable))
         .cloned();
     arguments.retain(|argument| !argument.starts_with(prefix));
     choice
