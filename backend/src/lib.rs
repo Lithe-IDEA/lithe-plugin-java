@@ -17,19 +17,47 @@
 //! `languageImport.settings` (API-35): it asks the Maven and Gradle plugins
 //! for the settings JDT LS imports with. It is the only module that knows the
 //! host relay's wire.
+//!
+//! # Logging
+//!
+//! The backend reports restricted facts through the SDK's `litheLogging` 1
+//! channel; the SDK refuses `initialize` when the host does not offer it. The
+//! SDK reports each function's terminal fact by itself: a failure as
+//! `operationFailed` with the `pluginErrorCode`, a success as
+//! `operationFinished` except for the functions outside [`KEY_OPERATIONS`],
+//! whose success is suppressed. Failures the domain layer handled and
+//! recovered from are reported as `degraded` through
+//! `lithe_java_domain::host::diagnostics`. The backend never writes stderr
+//! logs, and a fact carries no path, source or tool output.
 
 pub mod plugin_functions;
 
 use lithe_java_domain::commands::{self, ExecuteOptions, SESSION_COMMANDS, SUPPORTED_COMMANDS};
+use lithe_java_domain::host::diagnostics::{scoped, Reporter};
 use lithe_java_domain::protocol::{CoreError, ErrorCode};
 use lithe_plugin_sdk::{Backend, Context, FunctionError, PluginError, SdkError, Value};
+use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 /// Name reported as `serverInfo.name`.
 pub const BACKEND_NAME: &str = "lithe-java-backend";
 
+/// Functions whose success is a key user operation and is logged at INFO.
+/// Every other function is an editor-driven or startup read; its success is
+/// suppressed, and its failures are still logged.
+pub const KEY_OPERATIONS: &[&str] = &[
+    "debug.javaTestLaunch",
+    "execution.planLaunchCommand",
+    "java.prepareLaunch",
+    "runConfig.selectJava",
+];
+
 /// Builds the backend with every Java Support function registered.
+///
+/// A function can only be suppressed once it is registered, so the successes
+/// of the functions outside [`KEY_OPERATIONS`] are suppressed after the
+/// registration loop.
 pub fn backend() -> Result<Backend, SdkError> {
     let mut backend = Backend::new(BACKEND_NAME).version(env!("CARGO_PKG_VERSION"));
     for command in SUPPORTED_COMMANDS.iter().chain(SESSION_COMMANDS) {
@@ -37,6 +65,11 @@ pub fn backend() -> Result<Backend, SdkError> {
         backend.function(command, move |params, context| {
             invoke(command, params, context)
         })?;
+    }
+    for command in SUPPORTED_COMMANDS.iter().chain(SESSION_COMMANDS) {
+        if !KEY_OPERATIONS.contains(command) {
+            backend.suppress_success_diagnostics(command)?;
+        }
     }
     Ok(backend)
 }
@@ -62,33 +95,40 @@ fn invoke(command: &str, params: Value, context: &Context) -> Result<Value, Func
             commands::cancel(&operation_id);
         }
     });
-    let result = commands::execute_with_options(
-        command,
-        params,
-        ExecuteOptions {
-            operation_id: Some(operation_id),
-            timeout_milliseconds: None,
-        },
-    );
+    // The domain layer reports failures it handled itself (for example a
+    // storage cleanup that failed) to this thread's reporter. The category is
+    // controlled text and the count is a number; an error from `degraded` only
+    // means the arguments were invalid, so the call's own result stands.
+    let diagnostics = context.diagnostics();
+    let operation = context.function_id().to_owned();
+    let reporter: Reporter = Rc::new(move |code: &str, count: u64| {
+        let _ = diagnostics.degraded(&operation, code, Some(count));
+    });
+    let result = scoped(reporter, || {
+        commands::execute_with_options(
+            command,
+            params,
+            ExecuteOptions {
+                operation_id: Some(operation_id),
+                timeout_milliseconds: None,
+            },
+        )
+    });
     if cancelled.load(Ordering::SeqCst) {
         return Err(FunctionError::Cancelled);
     }
-    result.map_err(|error| function_error(error, context))
+    result.map_err(function_error)
 }
 
 /// Maps a domain failure to the error the host receives.
 ///
-/// `details` may carry paths or tool output, so it only reaches stderr.
-fn function_error(error: CoreError, context: &Context) -> FunctionError {
+/// The SDK reports the failure once, at the function's result boundary, with
+/// the `pluginErrorCode` as its category, so this function logs nothing.
+/// `details` may carry paths or tool output and never leaves the backend: it
+/// is neither part of the error nor part of any log fact.
+fn function_error(error: CoreError) -> FunctionError {
     if error.code == ErrorCode::Cancelled {
         return FunctionError::Cancelled;
-    }
-    if let Some(details) = &error.details {
-        context.log(format!(
-            "{} failed: {}: {details}",
-            context.function_id(),
-            error.message
-        ));
     }
     // TODO(host-api: API-37 i18n): the messages are English Core messages.
     // Localize them through the host i18n service once plugin backends can
@@ -148,5 +188,26 @@ mod tests {
             assert!(lithe_plugin_sdk::is_function_id(command), "{command}");
         }
         assert!(backend().is_ok());
+    }
+
+    #[test]
+    fn key_operations_are_registered_commands_without_duplicates() {
+        let commands: std::collections::BTreeSet<&str> = SUPPORTED_COMMANDS
+            .iter()
+            .chain(SESSION_COMMANDS)
+            .copied()
+            .collect();
+        let distinct: std::collections::BTreeSet<&str> = KEY_OPERATIONS.iter().copied().collect();
+        assert_eq!(
+            distinct.len(),
+            KEY_OPERATIONS.len(),
+            "a key operation is listed twice"
+        );
+        for operation in KEY_OPERATIONS {
+            assert!(
+                commands.contains(operation),
+                "{operation} is not a registered command"
+            );
+        }
     }
 }

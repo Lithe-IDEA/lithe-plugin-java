@@ -13,26 +13,30 @@
 //! answers in [`Contributions`]. The interface itself is defined by
 //! `lithe_java_domain::lsp::languages::jdt_contributions`.
 //!
-//! TODO(host-api: API-35 cross-plugin function): the relay is built in a
-//! separate Lithe change and its wire is not final. The method names and
-//! shapes below follow the design brief:
+//! TODO(host-api: API-35 cross-plugin function): the relay was merged in
+//! Lithe #1742 and its real wire differs from the shapes this module still
+//! uses, so the module cannot call it yet:
 //!
-//! - `lithe/host/functions/providers` takes `{ context, functionID, version }`
-//!   and answers `{ providers: [{ pluginID }] }` for the enabled plugins that
-//!   export that function, sorted by plugin ID.
+//! - `lithe/host/functions/providers` takes `{ functionID }` and answers
+//!   `{ providers: [{ pluginID, version }] }`.
 //! - `lithe/host/functions/invoke` takes
-//!   `{ context, pluginID, functionID, version, params }` and answers
-//!   `{ result }`.
+//!   `{ pluginID, functionID, context: { contextID, generation }, params?,
+//!   timeoutMilliseconds?, parentOperationID? }` and answers `{ value }`.
+//!   Fields the host does not define are refused with
+//!   `plugin.host.unsupportedOption`.
 //!
-//! Adjust the constants and the two `*_params` / parse functions when the
-//! relay lands; the collector and its tests do not change.
+//! Both methods require plugin function protocol 4, while Rust SDK 0.2.0
+//! negotiates only protocols 1 to 3. The method constants and the two
+//! `*_params` / parse functions therefore change together with an upgrade to
+//! an SDK that speaks protocol 4; the collector and its tests do not change.
 //!
 //! TODO(host-api: API-35 cross-plugin function): the change function
 //! `languageImport.settingsChanged` is not registered yet. It must store the
-//! new settings in the slot of the *calling plugin*, and the SDK this crate is
-//! pinned to does not tell a handler which plugin called it. Register it
-//! with `jdt_contributions::SETTINGS_CHANGED_FUNCTION` and [`record_answer`]
-//! once the SDK exposes the caller.
+//! new settings in the slot of the *calling plugin*. Protocol 4 names the
+//! caller in the `caller` field of an invocation, and SDK 0.2.0 does not
+//! expose that field to a handler. Register the function with
+//! `jdt_contributions::SETTINGS_CHANGED_FUNCTION` and [`record_answer`] once
+//! the SDK exposes the caller.
 
 use lithe_java_domain::lsp::languages::jdt_contributions::{
     accept_answer, settings_request, Contributions, FunctionContract, MAX_PROVIDERS,
@@ -56,12 +60,38 @@ pub const INVOKE_METHOD: &str = "lithe/host/functions/invoke";
 /// The host applies its own, larger limit on top.
 pub const PROVIDER_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// Category reported when the host could not list the settings providers.
+pub const RELAY_PROVIDERS_UNAVAILABLE: &str = "relay.providers_unavailable";
+
+/// Category reported when a call to one settings provider failed.
+pub const RELAY_PROVIDER_FAILED: &str = "relay.provider_failed";
+
+/// Category reported when a call to one settings provider timed out.
+pub const RELAY_PROVIDER_TIMED_OUT: &str = "relay.provider_timed_out";
+
+/// Category reported when a provider's answer was unusable and was dropped.
+pub const RELAY_SETTINGS_REJECTED: &str = "relay.settings_rejected";
+
+/// Category reported when an answer carried keys outside the accepted
+/// namespace. The count is the number of rejected keys.
+pub const RELAY_KEYS_REJECTED: &str = "relay.keys_rejected";
+
+/// Every category this module reports. Each one is a controlled code that
+/// names no provider, path or message.
+pub const RELAY_CATEGORIES: &[&str] = &[
+    RELAY_PROVIDERS_UNAVAILABLE,
+    RELAY_PROVIDER_FAILED,
+    RELAY_PROVIDER_TIMED_OUT,
+    RELAY_SETTINGS_REJECTED,
+    RELAY_KEYS_REJECTED,
+];
+
 /// A relay request that was refused or failed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RelayFailure {
     /// Stable code, such as `plugin.host.timeout` or an `sdk.*` code.
     pub code: String,
-    /// Diagnostic text. It may name paths, so it is only logged.
+    /// Diagnostic text. It may name paths, so it never leaves the backend.
     pub message: String,
 }
 
@@ -233,12 +263,14 @@ impl Drop for Deadline {
 /// A provider that fails, times out or answers with something unusable is
 /// recorded as failed and does not stop the others, so JDT LS can always
 /// start. The only error is the calling function's own cancellation.
-/// `log` receives diagnostics for stderr.
+/// `report` receives the category and count of every failure that was handled
+/// this way (one of [`RELAY_CATEGORIES`]), and never a provider ID, a path or
+/// a message.
 pub fn collect_contributions(
     relay: &dyn FunctionRelay,
     workspace_root: &str,
     cancellation: &Cancellation,
-    log: &dyn Fn(&str),
+    report: &dyn Fn(&str, u64),
 ) -> Result<Contributions, Cancelled> {
     let mut contributions = Contributions::default();
     cancellation.check()?;
@@ -246,10 +278,7 @@ pub fn collect_contributions(
         Ok(providers) => providers,
         Err(failure) if failure.is_cancelled() => return Err(Cancelled),
         Err(failure) => {
-            log(&format!(
-                "Listing settings providers failed: {}: {}",
-                failure.code, failure.message
-            ));
+            report(RELAY_PROVIDERS_UNAVAILABLE, 1);
             contributions.record_discovery_failure(failure_reason(&failure));
             return Ok(contributions);
         }
@@ -261,18 +290,16 @@ pub fn collect_contributions(
         cancellation.check()?;
         let request = settings_request(workspace_root);
         match relay.invoke(&provider, &SETTINGS_FUNCTION, request) {
-            Ok(answer) => record_answer(&mut contributions, &provider, &answer, log),
+            Ok(answer) => record_answer(&mut contributions, &provider, &answer, report),
             Err(failure) if failure.is_cancelled() => {
                 // The calling function was cancelled, or only this request
                 // ran out of time.
                 cancellation.check()?;
+                report(RELAY_PROVIDER_TIMED_OUT, 1);
                 contributions.record_failure(&provider, "The call timed out.");
             }
             Err(failure) => {
-                log(&format!(
-                    "{provider} failed to provide settings: {}: {}",
-                    failure.code, failure.message
-                ));
+                report(RELAY_PROVIDER_FAILED, 1);
                 contributions.record_failure(&provider, failure_reason(&failure));
             }
         }
@@ -284,26 +311,25 @@ pub fn collect_contributions(
 ///
 /// An unusable answer marks the provider as failed instead of keeping what it
 /// sent before, so the status never claims settings that were not accepted.
+/// `report` receives [`RELAY_SETTINGS_REJECTED`] for an unusable answer and
+/// [`RELAY_KEYS_REJECTED`] with the number of keys dropped from a usable one;
+/// it never receives the provider ID, the keys or the reason text.
 pub fn record_answer(
     contributions: &mut Contributions,
     provider: &str,
     answer: &Value,
-    log: &dyn Fn(&str),
+    report: &dyn Fn(&str, u64),
 ) {
     match accept_answer(answer) {
         Ok(accepted) => {
             if !accepted.rejected.is_empty() {
-                log(&format!(
-                    "{provider} contributed keys outside the accepted namespace: {}",
-                    accepted.rejected.join(", ")
-                ));
+                let rejected = u64::try_from(accepted.rejected.len()).unwrap_or(u64::MAX);
+                report(RELAY_KEYS_REJECTED, rejected);
             }
             contributions.record_settings(provider, accepted);
         }
         Err(reason) => {
-            log(&format!(
-                "{provider} answered with unusable settings: {reason}"
-            ));
+            report(RELAY_SETTINGS_REJECTED, 1);
             contributions.record_failure(provider, reason);
         }
     }
@@ -331,12 +357,17 @@ pub fn collect_for_call(
         .into());
     };
     let relay = HostRelay::new(context.host(), workspace, PROVIDER_TIMEOUT);
-    let log = |message: &str| context.log(message);
+    let diagnostics = context.diagnostics();
+    let operation = context.function_id();
+    let report = |code: &str, count: u64| {
+        // An error only means the arguments were invalid; the call's own result stands.
+        let _ = diagnostics.degraded(operation, code, Some(count));
+    };
     Ok(collect_contributions(
         &relay,
         workspace_root,
         context.cancellation(),
-        &log,
+        &report,
     )?)
 }
 
@@ -412,8 +443,19 @@ mod tests {
     }
 
     fn collect(relay: &FakeRelay) -> Contributions {
-        collect_contributions(relay, "/work/app", &Cancellation::new(), &|_| {})
+        collect_contributions(relay, "/work/app", &Cancellation::new(), &|_, _| {})
             .expect("the call is not cancelled")
+    }
+
+    /// Collects with a reporter that records every category and count.
+    fn collect_reporting(relay: &FakeRelay) -> (Contributions, Vec<(String, u64)>) {
+        let reports = RefCell::new(Vec::<(String, u64)>::new());
+        let contributions =
+            collect_contributions(relay, "/work/app", &Cancellation::new(), &|code, count| {
+                reports.borrow_mut().push((code.to_string(), count))
+            })
+            .expect("the call is not cancelled");
+        (contributions, reports.into_inner())
     }
 
     #[test]
@@ -589,28 +631,165 @@ mod tests {
     }
 
     #[test]
-    fn rejected_keys_are_logged_by_name_and_never_stored() {
+    fn rejected_keys_are_reported_by_count_and_never_stored() {
         let relay = FakeRelay::new(&["io.github.lithe-idea.maven-build"]).answering(
             "io.github.lithe-idea.maven-build",
             settings(json!({
                 "java.import.maven.enabled": true,
-                "java.home": "/opt/other-jdk"
+                "java.home": "/opt/other-jdk",
+                "unrelated": 1
             })),
         );
-        let lines = RefCell::new(Vec::<String>::new());
-        let contributions =
-            collect_contributions(&relay, "/work/app", &Cancellation::new(), &|line| {
-                lines.borrow_mut().push(line.to_string())
-            })
-            .expect("the call is not cancelled");
+        let (contributions, reports) = collect_reporting(&relay);
         assert_eq!(
             contributions.fragments(),
             [json!({ "java.import.maven.enabled": true })]
         );
-        let lines = lines.borrow();
-        assert_eq!(lines.len(), 1);
-        assert!(lines[0].contains("java.home"), "{}", lines[0]);
-        assert!(!lines[0].contains("/opt/other-jdk"), "{}", lines[0]);
+        // One report for the two rejected keys; neither key nor value is named.
+        assert_eq!(reports, [(RELAY_KEYS_REJECTED.to_string(), 2)]);
+    }
+
+    #[test]
+    fn a_failed_discovery_is_reported_once_without_its_message() {
+        let mut relay = FakeRelay::new(&[]);
+        relay.providers = Err(RelayFailure::new(
+            "plugin.host.unavailable",
+            "No relay at /home/dev/relay.sock.",
+        ));
+        let (_, reports) = collect_reporting(&relay);
+        assert_eq!(reports, [(RELAY_PROVIDERS_UNAVAILABLE.to_string(), 1)]);
+    }
+
+    #[test]
+    fn a_failed_and_a_timed_out_provider_are_reported_by_category() {
+        let relay = FakeRelay::new(&[
+            "io.github.lithe-idea.gradle-build",
+            "io.github.lithe-idea.maven-build",
+        ])
+        .answering(
+            "io.github.lithe-idea.gradle-build",
+            Err(RelayFailure::new(
+                "plugin.host.timeout",
+                "/home/dev/.gradle is slow",
+            )),
+        )
+        // The request was cancelled but the calling function was not.
+        .answering("io.github.lithe-idea.maven-build", Err(cancelled()));
+        let (_, reports) = collect_reporting(&relay);
+        // Providers are called in plugin ID order: gradle first, then maven.
+        assert_eq!(
+            reports,
+            [
+                (RELAY_PROVIDER_FAILED.to_string(), 1),
+                (RELAY_PROVIDER_TIMED_OUT.to_string(), 1),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_unusable_answer_is_reported_as_rejected_settings() {
+        let relay = FakeRelay::new(&["io.github.lithe-idea.gradle-build"]).answering(
+            "io.github.lithe-idea.gradle-build",
+            Ok(json!({ "settings": "offline" })),
+        );
+        let (_, reports) = collect_reporting(&relay);
+        assert_eq!(reports, [(RELAY_SETTINGS_REJECTED.to_string(), 1)]);
+    }
+
+    #[test]
+    fn a_clean_collection_reports_nothing() {
+        let relay = FakeRelay::new(&["io.github.lithe-idea.maven-build"]).answering(
+            "io.github.lithe-idea.maven-build",
+            settings(json!({ "java.import.maven.enabled": true })),
+        );
+        let (contributions, reports) = collect_reporting(&relay);
+        assert_eq!(contributions.status(), ContributedSettingsStatus::Settled);
+        assert!(reports.is_empty(), "{reports:?}");
+    }
+
+    #[test]
+    fn reports_never_name_a_provider_a_path_or_a_key() {
+        let relay = FakeRelay::new(&[
+            "io.github.lithe-idea.gradle-build",
+            "io.github.lithe-idea.maven-build",
+            "io.github.lithe-idea.sbt-build",
+            "io.github.lithe-idea.zeta-build",
+        ])
+        .answering(
+            "io.github.lithe-idea.gradle-build",
+            Err(RelayFailure::new(
+                "plugin.host.timeout",
+                "/home/dev/.gradle is slow",
+            )),
+        )
+        .answering("io.github.lithe-idea.maven-build", Err(cancelled()))
+        .answering(
+            "io.github.lithe-idea.sbt-build",
+            Ok(json!({ "settings": "offline" })),
+        )
+        .answering(
+            "io.github.lithe-idea.zeta-build",
+            settings(json!({
+                "java.import.maven.enabled": true,
+                "java.home": "/opt/other-jdk",
+                "unrelated": 1
+            })),
+        );
+        let (_, reports) = collect_reporting(&relay);
+        assert_eq!(
+            reports,
+            [
+                (RELAY_PROVIDER_FAILED.to_string(), 1),
+                (RELAY_PROVIDER_TIMED_OUT.to_string(), 1),
+                (RELAY_SETTINGS_REJECTED.to_string(), 1),
+                (RELAY_KEYS_REJECTED.to_string(), 2),
+            ]
+        );
+        let forbidden = [
+            "io.github",
+            "lithe-idea",
+            "gradle",
+            "maven",
+            "sbt",
+            "zeta",
+            "/home/dev",
+            "/opt/other-jdk",
+            "java.home",
+            "unrelated",
+            "plugin.host.timeout",
+        ];
+        for (code, _) in &reports {
+            assert!(RELAY_CATEGORIES.contains(&code.as_str()), "{code}");
+            for fragment in forbidden {
+                assert!(!code.contains(fragment), "{code} names {fragment}");
+            }
+        }
+    }
+
+    /// A byte the host accepts in a diagnostic code: an ASCII letter or digit,
+    /// or one of `._:/-`.
+    fn is_controlled_code_byte(byte: u8) -> bool {
+        byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'/' | b'-')
+    }
+
+    #[test]
+    fn the_categories_are_distinct_controlled_codes() {
+        let mut seen = std::collections::BTreeSet::new();
+        for category in RELAY_CATEGORIES {
+            assert!(!category.is_empty());
+            assert!(category.len() <= 64, "{category}");
+            assert!(category.bytes().all(is_controlled_code_byte), "{category}");
+            assert!(seen.insert(*category), "{category} is listed twice");
+        }
+        for category in [
+            RELAY_PROVIDERS_UNAVAILABLE,
+            RELAY_PROVIDER_FAILED,
+            RELAY_PROVIDER_TIMED_OUT,
+            RELAY_SETTINGS_REJECTED,
+            RELAY_KEYS_REJECTED,
+        ] {
+            assert!(seen.contains(category), "{category} is not listed");
+        }
     }
 
     #[test]
@@ -660,7 +839,7 @@ mod tests {
         let cancellation = Cancellation::new();
         cancellation.cancel();
         let relay = FakeRelay::new(&["io.github.lithe-idea.maven-build"]);
-        let outcome = collect_contributions(&relay, "/work/app", &cancellation, &|_| {});
+        let outcome = collect_contributions(&relay, "/work/app", &cancellation, &|_, _| {});
         assert!(outcome.is_err());
         assert!(relay.called_providers().is_empty());
 
@@ -672,7 +851,7 @@ mod tests {
         ])
         .answering("io.github.lithe-idea.gradle-build", Err(cancelled()));
         relay.cancel_on_invoke = Some(cancellation.clone());
-        let outcome = collect_contributions(&relay, "/work/app", &cancellation, &|_| {});
+        let outcome = collect_contributions(&relay, "/work/app", &cancellation, &|_, _| {});
         assert!(outcome.is_err());
         assert_eq!(
             relay.called_providers(),

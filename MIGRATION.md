@@ -17,10 +17,10 @@
 
 - 来源快照：Lithe `origin/preview` 的提交 `1daaeb525`。表里的路径都写成 `路径@1daaeb525`，只读，不在本仓库改动。
 - 本仓库产物：
-  - Rust 工作区共 22,847 行 Rust：`crates/java-domain`（领域规则，不依赖宿主）和 `backend`（基于已固定版本 SDK 的插件后端进程）。
-  - 295 个测试：领域 crate 272 个，后端 23 个。全部是有界、确定性的：不联网，不读全局时间，不占固定端口。
-    其中跨插件函数相关的 24 个（`jdt_contributions.rs` 10 个、`plugin_functions.rs` 14 个）是在不允许编译的约束下写成的，
-    还没有运行过，见第 10 节。
+  - Rust 工作区共约 23,500 行 Rust：`crates/java-domain`（领域规则，不依赖宿主）和 `backend`（基于已固定版本 SDK 的插件后端进程）。
+  - 312 个测试：领域 crate 280 个，后端 32 个（单元 23 个、`repository_pins` 6 个、`session` 3 个）。全部是有界、确定性的：
+    不联网，不读全局时间，不占固定端口。其中跨插件函数相关的 30 个（`jdt_contributions.rs` 10 个、`plugin_functions.rs` 20 个）
+    只验证插件内部逻辑，对照的仍是旧草稿里的中转形状，见第 10 节。
   - 18 个 fixture（共 1,234 行）放在 `fixtures/`。其中 12 个被 Rust 测试读取；另外 6 个是从主仓库复制来的契约样例，
     暂时没有 Rust 测试读取（见第 7 节）。
   - 插件包：`io.github.lithe-idea.java-support/`，加上组装、校验、归档脚本、CI 和发布工作流。
@@ -53,9 +53,10 @@
   否则调用链 A→B→A 会被 Core 当作环路拒绝。
 - 信任不传递：被调方用自己的权限执行，调用方不获得任何权限。
 
-中转本身由主仓库 [#1742](https://github.com/1lck/Lithe-IDEA/pull/1742) 在 Core 里实现。本仓库实现了 Java 一侧：接口常量、答案校验与合并（`jdt_contributions.rs`），以及发现并调用提供方的
-后端模块（`plugin_functions.rs`，中转协议暂按设计简报写，集中在这一个文件里，见第 5 节）。中转没有合并之前这些代码不会被宿主调用，
-缺的部分在代码里写 `TODO(host-api: API-35 跨插件函数)`。
+中转本身已由主仓库 [#1742](https://github.com/1lck/Lithe-IDEA/pull/1742) 在 Core 里实现并合入。本仓库实现了 Java 一侧：接口常量、答案校验与合并（`jdt_contributions.rs`），以及发现并调用提供方的
+后端模块（`plugin_functions.rs`，集中了全部中转协议细节，见第 5 节）。这个模块仍按合入前的设计草稿写，与已合入的方法形状不同；
+中转方法属于插件函数协议 4，而 Rust SDK 0.2.0 只协商协议 1–3，所以要等支持协议 4 的 SDK 发布后一起对齐。
+在那之前这些代码不会被宿主调用，缺的部分在代码里写 `TODO(host-api: API-35 跨插件函数)`。
 
 ### 2.3 计划编号约定
 
@@ -121,8 +122,8 @@ API-30（调试适配器）、API-37（环境与 l10n）、API-42（内置 Git �
 | `…/project/{maven,maven_dependency_tree,maven_test_reports}.rs@1daaeb525` | 无 | 不移植（Maven 插件） | Windows 仍在用，见第 8 节 |
 | `…/build/language_import.rs@1daaeb525`、`build/integrations/{mod,maven}.rs@1daaeb525` | 无 | 不移植（Maven/Gradle 插件，被 API-35 取代） | 见第 4 节 |
 | `…/build/language_import.rs@1daaeb525` 的调用方一侧（启动 JDT LS 前收集各构建系统的导入设置） | `dj/lsp/languages/jdt_contributions.rs`（新写） | 已移植并有测试 | 10 个测试。接口常量 `languageImport.settings` 与 `languageImport.settingsChanged`、答案校验、按提供方分槽的合并与状态；不含任何 Maven/Gradle 逻辑，见第 5 节 |
-| 同上（跨进程调用部分） | `backend/src/plugin_functions.rs`（新写） | 已移植并有测试 | 14 个测试。经 Core 中转发现并调用提供方，全部用桩中转测试；宿主方法名与形状是暂定的，见第 5.7 节 |
-| `…/lsp/interface/engine.rs@1daaeb525`：`update_maven_configuration` 的接收一侧（Maven 设置变化后通知 Java） | `languageImport.settingsChanged` 的常量与分槽逻辑已在 `jdt_contributions.rs`；函数注册还没有 | 等待宿主 API（API-35） | SDK 0.1.0 不告诉处理函数调用方是哪个插件，而分槽需要可信的提供方 ID，见第 5.7 节 |
+| 同上（跨进程调用部分） | `backend/src/plugin_functions.rs`（新写） | 已移植并有测试 | 20 个测试。经 Core 中转发现并调用提供方，全部用桩中转测试；宿主方法名与形状仍是合入前的草稿，要随支持协议 4 的 SDK 对齐，见第 5.7 节 |
+| `…/lsp/interface/engine.rs@1daaeb525`：`update_maven_configuration` 的接收一侧（Maven 设置变化后通知 Java） | `languageImport.settingsChanged` 的常量与分槽逻辑已在 `jdt_contributions.rs`；函数注册还没有 | 等待宿主 API（API-35） | 中转已在 Lithe [#1742](https://github.com/1lck/Lithe-IDEA/pull/1742) 合入，调用方插件 ID 在插件函数协议 4 的 `caller` 字段里；Rust SDK 0.2.0 只协商协议 1–3，所以还要等支持协议 4 的 SDK。分槽需要可信的提供方 ID，见第 5.7 节 |
 | `…/plugins/declarative.rs@1daaeb525`、`build/{invocation,manifest,detect,plans}.rs@1daaeb525` 里的 Java 特判（`KNOWN_RUNTIME_TOOLS*`、`HOST_INTEGRATION_*`、`ModelSource::HostIntegration`） | 无 | 不移植（宿主通用代码里的 Java 特判，不是插件逻辑） | 在主仓库删，见第 8 节 |
 | `…/protocol/cancellation.rs@1daaeb525` | `dj/protocol/cancellation.rs` | 已移植并有测试 | 8 个测试 |
 | `…/protocol/contracts.rs@1daaeb525`（Java、Spring、MyBatis 模型） | `dj/protocol/contracts.rs` | 已移植无测试 | 只复制 Java 相关请求与响应类型，由各命令的测试间接覆盖；`Maven*Response` 不复制 |
@@ -132,7 +133,7 @@ API-30（调试适配器）、API-37（环境与 l10n）、API-42（内置 Git �
 | `…/protocol/command.rs@1daaeb525`：`maven.*`、`lsp.retryMavenProfiles`、`lsp.updateMavenConfiguration`、`build.languageImport` | 无 | 不移植（Maven/Gradle 插件） | |
 | `…/lib.rs@1daaeb525`：公开函数 `jdt_workspace_key` | `lsp.jdtWorkspaceKey` 命令（`dj/commands.rs`） | 已移植并有测试 | `tests/java_commands.rs` 里读 `jdt-workspace-key-v1.json` |
 | `…/lib.rs@1daaeb525`：公开函数 `settings_with_local_repository` | 无（交付目录，见第 4 节） | 不移植（Maven 插件） | |
-| `…/diagnostics/catalog_generated.rs@1daaeb525` 里的 Java 日志事件 | 无；后端用 `Context::log` | 等待宿主 API（API-22†） | 插件日志通道就绪前，只有 `argfile.rs` 等少数位置留了 TODO |
+| `…/diagnostics/catalog_generated.rs@1daaeb525` 里的 Java 日志事件 | 后端经 Rust SDK 0.2.0 接入宿主统一日志 `litheLogging` 1：`backend/src/lib.rs`（`KEY_OPERATIONS` 与成功抑制）、`backend/src/plugin_functions.rs`（中转降级类别）、`dj/host/diagnostics.rs`（清理失败） | 已移植并有测试 | 删除了 `Context::log` 和所有 stderr 日志。级别、类别和内容见 README 的“日志”一节；SDK 0.2.0 要求宿主提供 `litheLogging` 1，见第 9.2、9.3 节 |
 | Swift `MacJavaLaunchArgumentPreparer` 的规则部分（Core 里没有） | `dj/execution/argfile.rs` | 已移植并有测试 | 4 个测试：只在命令过长时写 argfile，仅属主可读，租约释放时删除 |
 
 ### 3.2 Rust Core 测试与 fixture
@@ -283,8 +284,8 @@ API-30（调试适配器）、API-37（环境与 l10n）、API-42（内置 Git �
 ## 5. 跨插件函数设计（API-35）
 
 Java 一侧已经实现：接口常量、答案校验与合并在 `dj/lsp/languages/jdt_contributions.rs`（纯逻辑，不依赖 SDK），
-发现并调用提供方在 `backend/src/plugin_functions.rs`。宿主中转由 Core 的 [#1742](https://github.com/1lck/Lithe-IDEA/pull/1742) 实现，在它合并之前，下面标"暂定"的协议形状可能改，
-缺失的宿主能力在代码里是 `TODO(host-api: API-35 跨插件函数)`。
+发现并调用提供方在 `backend/src/plugin_functions.rs`。宿主中转已由 Core 的 [#1742](https://github.com/1lck/Lithe-IDEA/pull/1742) 实现并合入；
+本仓库的协议形状仍是合入前的草稿，与已合入形状的差异见第 5.7 节，缺失的宿主能力在代码里是 `TODO(host-api: API-35 跨插件函数)`。
 
 ### 5.1 接口函数 ID
 
@@ -304,8 +305,8 @@ Java 一侧已经实现：接口常量、答案校验与合并在 `dj/lsp/langua
 2. 向宿主发现已启用且导出 `languageImport.settings` 的插件。结果按插件 ID 排序、去重，最多取 16 个（`MAX_PROVIDERS`），
    避免插件很多时拖慢 JDT LS 启动。
 3. 逐个调用，每个提供方最多等 10 秒（`PROVIDER_TIMEOUT`，宿主另有自己的上限）。超时只取消那一次请求，不影响其他提供方。
-4. 每个答案交给 `accept_answer`：落在 `CONTRIBUTED_SETTINGS_KEYS` 里的叶子键被采用，其余记入 `rejected`，只把键名写进日志，
-   永远不会到达 JDT LS。
+4. 每个答案交给 `accept_answer`：落在 `CONTRIBUTED_SETTINGS_KEYS` 里的叶子键被采用，其余记入 `rejected`，永远不会到达 JDT LS；
+   日志里只上报类别 `relay.keys_rejected` 和计数，不写键名。
 5. 合并按插件 ID 排序，叶子键相同时后者覆盖前者。合并结果（`Contributions::fragments`）放进 `JdtSettings::contributed`，再启动 JDT LS。
 
 ### 5.3 超时、失败与状态
@@ -316,7 +317,8 @@ Java 一侧已经实现：接口常量、答案校验与合并在 `dj/lsp/langua
   `Failed`（有提供方失败、超时、答案不可用，或宿主根本无法列出提供方）。`Pending` 时 `java_build` 的阻塞项是 `ContributedSettings`
   （`waitingForContributedSettings`），和原来等待 Maven profiles 的位置相同。
 - 状态行里的失败原因只带稳定的错误码（例如"The call failed (plugin.host.timeout)."），不带宿主返回的消息，因为消息可能带路径；
-  详细消息只写 stderr 日志。
+  详细消息（`details`）不离开后端，失败只以 `pluginErrorCode` 为类别经 `litheLogging` 1 上报；
+  中转降级另有 `relay.*` 类别。级别与类别见 README 的“日志”一节。
 - 不在 `languageImport.settings` 的调用里回调 Maven，避免调用链环路。
 
 ### 5.4 Maven profiles 缺口
@@ -341,27 +343,33 @@ Java 的编辑器标记（API-27）被点击后，Java 后端只产生测试选�
 Java 后端向宿主查询导出测试运行函数 ID 的已启用插件，把选择器发过去，不写死 Maven 或 Gradle。结果显示在宿主原生测试面板的落点，
 等 API-27 的编辑器动作 API 就位后确定。
 
-### 5.7 中转协议形状（暂定）与清单声明
+### 5.7 中转协议形状：草稿与已合入版本的差异，以及清单声明
 
-`backend/src/plugin_functions.rs` 是后端里唯一知道中转协议的地方。方法名与形状按设计简报写，Core 的中转 PR [#1742](https://github.com/1lck/Lithe-IDEA/pull/1742) 还没定稿；
-改名或改形状只动这个文件里的两个方法名常量、两个参数构造函数和两个结果解析函数，收集逻辑和它的测试不变。
+`backend/src/plugin_functions.rs` 是后端里唯一知道中转协议的地方。它仍按合入前的设计草稿写；Core 的中转
+[#1742](https://github.com/1lck/Lithe-IDEA/pull/1742) 已经合入，方法名相同，参数和结果形状不同（以主仓库
+`shared/contracts/plugins/v1/README.md` 的 “Discovery and invocation” 一节为准）：
 
-| 宿主方法 | 参数 | 结果 |
+| 宿主方法 | 本仓库草稿 | 已合入的形状 |
 | --- | --- | --- |
-| `lithe/host/functions/providers` | `{ context, functionID, version }` | `{ providers: [{ pluginID }] }` |
-| `lithe/host/functions/invoke` | `{ context, pluginID, functionID, version, params }` | `{ result }` |
+| `lithe/host/functions/providers` | 参数 `{ context, functionID, version }`，结果 `{ providers: [{ pluginID }] }` | 参数 `{ functionID }`，结果 `{ providers: [{ pluginID, version }] }`，按插件 ID 排序、不含调用方自己 |
+| `lithe/host/functions/invoke` | 参数 `{ context, pluginID, functionID, version, params }`，结果 `{ result }` | 参数 `{ pluginID, functionID, context: { contextID, generation }, params?, timeoutMilliseconds?, parentOperationID? }`，结果 `{ value }`；未定义的字段是 `-32018`（`plugin.host.unsupportedOption`） |
 
-`context` 是当前调用所在窗口的 workspace context。收集逻辑只依赖 `FunctionRelay` 这个 trait，测试用桩实现，不连宿主。
+两个方法都只对协商到插件函数协议 4 的后端开放，协议 3 及以下得到 `-32601`。Rust SDK 0.2.0 只协商协议 1–3，
+所以对齐要等支持协议 4 的 SDK：届时只改这个文件里的两个方法名常量、两个参数构造函数和两个结果解析函数，
+版本检查改为读取 `providers` 结果里的 `version`，嵌套调用时带上 `parentOperationID`；收集逻辑和它的测试不变。
+收集逻辑只依赖 `FunctionRelay` 这个 trait，测试用桩实现，不连宿主。
 
-按设计简报，Java 的清单将来要这样声明（具体写法以中转 PR 合并后的契约 README 为准；现在 `plugin.json` 没有 `backend`，所以还没有写）：
+Java 的清单将来要这样声明（具体写法以已合入的契约 README 为准；现在 `plugin.json` 没有 `backend`，所以还没有写）：
 
 - 调用方声明 `languageImport.settings`（版本 1）；
 - 导出 `languageImport.settingsChanged`（版本 1，`context: "workspace"`）；
-- 需要 `pluginFunctions` 能力 1、后端协议 2，以及不低于 3 的插件 API 级别。
+- `requires` 写 `pluginFunctions: 1`、`backend: 2` 和 `serverProcess: 1`，`pluginAPIVersion` 不低于 3；
+  后端运行时还要协商到插件函数协议 4 才能调用中转方法。
 
-**为什么变化通知函数还没有注册。** 槽位是按提供方分的：一次变化调用只替换发送者自己的那一份。可信的发送者只能来自宿主，
-而 SDK 0.1.0 没有把调用方插件 ID 交给处理函数。如果从调用参数里读一个"我是谁"，任何插件都能覆盖别人的设置。
-所以 `Contributions::record_settings`、`accept_answer` 和 `plugin_functions::record_answer` 已就位，等 SDK 或中转暴露调用方之后，
+**为什么变化通知函数还没有注册。** 槽位是按提供方分的：一次变化调用只替换发送者自己的那一份。可信的发送者只能来自宿主。
+中转已在 [#1742](https://github.com/1lck/Lithe-IDEA/pull/1742) 合入，调用方插件 ID 由宿主放在插件函数协议 4 的 `caller` 字段里；
+Rust SDK 0.2.0 只协商协议 1–3，处理函数拿不到这个字段。如果从调用参数里读一个"我是谁"，任何插件都能覆盖别人的设置。
+所以 `Contributions::record_settings`、`accept_answer` 和 `plugin_functions::record_answer` 已就位，等有支持协议 4 的 SDK 之后，
 注册函数只需几行。这一项记为 `TODO(host-api: API-35 跨插件函数)`。
 
 **信任边界。** 宿主只中转，不传递信任：Maven/Gradle 插件用自己的权限执行，Java 不因此获得权限；Java 只接受 `CONTRIBUTED_SETTINGS_KEYS`
@@ -413,8 +421,9 @@ Java 后端向宿主查询导出测试运行函数 ID 的已启用插件，把�
 
 ### API-35 跨插件函数
 
-- `backend/src/plugin_functions.rs`：中转协议（方法名和形状）是暂定的，等 Core 的中转 PR [#1742](https://github.com/1lck/Lithe-IDEA/pull/1742) 定稿（第 5.7 节）。
-- `backend/src/plugin_functions.rs`：`languageImport.settingsChanged` 还没有注册，等 SDK 或中转暴露调用方插件 ID（第 5.7 节）。
+- `backend/src/plugin_functions.rs`：中转形状仍是合入前的草稿，要按已合入的 [#1742](https://github.com/1lck/Lithe-IDEA/pull/1742) 对齐，前提是支持插件函数协议 4 的 SDK（第 5.7 节）。
+- `backend/src/plugin_functions.rs`：`languageImport.settingsChanged` 还没有注册。中转已合入，调用方插件 ID 在插件函数协议 4 的 `caller` 字段里，
+  Rust SDK 0.2.0 只协商协议 1–3，要等支持协议 4 的 SDK（第 5.7 节）。
 - `dj/lsp/languages/jdt.rs`：没有中转时 `CONTRIBUTED_SETTINGS_KEYS` 的贡献者不会出现（第 5.1 到 5.3 节）。
 - `dj/lsp/languages/jdt.rs`：Maven profiles 缺口（第 5.4 节）。
 - `dj/lsp/languages/jdt.rs`：`ContributedSettingsStatus` 的 `Pending` 由调用方在收集期间持有，变化后的 `workspace/didChangeConfiguration`
@@ -425,7 +434,7 @@ Java 后端向宿主查询导出测试运行函数 ID 的已启用插件，把�
 ### 来自计划里其他编号的占位（`†`，不在指定的五个之内）
 
 - API-20 存储：`dj/execution/argfile.rs`（后端没有插件自有的临时目录）、`dj/jdt_integration/workspace_state.rs`（缓存目录来自宿主）。
-- API-22 日志与进度：`dj/host/storage.rs`、`dj/execution/argfile.rs`（插件日志通道）。
+- API-22 日志与进度：日志部分已完成，后端接入 `litheLogging` 1，不再有占位（第 3.1 节“Java 日志事件”一行，级别表见 README 的“日志”一节）。
 - API-23 工具链与进程：`dj/jdt_integration/runtime.rs`（探测 `java -version` 的进程执行）。
 - API-37 环境与 l10n：`dj/jdt_integration/runtime.rs`、`dj/jdt_integration/launch_resources.rs`、`backend/src/lib.rs`（用户可见文案要走宿主 i18n）。
 - API-42 内置 Git 只读：`dj/host/git.rs`、`dj/languages/code_vision_hints.rs`（blame 作者）、`dj/lsp/languages/jdt_project_metadata.rs`（一条测试注释，Git 忽略查询）。
@@ -458,7 +467,7 @@ Java 后端向宿主查询导出测试运行函数 ID 的已启用插件，把�
 - Core 的跨插件函数中转（API-35）合并，Maven/Gradle 插件导出 `languageImport.settings`。
 - 宿主的语言服务器通道（API-25）、编辑器标记（API-27）、运行与测试（API-29）合并，Java 插件声明 `backend` 并通过 e2e。
 - 本仓库发布一个支持 API 4 的预发布版本（普通插件，不带发布者签名）；转为正式发布要等第 8.2 节列出的两条宿主限制取消、
-  主仓库不再内置 Java Support（见第 9 节）。
+  主仓库不再内置 Java Support、Lithe 稳定版提供 `litheLogging` 1（见第 9 节）。
 
 ### 8.2 macOS 阶段（阶段 E）：Core 与 macOS 应用
 
@@ -527,12 +536,13 @@ Java 后端向宿主查询导出测试运行函数 ID 的已启用插件，把�
   加 `.sha256`，由 `scripts/archive-package.sh` 用 `ditto --keepParent` 制作；本地开发、CI 和发布用的是同一个脚本、同一种归档。
 - `Release` 工作流先在 Ubuntu 上跑 Rust 检查，再在 macOS 上构建、校验并归档 arm64 与 x86_64 两个包，最后发布。没有任何步骤读取签名密钥。
 - CI 的 `package` 任务（macOS，草稿 PR 不跑）构建并归档同样的两个架构，把 `dist/` 作为 `java-support-archives` 上传。
-- SDK 固定在 `sdk.lock.json`（`lithe_plugin_sdk` 0.1.0，标签 `sdk-rust-v0.1.0`，提交 `e689971c000c15a044df0502052e7b2c1c6f84f`），
-  `scripts/verify-sdk-lock.sh` 检查 `Cargo.lock` 解析到的是同一个提交。
+- SDK 固定在 `sdk.lock.json`（`lithe_plugin_sdk` 0.2.0，标签 `sdk-rust-v0.2.0`，提交 `940394fcd8455186ee985e6c34a319032414607f`），
+  `scripts/verify-sdk-lock.sh` 检查 `Cargo.lock` 解析到的是同一个提交。0.2.0 起 SDK 要求宿主提供 `litheLogging` 1：
+  不提供的 Lithe 版本会拒绝启动后端。目前只有 Lithe 最新 `preview` 提供，稳定版还没有。日志的级别与类别见 README 的“日志”一节。
 
 ### 9.3 为什么仍是预发布
 
-发布保持为预发布（`--prerelease`），商店的跟踪器会跳过预发布，所以目前不会上架。原因有两个：
+发布保持为预发布（`--prerelease`），商店的跟踪器会跳过预发布，所以目前不会上架。原因有三个：
 
 1. 主仓库仍然以旧 ID `dev.lithe.plugin.java-support` 内置 Java Support（`Plugins/marketplace/official-plugins.json` 里的条目
    `releaseEnabled: false`，`bundledUntilPublishedVersion: "1.1.0"`）。
@@ -541,9 +551,12 @@ Java 后端向宿主查询导出测试运行函数 ID 的已启用插件，把�
      错误 `plugin.integration.unsupported`）；
    - 短 `toolDefinitions` ID（例如 `java`）只在宿主验证过官方来源时才接受（`rust/lithe-core/src/toolchain/definitions.rs`）。
    本包两者都用到了。
+3. 后端链接的 Rust SDK 0.2.0 需要宿主提供 `litheLogging` 1，不提供的 Lithe 版本会拒绝启动后端。目前只有 Lithe 最新 `preview` 提供，
+   稳定版还没有，所以在 Lithe 稳定版提供它之前，Release 保持预发布。
 
 转为正式发布的条件：主仓库完成阶段 E（第 8.2 节），用通用 API 取代 JDT 宿主集成，给 `java` 工具 ID 一条不依赖官方身份的规则
-（Maven 插件依赖工具 ID `java`），并且不再内置 Java Support。之后在 `release.yml` 里去掉 `--prerelease`，商店自动上架稳定版。
+（Maven 插件依赖工具 ID `java`），不再内置 Java Support，并且 Lithe 稳定版已经提供 `litheLogging` 1。
+之后在 `release.yml` 里去掉 `--prerelease`，商店自动上架稳定版。
 下载的 ZIP 通过 设置 → 插件 的 ⚙ 菜单 → 从磁盘安装插件… 安装，但在此之前当前宿主会按上面的原因拒绝它。
 阶段 E 还要退役内置的 `dev.lithe.plugin.java-support` 条目并把用户迁移到新 ID，见第 8.2 节。
 
@@ -557,8 +570,8 @@ Java 后端向宿主查询导出测试运行函数 ID 的已启用插件，把�
 ## 10. 未完成事项
 
 - 宿主没有接线：`plugin.json` 没有 `backend` 声明，第 6 节的 API 全部没有实现，三个会话命令只回答 `NotSupported`。
-- API-35 的 Java 一侧大部分已实现（第 5 节），但中转协议是暂定的；变化通知函数没有注册；没有任何地方调用 `collect_for_call`（要等 API-25 的启动解析器）。Maven profiles 的逐工程交付形状没有定。
-- `jdt_contributions.rs` 和 `plugin_functions.rs` 的 24 个测试只验证了插件内部逻辑：它们已经编译并通过，但用来对照的中转协议是暂定的，等 [#1742](https://github.com/1lck/Lithe-IDEA/pull/1742) 合入后要按最终协议复核。
+- API-35 的 Java 一侧大部分已实现（第 5 节），但中转形状仍是合入前的草稿，要等支持插件函数协议 4 的 SDK 再对齐；变化通知函数没有注册；没有任何地方调用 `collect_for_call`（要等 API-25 的启动解析器）。Maven profiles 的逐工程交付形状没有定。
+- `jdt_contributions.rs` 和 `plugin_functions.rs` 的 30 个测试只验证了插件内部逻辑：它们已经编译并通过，但对照的是草稿形状。[#1742](https://github.com/1lck/Lithe-IDEA/pull/1742) 已合入，等 SDK 支持协议 4、形状对齐后要按已合入的协议复核。
 - 没有真实 JDT 的端到端测试，也没有在 Linux 上实跑过（本机没有 Docker）。
 - CI 的 `package` 任务构建的归档和正式发布的是同一种（同一组脚本、同一个文件名规则），但还没有真正跑过一次发布工作流：
   新 ID 下没有发布过任何版本，标签触发、预发布 Release 的创建和资产上传都没有被实际验证过。

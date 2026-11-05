@@ -5,7 +5,7 @@ name: Release
 #
 # No step receives a signing key. Checkouts do not keep the workflow token.
 #
-# Releases stay pre-releases, which Lithe Store's tracker skips, for two
+# Releases stay pre-releases, which Lithe Store's tracker skips, for three
 # reasons:
 #   1. Lithe still bundles Java Support under the old ID
 #      dev.lithe.plugin.java-support.
@@ -13,9 +13,13 @@ name: Release
 #      integration) to dev.lithe.* plugin IDs and accept the short tool ID
 #      "java" only from verified official provenance, so they reject this
 #      package.
+#   3. The backend links Rust plugin SDK 0.2.0, which requires the host to
+#      offer litheLogging 1 and refuses to start without it. Only the latest
+#      Lithe preview offers it so far; no stable Lithe does.
 # Remove --prerelease below once a stable Lithe accepts the package (stage E in
-# MIGRATION.md) and stops bundling Java Support. The Store then lists stable
-# releases of this repository automatically.
+# MIGRATION.md), stops bundling Java Support, and offers litheLogging 1 (Rust
+# SDK 0.2.0 requires it). The Store then lists stable releases of this
+# repository automatically.
 on:
   push:
     tags: ["v*"]
