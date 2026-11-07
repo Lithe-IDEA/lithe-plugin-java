@@ -7,7 +7,8 @@ set -euo pipefail
 #     plugin without a publisher signature (vendor.signatureRequirement "none");
 #   - the package holds only the declared top-level entries and no symbolic
 #     links, and nothing outside runtime/ and bin/ is executable;
-#   - every file plugin.json names for the language server exists;
+#   - every language server file the backend resolves (backend/src/launch.rs)
+#     exists in the layout it expects;
 #   - the plugin backend (backend.launch.path in plugin.json) is the only file
 #     in bin/, is executable, and contains exactly the requested architectures;
 #   - the packaged JDK is the requested architecture and keeps its upstream
@@ -73,15 +74,21 @@ backend_archs=(${=backend_archs_text})
 [[ "${(j: :)${(o)backend_archs}}" == "${(j: :)${(o)runtime_architectures}}" ]] ||
     fail "$backend_path contains ${backend_archs[*]:-no architectures}, expected ${runtime_architectures[*]}"
 
-launcher=$(/usr/bin/plutil -extract languageServers.0.launch.entry raw -o - "$manifest")
-lombok=$(/usr/bin/plutil -extract languageServers.0.hostIntegration.resources.lombokAgent raw -o - "$manifest")
-test_runner=$(/usr/bin/plutil -extract languageServers.0.hostIntegration.resources.testRunner raw -o - "$manifest")
-for declared in "$launcher" "$lombok" "$test_runner"; do
-    [[ -f "$PACKAGE/$declared" ]] || fail "plugin.json declares $declared, which the package does not contain"
+# The language server launch is resolved by the backend (plugin.json declares
+# launch.kind "backend" and the function only), so the files are checked
+# against the layout fixed in backend/src/launch.rs; repository_pins.rs holds
+# this script to that list.
+[[ "$(/usr/bin/plutil -extract languageServers.0.launch.kind raw -o - "$manifest")" == "backend" ]] ||
+    fail "plugin.json must declare a backend-resolved language server launch"
+launchers=("$PACKAGE"/language-server/plugins/org.eclipse.equinox.launcher_*.jar(N))
+(( ${#launchers} == 1 )) ||
+    fail "language-server/plugins must hold exactly one org.eclipse.equinox.launcher_*.jar, found ${#launchers}"
+for declared in \
+    language-server/lombok/lombok.jar \
+    language-server/java-test/runner/com.microsoft.java.test.runner-jar-with-dependencies.jar; do
+    [[ -f "$PACKAGE/$declared" ]] || fail "the backend expects $declared, which the package does not contain"
 done
-bundle_count=$(/usr/bin/plutil -extract languageServers.0.hostIntegration.resources.extensionBundleDirectories raw -o - "$manifest")
-for (( index = 0; index < bundle_count; index++ )); do
-    directory=$(/usr/bin/plutil -extract "languageServers.0.hostIntegration.resources.extensionBundleDirectories.$index" raw -o - "$manifest")
+for directory in language-server/java-debug language-server/java-test/extensions; do
     [[ -n "$(find "$PACKAGE/$directory" -maxdepth 1 -name '*.jar' -print -quit 2>/dev/null)" ]] ||
         fail "extension bundle directory $directory holds no bundles"
 done

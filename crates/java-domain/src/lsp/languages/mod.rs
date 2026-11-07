@@ -19,7 +19,7 @@ pub mod project_preparation;
 
 pub use java_run_markers::{
     java_run_markers, JavaRunMarker, JavaRunMarkerKind, JavaRunMarkerStatus, JavaRunMarkersRequest,
-    JavaRunMarkersResponse,
+    JavaRunMarkersResponse, MainMethodInput, RangeInput, TestItemInput,
 };
 pub use java_workspace::{
     java_workspace_policy, jdt_cache_retention, jdt_workspace_fingerprint,

@@ -506,8 +506,8 @@ impl JavaTestDebugLaunchTarget {
 
 /// Combines a plan with JDT LS's runner arguments.
 ///
-/// TestNG runs through the packaged runner, which the plugin package declares
-/// as the `testRunner` resource; JUnit uses the main class JDT LS resolved.
+/// TestNG runs through the packaged runner JAR (`TEST_RUNNER` in
+/// `backend/src/launch.rs`); JUnit uses the main class JDT LS resolved.
 pub fn debug_launch_target(
     file_path: &str,
     file_name: &str,

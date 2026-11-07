@@ -14,10 +14,11 @@
 
 > **进行中**：本仓库正在从 Lithe 主仓库拆分出来，目标是 Lithe 宿主（Rust Core 和 macOS 应用）不再包含任何 Java 专属逻辑，
 > Java 的领域规则全部由本插件提供，宿主只提供通用插件接口。插件现在带一个 Rust 后端：`plugin.json` 声明了 `backend` 2，
-> 后端目前承担 Maven/Gradle 导入设置的中转（见“工作方式”）。语言服务器仍然由宿主的 JDT 集成启动
-> （`launch.kind` 为 `runtime`，带 `hostIntegration`）；改为后端启动、去掉 `hostIntegration`、由插件接管运行/调试/测试，
-> 要等宿主提供 API-23（`toolchains.list`），清单见 `MIGRATION.md` 第 6 节和第 10 节。在那之前 Lithe 仍然内置 Java Support
-> （旧 ID `dev.lithe.plugin.java-support`），本仓库发布的版本标为预发布，原因见 `MIGRATION.md` 第 9 节。
+> 后端承担 Maven/Gradle 导入设置的中转（见“工作方式”），并解析语言服务器的启动：`plugin.json` 的 `languageServers[0].launch`
+> 是 `kind: "backend"`、函数 `java.resolveLaunch`（`serverProcess` 3），不再有 `hostIntegration`；后端在 `backend/src/launch.rs`
+> 里定位包内的 Equinox 启动器、按架构的配置目录、Lombok 代理、java-debug 与 java-test 扩展包和随包 JDK，拼出 JDT LS 的命令行、
+> 初始化选项和 `language/status` 就绪门。由插件接管运行/调试/测试还在进行，清单见 `MIGRATION.md` 第 6 节和第 10 节。
+> 在宿主去掉内置 Java Support（旧 ID `dev.lithe.plugin.java-support`）之前，本仓库发布的版本标为预发布，原因见 `MIGRATION.md` 第 9 节。
 > Maven Archetype 生成器、Maven 与 Gradle 的项目模板已经移交 lithe-plugin-maven 和 lithe-plugin-gradle；
 > 在这两个插件接手模板之前不要发布本插件的新版本，否则“新建项目”会少掉 Maven 和 Gradle 选项。
 
@@ -26,8 +27,8 @@
 | 功能 | 说明 |
 | --- | --- |
 | 语言服务 | 用打包的 JDT LS（含 Lombok）提供补全、诊断、导航；JDK 随包提供，只用来运行语言服务器，项目自己的 SDK 仍由用户选择 |
-| 运行与调试入口 | 识别 `main` 方法和测试方法，生成运行/调试标记 |
-| 测试 | 发现 JUnit 测试项，生成测试选择器，并驱动 java-debug 与 vscode-java-test 运行器 |
+| 运行与调试 | 在 `main` 方法和测试旁显示 Run/Debug 行内动作；点击后后端经 JDT LS 构建并解析类路径，用用户选择的 JDK 通过宿主 Run 窗口启动，调试经 java-debug 连接；控制台里的堆栈行可点击跳转 |
+| 测试 | 发现 JUnit/TestNG 测试项，按类或方法启动 Eclipse JUnit 运行器（TestNG 用 vscode-java-test 运行器），运行结束后显示通过/失败计数 |
 | Spring Boot / MyBatis | 索引 Spring 端点与 MyBatis 映射，支持跳转 |
 | 新建项目 | 两个声明式项目生成器：Java（无构建系统，可选示例代码）、Spring Boot；Maven 原型和 Maven/Gradle 项目模板由 Maven、Gradle 插件提供 |
 | Maven / Gradle 工程 | 导入设置（settings 文件、本地仓库、offline、Gradle user home 等）由 Maven、Gradle 插件通过 `languageImport.settings` 提供，Java 不计算也不解析它们；后端收下后推给 JDT LS，Maven profiles 变化时触发 `java.project.updateSettings` |
@@ -54,6 +55,9 @@
   - 当前不推送 `java.configuration.runtimes`：插件后端还没有列出 JDK 安装的宿主方法，等 API-23（`toolchains.list`）提供。JDT LS 不会因为缺这个键而删除已登记的 VM。
 
   细节见 `MIGRATION.md` 第 5 节。
+- **运行/调试/测试**在 `backend/src/run.rs`：用宿主的编辑器动作（`editor/registerActions`）提供行内 Run/Debug 标记，
+  用 `run/start` 启动进程（进程用清单 `requiresTools: ["java"]` 引用的 JDK 工具定义），测试结果由后端自己在回环端口上监听
+  JUnit 运行器并用窗口消息显示，输出链接匹配器把堆栈行解析成工作区文件。细节见 `MIGRATION.md` 第 5.9 节。
 - **运行时只读**：插件包安装后在运行时只读。JDT LS、Lombok、java-debug、测试运行器、JDK 和后端二进制都在构建阶段固定来源、校验哈希（或由锁定的源码编译）后放进包里，
   运行时状态只写宿主提供的状态目录，不写包目录。
 

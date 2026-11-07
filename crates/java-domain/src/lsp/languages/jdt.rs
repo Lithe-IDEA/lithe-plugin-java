@@ -1015,7 +1015,17 @@ fn wrapper_arguments(
     arguments
 }
 
-fn direct_java_arguments(
+/// The complete `java` command line that starts JDT LS directly, without a
+/// shell wrapper.
+///
+/// `arguments` are the plugin's own choices followed by `-jar <launcher>`:
+/// `-Xmx` and `-Dlog.level=` replace the defaults when they are valid, other
+/// JVM options before the launcher are kept, and the options JDT LS needs
+/// (`-javaagent`, `-Xms`, `--add-opens`, the Equinox properties, tuning) are
+/// always rebuilt from `resources`. `-configuration` and `-data` come from
+/// `resources` and `data_directory`, never from `arguments`, so both point at
+/// writable directories. The plugin backend resolves its launch with this.
+pub fn direct_java_arguments(
     arguments: &[String],
     resources: &JdtDirectLaunchResources,
     data_directory: &Path,

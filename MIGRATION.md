@@ -27,8 +27,8 @@
 - 领域代码的注释（`//!`、`///`）全部是英文。每个来自 Core 或 Swift 的模块在模块文档里写明来源。
 - 宿主侧的接线是分步的：`plugin.json` 现在声明 `backend`（`backend.launch` 为 `packaged`，路径 `bin/lithe-java-backend`），后端把领域命令注册成插件函数，
   并承担 API-35 的设置中转（第 5 节：调用方一侧发现并调用 `languageImport.settings`，导出方一侧接收 `languageImport.settingsChanged`，
-  再用 `languageServer/notify` 推送给 JDT LS）。语言服务器仍由宿主的 JDT 集成启动（`launch.kind` 为 `runtime`，带 `hostIntegration`），
-  改为后端启动要等第 6 节列出的 API-23 等宿主 API 就位，见第 10 节。
+  再用 `languageServer/notify` 推送给 JDT LS）。语言服务器由后端启动（`launch.kind` 为 `backend`，函数 `java.resolveLaunch`，
+  `requires.serverProcess` 3，不再有 `hostIntegration`），见第 5.8 节；运行/调试/测试的接管见第 10 节。
 
 ## 2. 边界决定
 
@@ -222,7 +222,7 @@ API-30（调试适配器）、API-37（环境与 l10n）、API-42（内置 Git �
 
 | 来源 | 新位置 | 状态 | 说明 |
 | --- | --- | --- | --- |
-| `Plugins/mac/Official/JavaSupport/plugin.json@1daaeb525` | `io.github.lithe-idea.java-support/plugin.json` | 已移植并有测试 | 身份改为普通插件：id 从 `dev.lithe.plugin.java-support` 变为 `io.github.lithe-idea.java-support`，`vendor` 改为 `Lithe Community`（`signatureRequirement: none`），删除 `publisherPackage`、`bundledSignatureRequirement` 和 `requires.packageTrust`，见第 9 节；版本仍是 1.1.0。新增后端声明：顶层 `backend`、`pluginFunctions`，`requires.backend: 2`、`pluginFunctions: 1`、`languageServers: 3`，权限 `backend.launch`、`languageServer.request`、`workspace.metadata`，激活事件 `onWorkspaceOpen`，语言服务器的 `requestMethods` 与 `commands`（第 5.7 节）；`launch` 和 `hostIntegration` 不变。`repository_pins.rs` 断言社区身份 |
+| `Plugins/mac/Official/JavaSupport/plugin.json@1daaeb525` | `io.github.lithe-idea.java-support/plugin.json` | 已移植并有测试 | 身份改为普通插件：id 从 `dev.lithe.plugin.java-support` 变为 `io.github.lithe-idea.java-support`，`vendor` 改为 `Lithe Community`（`signatureRequirement: none`），删除 `publisherPackage`、`bundledSignatureRequirement` 和 `requires.packageTrust`，见第 9 节；版本仍是 1.1.0。新增后端声明：顶层 `backend`、`pluginFunctions`，`requires.backend: 2`、`pluginFunctions: 1`、`languageServers: 3`，权限 `backend.launch`、`languageServer.request`、`workspace.metadata`，激活事件 `onWorkspaceOpen`，语言服务器的 `requestMethods` 与 `commands`（第 5.7 节）；`launch` 改为后端解析、删除 `hostIntegration`（第 5.8 节）。`repository_pins.rs` 断言社区身份和后端启动的形状 |
 | `Plugins/mac/Official/JavaSupport/{icons,templates}/**@1daaeb525` | `io.github.lithe-idea.java-support/{icons,templates}/` | 已移植并有测试 | `backend/tests/repository_pins.rs` 检查清单里每个文件都存在。Maven 图标（`icons/maven*.svg`）、Maven 与 Gradle 构建文件模板（`templates/java/{maven,gradle-kotlin,gradle-groovy,standard-*}`）已移交 Maven、Gradle 插件，本仓库只保留 `templates/java/plain*` 与 Java、Spring Boot 图标，见第 7 节 |
 | `Plugins/mac/Official/JavaSupport/assemble-package.sh@1daaeb525` | `scripts/assemble-package.sh` | 已移植无测试 | 新增后端二进制：按 `--arch` 用 `cargo build --release --locked -p lithe-java-backend --target <triple>` 编译，`universal` 用 `lipo -create` 合并，放到 `plugin.json` 的 `backend.launch.path`（`bin/lithe-java-backend`）。由 `scripts/verify-package.sh` 校验产物，包括后端存在、可执行、架构与 `--arch` 一致 |
 | `scripts/macos/prepare/prepare-jdtls.sh@1daaeb525`、`prepare-jdk.sh@1daaeb525` | `scripts/prepare-jdtls.sh`、`scripts/prepare-jdk.sh` | 已移植无测试 | 来源地址和 SHA-256 固定在 `third_party/*/manifest.json`，`repository_pins.rs` 检查格式 |
@@ -384,8 +384,25 @@ Java 的清单现在这样声明（以已合入的契约 README 为准）：
 - `requires` 写 `backend: 2`、`pluginFunctions: 1`、`languageServers: 3` 和 `serverProcess: 1`，`pluginAPIVersion` 为 4；
   后端运行时协商到插件函数协议 4 才能调用中转方法。
 - 权限：`backend.launch`、`languageServer.request`（语言服务器列了 `requestMethods`）、`workspace.metadata`（读取工作区根路径需要 `backend` 2）。
-- `languageServers[0]` 声明 `requestMethods: ["workspace/executeCommand"]` 和 `commands: ["java.project.updateSettings"]`；
-  `launch`（`kind: "runtime"`）和 `hostIntegration`（`id: "jdt"`）保持不变，直到 API-23 就位（第 10 节）。
+- `languageServers[0]` 声明 `requestMethods: ["java/classFileContents", "workspace/executeCommand"]` 和 `commands: ["java.project.updateSettings"]`；
+  `launch` 是 `{ "kind": "backend", "function": "java.resolveLaunch", "timeoutMilliseconds": 60000 }`（`requires.serverProcess` 3），
+  没有 `hostIntegration`、`arguments`、`runtimeDependencies` 和 `initializationOptions`，它们的值都由后端在第 5.8 节的回答里给出。
+
+### 5.8 语言服务器启动（serverProcess 3）
+
+`backend/src/launch.rs` 注册 `java.resolveLaunch`。宿主按契约的 `resolveParams`（`serverID`、`platform.arch`、`stateDirectory`、
+`workspaceStateDirectory`、`logDirectory`、`temporaryDirectory`、`settings`）加工作区上下文调用它，后端：
+
+- 以后端二进制所在的 `bin/` 的上级为包根，按固定布局定位文件：`language-server/plugins/org.eclipse.equinox.launcher_*.jar`（恰好一个）、
+  `language-server/configuration/<arch>`、`language-server/lombok/lombok.jar`、`language-server/java-debug` 与 `language-server/java-test/extensions`
+  里的扩展包、`runtime/<arch>/bin/java`。布局常量是 `pub`，`backend/tests/repository_pins.rs` 用它们约束 `scripts/assemble-package.sh`
+  和 `scripts/verify-package.sh`，所以 `plugin.json` 不再写这些路径；
+- 把 `heapMaxMB`、`logLevel` 两个设置和 `logDirectory/jdt.log` 拼进 JVM 参数（原 `runtimeArguments` 的 `${setting:…}` 与 `${logDir}` 展开），
+  把每个工作区的 Equinox 配置复制到 `workspaceStateDirectory` 下再以 `-configuration` 传入，`-data` 指向其中的 `data/`；
+- 回答 `executable: { kind: "packaged", path }`、`arguments`、`initializationOptions`（原 `hostIntegration` 的 bundles、设置与
+  `java_configuration`）、`workspaceConfiguration`、`writablePaths`，以及一个 `language/status` 的就绪门（`service-ready`）。
+
+错误码 `launch.invalid_params`、`launch.package_unavailable`、`launch.resource_missing`、`launch.configuration_failed` 与设置中转的错误码不重名。
 - 激活事件加 `onWorkspaceOpen`：本插件要主动调用 `languageImport.settings` 并接收语言服务器的状态通知，只导出函数不足以启动后端。
   后端是全机一个进程，所有工作区共享。
 
@@ -395,6 +412,34 @@ Java 的清单现在这样声明（以已合入的契约 README 为准）：
 
 **信任边界。** 宿主只中转，不传递信任：Maven/Gradle 插件用自己的权限执行，Java 不因此获得权限；Java 只接受 `CONTRIBUTED_SETTINGS_KEYS`
 里的键，所以一个提供方既不能改 `java.home`，也不能改别的插件的槽位。
+
+### 5.9 运行、调试与测试（API-27 / API-29，已实现）
+
+`backend/src/run.rs` 用三个宿主能力接管了主仓库 Core 与 macOS 原来写死的 Java 运行流程：
+
+- **行内动作**（`editor/registerActions`，权限 `editor.actions` + `documents.read`）：后端在 `initialize` 之后与每次
+  `didChangeContexts` 时列出工作区上下文，为每个上下文注册 `.java` 的收集函数 `java.collectActions`。宿主对每个打开的 Java 文档
+  调用它，后端向 JDT LS 请求 `vscode.java.resolveMainMethod` 与 `vscode.java.test.findTestTypesAndMethods`，经领域规则
+  `java_run_markers` 得到标记，每个标记一条 `Run '<label>'` 动作（图标 `run`/`test`）并带 `Debug` 备选项。语言服务器没起来、
+  忙或超时时回答空列表，宿主在下次编辑时再收集。
+- **启动进程**（`run/start`，权限 `run.start`；调试另需 `debug.start`）：点击调用 `java.runAction`。main 类先经
+  `vscode.java.buildWorkspace`（结果 1 或 2 继续）再 `vscode.java.resolveClasspath` 得到 `[modulePaths, classPaths]`；
+  测试经 `plan_debug_launch` → `vscode.java.test.junit.argument` → `debug_launch_target` → `java_test_launch` 得到运行器参数。
+  进程用清单 `requiresTools: ["java"]` 引用的工具定义（`executable.kind: "tool"`），由用户在 JDK 设置里选择的 JDK 执行；
+  调试时在最前面加 `-agentlib:jdwp=…,address=localhost:<port>` 与 `-Dspring.devtools.restart.enabled=false`，并在 `debug`
+  字段给出 `{configurationType: "java", target: {kind: "connection", port}}`，宿主用清单的 `java` 调试适配器接上。
+  `rerun` 指向 `java.rerun`，数据就是动作参数。
+- **测试结果**：后端对每次测试启动在 127.0.0.1 开一个端口交给 Eclipse JUnit 运行器（`-port`），监听线程按 `%TESTS`/`%FAILED`/
+  `%ERROR` 计数，运行器断开后用 `window/showInformation`（有失败用 `showWarning`）显示 `<名称>: N passed, N failed…`；
+  宿主发 `run/didExit` 后停止。摘要文案是英文，等插件后端能用宿主 i18n（API-37）。
+- **输出链接**（`outputLinkMatchers` 1）：清单的 `stack-frame` 匹配器捕获 `at pkg.Class.method(Class.java:12)`，
+  点击调 `java.resolveOutputLink`，后端用 `workspace/findFiles`（权限 `workspace.search`）按文件名查找，
+  优先包目录匹配的文件，回答 `{uri, range}`。
+- **调试适配器声明**（`debugAdapters` 3）：热替换 `redefineClasses`/`hotcodereplace`/`changedClasses`/`errorMessage`
+  与默认步进过滤 `$JDK`、`$Libraries` 写进清单的 `features`/`defaults`，主仓库不再按适配器 ID 特判。
+- 清单改动：`requires.serverProcess: 4` + `requiresTools: ["java"]`、`requires.debugAdapters: 3`、
+  `requires.outputLinkMatchers: 1`；`languageServers[].commands` 白名单加入上面五个 `vscode.java.*` 命令；权限加入
+  `documents.read`、`editor.actions`、`run.start`、`debug.start`、`window.messages`、`workspace.search`。
 
 ## 6. `TODO(host-api)` 清单
 
@@ -421,20 +466,22 @@ Java 的清单现在这样声明（以已合入的契约 README 为准）：
 - `backend/src/lib.rs`（与 API-27、API-29 并列）：`plugin.json` 已声明 `backend`（`requires.backend: 2`，`requires.serverProcess: 1`，
   `backend.launch {kind: "packaged", path: "bin/lithe-java-backend"}`，第 5.7 节）。宿主能为编辑器提供者、运行配置、Java 测试流程调用插件函数之后，
   再把宿主每个调用点从 Core 切到这些函数。
-- 语言服务器仍用 `launch.kind: "runtime"` 加 `hostIntegration` 启动。改为 `launch.kind: "backend"`、去掉 `hostIntegration`、
-  由插件接管运行/调试/测试（阶段 J2），依赖 API-23（见下文“来自计划里其他编号的占位”）。
+- 语言服务器已改为 `launch.kind: "backend"` 并去掉 `hostIntegration`（第 5.8 节）；运行/调试/测试由后端接管（第 5.9 节）。
 
-### API-27 编辑器动作与标记
+### API-27 编辑器动作与标记（运行/调试标记已完成）
 
-- `backend/src/lib.rs`（同上）：运行/调试标记、导航标记、CodeLens 要由插件提供。
-- 表中对应的 Swift 行（`AppModel+JavaRunMarkers`、`AppModel+JavaEntrypoints`、`AppModel+JavaNavigation`、`SpringEndpointsView`、`JavaFileIconResolver`）也都等这个编号。
+- 运行与调试的行内标记由 `backend/src/run.rs` 通过编辑器动作（`editor/registerActions`）提供，见第 5.9 节。
+- 导航标记（父类/实现）、CodeLens、`SpringEndpointsView`、`JavaFileIconResolver` 对应的 Swift 行仍等这个编号的其余部分。
 
-### API-29 构建与测试
+### API-29 构建与测试（运行/调试/测试启动已完成）
 
-- `dj/testing/result_channel.rs`：测试结果需要一个回环监听通道。插件后端不能自己监听，要由宿主提供回环通道
-  或 `network.loopbackListen` 能力。
+- 运行、调试、测试的进程由后端经宿主 `run/start` 启动，调试会话由宿主按 `debug` 字段接到声明的 `java` 调试适配器，
+  见第 5.9 节。
+- `dj/testing/result_channel.rs`：后端自己在回环地址上监听 JUnit 运行器的结果端口（`backend/src/run.rs` 的结果监听器），
+  不再需要宿主提供回环通道。
 - `dj/testing/jdt_test_items.rs`（`build_test_selectors`）：选择器由构建插件运行，见第 5.6 节（与 API-35 并列）。
-- 表中的运行配置、启动决策、`standalone-java-compile-run-v1.json`、`execution/configuration.rs` 的 Java 类型等行也等这个编号。
+- 未做：`execution/launch_command.rs` 的 argfile 规划没有接到 `run/start`（命令行按 JDT LS 给的长度原样传递）；
+  TestNG 运行器的结果协议不解析，只报“已结束”。
 
 ### API-33 项目模板
 
@@ -462,7 +509,7 @@ Java 一侧的中转已经实现并在清单里声明（第 5 节、第 5.7 节�
 - API-23 工具链与进程：`dj/jdt_integration/runtime.rs`（探测 `java -version` 的进程执行）。
   `toolchains.list`（列出已安装 JDK）也属于它：插件后端没有这个宿主方法，所以设置中转暂不推送 `java.configuration.runtimes`
   （`backend/src/settings_session.rs` 里的 `TODO(host-api: API-23 toolchains.list)`），JDT LS 的 VM 登记保持现状。
-  这是阶段 J2（语言服务器改为 `launch.kind: "backend"`、去掉 `hostIntegration`、插件接管运行/调试/测试）的前置条件。
+  语言服务器已改为 `launch.kind: "backend"`（第 5.8 节），`java.configuration.runtimes` 的推送仍等这个方法。
 - API-37 环境与 l10n：`dj/jdt_integration/runtime.rs`、`dj/jdt_integration/launch_resources.rs`、`backend/src/lib.rs`（用户可见文案要走宿主 i18n）。
 - API-42 内置 Git 只读：`dj/host/git.rs`、`dj/languages/code_vision_hints.rs`（blame 作者）、`dj/lsp/languages/jdt_project_metadata.rs`（一条测试注释，Git 忽略查询）。
 - API-30 调试适配器：第 3.1 与 3.4 节表里的 `debug/engine.rs` 特例与 `RealJavaDebugIntegrationTests`，代码里没有单独占位。
@@ -512,7 +559,7 @@ Java 一侧的中转已经实现并在清单里声明（第 5 节、第 5.7 节�
 - Core：
   - 两条按官方身份设的宿主限制已由主仓库 [#1763](https://github.com/1lck/Lithe-IDEA/pull/1763) 取消，本插件可以作为普通插件被宿主接受：
     普通插件可以声明 `languageServers[].hostIntegration`（JDT）和短 `toolDefinitions` ID（例如 `java`）；
-    多个插件争用同一个短工具 ID 时都不归属。`hostIntegration` 本身仍在 Core 里，随 JDT 宿主集成一起，由通用 API 取代后删除（阶段 J2）。
+    多个插件争用同一个短工具 ID 时都不归属。本插件已不再声明 `hostIntegration`（第 5.8 节），Core 里的 JDT 宿主集成随主仓库的拆分 PR 删除。
   - `lsp/languages/{java_*,jdt*,project_preparation}.rs` 与 `mod.rs` 里的 re-export，`languages/{java,java_syntax,spring,mybatis}.rs`，
     `debug/java_test.rs`，`execution/{java_selection,launch_command,classpath_jar}.rs` 的 Java 部分，`protocol/contracts.rs` 里的 Java、Spring、MyBatis、Maven 模型。
   - `protocol/command.rs` 与 `runtime/dispatcher.rs` 里的 Java 命令；`engine.rs` 里的 Java 函数与 `StartServerRequest` 的 Java 字段；
@@ -607,9 +654,13 @@ Java 一侧的中转已经实现并在清单里声明（第 5 节、第 5.7 节�
 
 ## 10. 未完成事项
 
-- 宿主侧（阶段 J2）还没有切换：`plugin.json` 已声明 `backend` 2、`languageServers` 3 和 `pluginFunctions` 1，设置中转（API-25 / API-35）已在后端实现，
-  但语言服务器仍走 `hostIntegration`（JDT），启动、运行时选择和 `java.configuration.runtimes` 还由宿主决定。切换要等 API-23 `toolchains.list`
-  （后端的 `TODO(host-api: API-23 toolchains.list)`），第 6 节其余 API 没有实现，三个会话命令仍只回答 `NotSupported`。
+- 阶段 J2：语言服务器由后端启动（第 5.8 节），设置中转（API-25 / API-35）与运行/调试/测试（第 5.9 节）都在后端实现。
+  仍未接：`java.configuration.runtimes` 的推送等 API-23 `toolchains.list`（后端的 `TODO(host-api: API-23 toolchains.list)`）；
+  argfile 规划（`execution/launch_command.rs`）没有接到 `run/start`；TestNG 结果协议不解析；导航标记（父类/实现）与 CodeLens
+  没有宿主 API；测试结果摘要是英文（等 API-37）；三个会话命令仍只回答 `NotSupported`。
+- 运行/调试/测试的接管只由后端单元测试和 Core 清单校验验证，还要对着真实宿主（主仓库 Java 拆分分支）跑通：
+  打开 Java 工程后出现行内 Run/Debug 标记、点击能启动并在 Run 窗口看到输出、调试能在断点停下、JUnit 测试结束后弹出摘要、
+  堆栈行可点击跳转。
 - Maven 与 Gradle 插件还没有接手新建项目模板（第 7 节）：lithe-plugin-maven 要带 `maven-archetype` 生成器、`pom.xml` 模板、Maven 图标和 `standard-*` 目录模板，
   lithe-plugin-gradle 要带 `gradle-kotlin`、`gradle-groovy` 模板和自己的一份 `standard-*` 目录模板。在它们接手之前不要发布本插件的新版本。
 - 设置中转只由后端单元测试和桩中转测试验证，没有对着真实宿主跑过。变化通知（`languageImport.settingsChanged`）触发 `java.project.updateSettings`

@@ -6,6 +6,7 @@
 //! platform in `cargo test`; the assembled package is checked separately by
 //! `scripts/verify-package.sh`.
 
+use lithe_java_backend::launch::{LAUNCHER_PREFIX, LAUNCH_FUNCTION_ID, PACKAGE_LAYOUT};
 use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -133,29 +134,64 @@ fn every_file_the_manifest_ships_from_the_repository_exists() {
 }
 
 #[test]
-fn language_server_resources_point_inside_the_assembled_package() {
+fn language_server_launch_is_resolved_by_the_backend() {
     let manifest = read_json(&format!("{PLUGIN_ID}/plugin.json"));
     let server = &manifest["languageServers"][0];
     let launch = &server["launch"];
-    assert_eq!(text(launch, "packagedRuntime"), "runtime/${arch}/bin/java");
-    assert!(text(launch, "entry").starts_with("language-server/plugins/"));
-    let resources = &server["hostIntegration"]["resources"];
-    let mut paths = vec![
-        text(resources, "configuration"),
-        text(resources, "lombokAgent"),
-        text(resources, "testRunner"),
-    ];
-    paths.extend(
-        resources["extensionBundleDirectories"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|value| value.as_str().unwrap()),
+    assert_eq!(text(launch, "kind"), "backend");
+    assert_eq!(text(launch, "function"), LAUNCH_FUNCTION_ID);
+    assert!(
+        launch["timeoutMilliseconds"]
+            .as_u64()
+            .is_some_and(|value| value > 0),
+        "a backend launch must bound how long the host waits for the function"
     );
-    for path in paths {
+    // The contract reserves these for declarative launches; the backend's
+    // answer carries their values instead.
+    for forbidden in [
+        "arguments",
+        "validationArguments",
+        "runtimeDependencies",
+        "initializationOptions",
+        "hostIntegration",
+    ] {
         assert!(
-            path.starts_with("language-server/") && !path.split('/').any(|part| part == ".."),
-            "{path} must stay inside language-server/"
+            server.get(forbidden).is_none(),
+            "languageServers[0].{forbidden} must not accompany a backend launch"
+        );
+    }
+    let requires = &manifest["requires"];
+    assert!(
+        requires["serverProcess"].as_u64().unwrap() >= 3,
+        "backend launch needs serverProcess 3"
+    );
+    assert!(
+        requires["backend"].as_u64().unwrap() >= 2,
+        "resolveParams need backend 2"
+    );
+    assert!(manifest["pluginAPIVersion"].as_u64().unwrap() >= 4);
+}
+
+#[test]
+fn package_scripts_name_every_path_the_backend_resolves() {
+    // plugin.json no longer lists the language server files, so the scripts
+    // that assemble and verify the package are held to the backend's layout.
+    for script in ["scripts/assemble-package.sh", "scripts/verify-package.sh"] {
+        let source = read(script);
+        for path in PACKAGE_LAYOUT {
+            assert!(
+                path.starts_with("language-server/") || *path == "runtime",
+                "{path} must stay inside language-server/ or runtime/"
+            );
+            assert!(
+                !path.split('/').any(|part| part == ".."),
+                "{path} must not leave the package"
+            );
+            assert!(source.contains(path), "{script} does not check {path}");
+        }
+        assert!(
+            source.contains(LAUNCHER_PREFIX),
+            "{script} does not check for the Equinox launcher JAR"
         );
     }
 }
