@@ -288,8 +288,8 @@ API-30（调试适配器）、API-37（环境与 l10n）、API-42（内置 Git �
 状态：**已实现**（Java 一侧）。接口常量、答案校验与合并在 `dj/lsp/languages/jdt_contributions.rs`（纯逻辑，不依赖 SDK），
 发现并调用提供方在 `backend/src/plugin_functions.rs`，按工作区维护贡献、推送给 JDT LS、接收 `languageImport.settingsChanged` 的在
 `backend/src/settings_session.rs`。宿主中转已由 Core 的 [#1742](https://github.com/1lck/Lithe-IDEA/pull/1742) 实现并合入，后端按已合入的
-方法形状（插件函数协议 4，Rust SDK 0.3.0）调用它，清单已声明（第 5.7 节）。仍缺的只有 `java.configuration.runtimes` 的推送，
-它依赖 API-23，见第 6 节。
+方法形状（插件函数协议 4，Rust SDK 0.3.0）调用它，清单已声明（第 5.7 节）。`java.configuration.runtimes` 由启动请求里宿主
+解析出的 `tools.java` 提供（第 5.8 节），不再等 API-23。
 
 ### 5.1 接口函数 ID
 
@@ -319,8 +319,9 @@ API-30（调试适配器）、API-37（环境与 l10n）、API-42（内置 Git �
 6. **只有至少一个提供方参与（回答或失败）时才推送**：用 `languageServer/notify` 发 `workspace/didChangeConfiguration`，
    `settings` 整份替换会话里的插件配置。没有任何提供方时什么都不推送——过渡期主仓库的 jdt 宿主集成仍在推送它自己的设置，
    插件这边的整份替换会把它覆盖掉；在 Maven/Gradle 插件导出 `languageImport.settings` 之前必须零行为变化。
-7. 推送里 `java.configuration.runtimes` 为空：插件后端目前没有列出 JDK 安装的宿主方法（API-23 `toolchains.list`），
-   等它提供后把宿主的候选列表填进来；JDT LS 不会因为缺这个键而删除已登记的 VM。索引根也不在插件推送里，因为 Core 会在插件配置上叠加宿主的索引策略。
+7. 推送里的 `java.configuration.runtimes` 只有一项：宿主在启动请求里解析出的 `java` 工具安装（第 5.8 节），作为默认运行时，
+   每次推送都重复它，这样服务器编译的目标和 Run 启动项目用的 JDK 一致。宿主没找到 `java` 工具时不带这个键，JDT LS 不会因为缺键而删除
+   已登记的 VM。列出全机 JDK 仍要等 API-23 `toolchains.list`。索引根也不在插件推送里，因为 Core 会在插件配置上叠加宿主的索引策略。
 
 ### 5.3 超时、失败与状态
 
@@ -399,6 +400,10 @@ Java 的清单现在这样声明（以已合入的契约 README 为准）：
   和 `scripts/verify-package.sh`，所以 `plugin.json` 不再写这些路径；
 - 把 `heapMaxMB`、`logLevel` 两个设置和 `logDirectory/jdt.log` 拼进 JVM 参数（原 `runtimeArguments` 的 `${setting:…}` 与 `${logDir}` 展开），
   把每个工作区的 Equinox 配置复制到 `workspaceStateDirectory` 下再以 `-configuration` 传入，`-data` 指向其中的 `data/`；
+- 读取契约里可选的 `tools.java`（宿主按清单 `requiresTools: ["java"]`、按用户选择与发现解析出的安装，带 `home` 与 `version`），
+  把它作为 `java.configuration.runtimes` 里唯一且默认的运行时写进 `initializationOptions` 与 `workspaceConfiguration`，并记进设置会话，
+  之后每次推送都重复它。原因：Run 用宿主解析的 `java` 工具启动项目，而 JDT LS 默认用自带的 JDK 21 编译，不配默认运行时会出现
+  `UnsupportedClassVersionError`（class 65.0 对 61.0）。`tools` 缺失、缺 `home` 或 `version` 时不配置，也不报错；
 - 回答 `executable: { kind: "packaged", path }`、`arguments`、`initializationOptions`（原 `hostIntegration` 的 bundles、设置与
   `java_configuration`）、`workspaceConfiguration`、`writablePaths`，以及一个 `language/status` 的就绪门（`service-ready`）。
 
@@ -421,7 +426,13 @@ Java 的清单现在这样声明（以已合入的契约 README 为准）：
   `didChangeContexts` 时列出工作区上下文，为每个上下文注册 `.java` 的收集函数 `java.collectActions`。宿主对每个打开的 Java 文档
   调用它，后端向 JDT LS 请求 `vscode.java.resolveMainMethod` 与 `vscode.java.test.findTestTypesAndMethods`，经领域规则
   `java_run_markers` 得到标记，每个标记一条 `Run '<label>'` 动作（图标 `run`/`test`）并带 `Debug` 备选项。语言服务器没起来、
-  忙或超时时回答空列表，宿主在下次编辑时再收集。
+  忙或超时时回答空列表，宿主在下次编辑时再收集。宿主只在注册绑定和编辑时收集，而首次注册发生在 `initialize` 之后、JDT LS
+  仍在启动时，所以后端收到清单转发的 `language/status` `ServiceReady`（`languageServer/didReceiveNotification`）后，
+  注销并重新注册该上下文的绑定，让宿主对已打开的文档立刻再收集一次；用户不必编辑文件才能看到标记。
+  工具栏与菜单的 Run/Debug 也走这些动作：清单的 `languages` 里 Java 没有执行模块，也没有 `hostCapabilities`，所以 macOS 宿主在
+  “当前文件”运行配置下保存文档、按 gutter 的方式收集当前文档的动作，Run 调用位置最前的 `run` 动作，Debug 调用它的 `debug` 备选项；
+  没有 main 方法时宿主提示“Java does not provide project execution”。这是宿主的通用规则（契约 README“Independent editor actions”一节），
+  插件这边无须额外声明。
 - **启动进程**（`run/start`，权限 `run.start`；调试另需 `debug.start`）：点击调用 `java.runAction`。main 类先经
   `vscode.java.buildWorkspace`（结果 1 或 2 继续）再 `vscode.java.resolveClasspath` 得到 `[modulePaths, classPaths]`；
   测试经 `plan_debug_launch` → `vscode.java.test.junit.argument` → `debug_launch_target` → `java_test_launch` 得到运行器参数。
@@ -497,7 +508,7 @@ Java 一侧的中转已经实现并在清单里声明（第 5 节、第 5.7 节�
 - `languageImport.settingsChanged`：已注册，调用方插件 ID 取自 `caller`，已完成。
 - 变化后的 `workspace/didChangeConfiguration` 与 Maven profiles（`java.project.updateSettings`）：经 `languageServer/notify` 与
   `languageServer/request` 发出（#1745），已完成（第 5.2、5.4 节）。
-- 还剩下的两项属于其他编号：`java.configuration.runtimes` 的推送等 API-23（`toolchains.list`），见下文；
+- `java.configuration.runtimes` 的默认运行时已由启动请求里的 `tools.java` 提供（第 5.8 节）；列出全机 JDK 仍属于 API-23，见下文。
   构建插件提供工具链要求和测试运行（第 5.5、5.6 节）仍是设计，没有实现。
   - `dj/execution/toolchain_requirements.rs`：构建插件通过函数提供工具链要求（第 5.5 节）。
   - `dj/testing/jdt_test_items.rs`：测试运行委托给构建插件（第 5.6 节）。
@@ -507,9 +518,8 @@ Java 一侧的中转已经实现并在清单里声明（第 5 节、第 5.7 节�
 - API-20 存储：`dj/execution/argfile.rs`（后端没有插件自有的临时目录）、`dj/jdt_integration/workspace_state.rs`（缓存目录来自宿主）。
 - API-22 日志与进度：日志部分已完成，后端接入 `litheLogging` 1，不再有占位（第 3.1 节“Java 日志事件”一行，级别表见 README 的“日志”一节）。
 - API-23 工具链与进程：`dj/jdt_integration/runtime.rs`（探测 `java -version` 的进程执行）。
-  `toolchains.list`（列出已安装 JDK）也属于它：插件后端没有这个宿主方法，所以设置中转暂不推送 `java.configuration.runtimes`
-  （`backend/src/settings_session.rs` 里的 `TODO(host-api: API-23 toolchains.list)`），JDT LS 的 VM 登记保持现状。
-  语言服务器已改为 `launch.kind: "backend"`（第 5.8 节），`java.configuration.runtimes` 的推送仍等这个方法。
+  `toolchains.list`（列出已安装 JDK）也属于它：插件后端没有这个宿主方法，所以 `java.configuration.runtimes` 只含宿主随启动请求
+  送来的 `tools.java` 这一个默认运行时（第 5.8 节），不列出全机其他 JDK。
 - API-37 环境与 l10n：`dj/jdt_integration/runtime.rs`、`dj/jdt_integration/launch_resources.rs`、`backend/src/lib.rs`（用户可见文案要走宿主 i18n）。
 - API-42 内置 Git 只读：`dj/host/git.rs`、`dj/languages/code_vision_hints.rs`（blame 作者）、`dj/lsp/languages/jdt_project_metadata.rs`（一条测试注释，Git 忽略查询）。
 - API-30 调试适配器：第 3.1 与 3.4 节表里的 `debug/engine.rs` 特例与 `RealJavaDebugIntegrationTests`，代码里没有单独占位。
@@ -655,7 +665,7 @@ Java 一侧的中转已经实现并在清单里声明（第 5 节、第 5.7 节�
 ## 10. 未完成事项
 
 - 阶段 J2：语言服务器由后端启动（第 5.8 节），设置中转（API-25 / API-35）与运行/调试/测试（第 5.9 节）都在后端实现。
-  仍未接：`java.configuration.runtimes` 的推送等 API-23 `toolchains.list`（后端的 `TODO(host-api: API-23 toolchains.list)`）；
+  仍未接：`java.configuration.runtimes` 只含 `tools.java` 这一个默认运行时，列出全机 JDK 等 API-23 `toolchains.list`；
   argfile 规划（`execution/launch_command.rs`）没有接到 `run/start`；TestNG 结果协议不解析；导航标记（父类/实现）与 CodeLens
   没有宿主 API；测试结果摘要是英文（等 API-37）；三个会话命令仍只回答 `NotSupported`。
 - 运行/调试/测试的接管只由后端单元测试和 Core 清单校验验证，还要对着真实宿主（主仓库 Java 拆分分支）跑通：

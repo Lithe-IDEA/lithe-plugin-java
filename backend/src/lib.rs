@@ -54,8 +54,8 @@ pub mod settings_session;
 
 use crate::launch::LAUNCH_FUNCTION_ID;
 use crate::run::{
-    RunSession, COLLECT_FUNCTION_ID, RERUN_FUNCTION_ID, RESOLVE_LINK_FUNCTION_ID,
-    RUN_ACTION_FUNCTION_ID, RUN_DID_EXIT_NOTIFICATION,
+    RunSession, COLLECT_FUNCTION_ID, LANGUAGE_SERVER_NOTIFICATION, RERUN_FUNCTION_ID,
+    RESOLVE_LINK_FUNCTION_ID, RUN_ACTION_FUNCTION_ID, RUN_DID_EXIT_NOTIFICATION,
 };
 use crate::settings_session::{
     HostServices, SettingsSession, LANGUAGE_SERVER_STATE_NOTIFICATION, SETTINGS_CHANGED_FUNCTION_ID,
@@ -186,6 +186,14 @@ pub fn backend() -> Result<Backend, SdkError> {
         let run_session = Arc::clone(&run_session);
         move |params| {
             run_session.run_did_exit(&params);
+            Ok(())
+        }
+    })?;
+    backend.on_host_notification(LANGUAGE_SERVER_NOTIFICATION, {
+        let run_session = Arc::clone(&run_session);
+        let report = Arc::clone(&report);
+        move |params| {
+            run_session.did_receive_notification(&params, &*report);
             Ok(())
         }
     })?;

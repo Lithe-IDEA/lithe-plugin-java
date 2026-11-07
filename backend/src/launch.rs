@@ -39,14 +39,20 @@
 //!
 //! [`settings_session::java_configuration`]: crate::settings_session::java_configuration
 
+use crate::run::file_uri;
 use crate::settings_session::{java_configuration, jdt_settings, SettingsSession, SERVER_ID};
 use lithe_java_domain::jdt_integration::launch_resources::{bundles_in, missing_resource_message};
 use lithe_java_domain::lsp::languages::jdt::{
-    adapt_initialization_options, direct_java_arguments, JdtDirectLaunchResources,
+    adapt_initialization_options, add_trigger_files, direct_java_arguments, jdt_java_runtimes,
+    JdtDirectLaunchResources, JdtJavaRuntime,
 };
 use lithe_java_domain::lsp::languages::prepare_jdt_configuration_area;
-use lithe_plugin_sdk::{Context, FunctionError, PluginError, Value};
+use lithe_java_domain::lsp::JavaRuntimeCandidate;
+use lithe_plugin_sdk::{
+    Context, FunctionError, Host, PluginError, SdkError, Value, WorkspaceContext,
+};
 use serde_json::json;
+use std::collections::VecDeque;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -78,7 +84,40 @@ pub const LAUNCH_ERROR_CODES: &[&str] = &[
 pub const LAUNCH_CONFIGURATION_CLEANUP_FAILED: &str = "launch.configuration_cleanup_failed";
 
 /// Diagnostics categories a launch reports as `degraded` without failing.
-pub const LAUNCH_CATEGORIES: &[&str] = &[LAUNCH_CONFIGURATION_CLEANUP_FAILED];
+/// The host did not answer `workspace/getFolders` for the workspace, so the
+/// launch names no `triggerFiles` and JDT LS falls back to the first opened
+/// file to lay out a workspace without a build file.
+pub const LAUNCH_WORKSPACE_FOLDERS_UNAVAILABLE: &str = "launch.workspace_folders_unavailable";
+/// Every degraded-diagnostic category `java.resolveLaunch` reports.
+pub const LAUNCH_CATEGORIES: &[&str] = &[
+    LAUNCH_CONFIGURATION_CLEANUP_FAILED,
+    LAUNCH_WORKSPACE_FOLDERS_UNAVAILABLE,
+];
+
+/// Most `.java` files named as `triggerFiles`. JDT LS uses the first one
+/// under each workspace folder, so one per folder would do; a few more let it
+/// still find one when the first lies in a directory it ignores.
+pub const TRIGGER_FILE_LIMIT: usize = 16;
+/// How deep below a workspace folder the trigger-file scan descends. Source
+/// roots of plain workspaces sit at the top or one level down (`src`,
+/// `src/main/java`), and the package directories below them are what the
+/// depth must still cover.
+pub const TRIGGER_SCAN_DEPTH: usize = 8;
+/// Most directory entries the scan reads in total, so a huge workspace delays
+/// the launch by a bounded amount instead of by its size.
+pub const TRIGGER_SCAN_ENTRY_BUDGET: usize = 20_000;
+/// Directories the scan never enters: hidden ones, dependency and build
+/// output trees. A `.java` file there is generated or foreign and would make
+/// JDT LS lay the project out around it.
+pub const TRIGGER_SCAN_SKIPPED_DIRECTORIES: &[&str] = &[
+    "node_modules",
+    "target",
+    "build",
+    "bin",
+    "out",
+    "dist",
+    "vendor",
+];
 
 /// `heapMaxMB` when the settings do not carry it; the manifest's default.
 pub const DEFAULT_HEAP_MAX_MB: u64 = 2048;
@@ -164,6 +203,11 @@ pub struct LaunchRequest {
     pub heap_max_mb: u64,
     /// `settings.logLevel`: the JDT LS log level.
     pub log_level: String,
+    /// `tools.java`, the installation the host resolved for the plugin's
+    /// `java` tool, as the server's default runtime: Run starts the project
+    /// with that JDK, so the server must compile for it. Empty when the host
+    /// found none, which leaves the server on the runtimes it already knows.
+    pub java_runtimes: Vec<JdtJavaRuntime>,
 }
 
 /// The package files of a JDT LS launch, absolute.
@@ -216,7 +260,33 @@ pub fn parse_launch_params(params: &Value) -> Result<LaunchRequest, PluginError>
         temporary_directory: directory(params, "temporaryDirectory")?,
         heap_max_mb,
         log_level: log_level.to_string(),
+        java_runtimes: jdt_java_runtimes(&host_java_tool(params)),
     })
+}
+
+/// The `java` installation the host resolved, from the optional `tools`
+/// of the request. The contract has the host leave out a tool it could not
+/// find and promises only the fields it knows, so a missing or incomplete
+/// entry is no error: without a home or a version, the server cannot be
+/// pointed at the JDK, and the list stays empty.
+fn host_java_tool(params: &Value) -> Vec<JavaRuntimeCandidate> {
+    let Some(tool) = params.get("tools").and_then(|tools| tools.get("java")) else {
+        return Vec::new();
+    };
+    let field = |name: &str| {
+        tool.get(name)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    };
+    match (field("home"), field("version")) {
+        (Some(home), Some(version)) => vec![JavaRuntimeCandidate {
+            is_default: true,
+            home_path: home.to_string(),
+            version: version.to_string(),
+        }],
+        _ => Vec::new(),
+    }
 }
 
 /// An absolute directory field of `resolveParams`, kept as the host wrote
@@ -349,7 +419,13 @@ pub fn jdtls_arguments(
         "-Declipse.log.include.commandline=false".to_string(),
         "-Declipse.log.size.max=1024".to_string(),
         "-Declipse.log.backup.max=2".to_string(),
-        "-Declipse.log.level=WARNING".to_string(),
+        // No `-Declipse.log.level=WARNING`: JDT LS 1.61 reads the date of the
+        // first Platform log event it saw when the client connects
+        // (`LogHandler.setClientConnection` -> `LogReader.parseLogFile`), and
+        // that event is its own INFO "is started" entry. Filtering INFO out
+        // leaves the date null and the server dies with a
+        // NullPointerException before it answers `initialize`. The client
+        // mask `-Dlog.level` above is what limits what reaches the editor.
         format!(
             "-Djava.io.tmpdir={}",
             request.temporary_directory.to_string_lossy()
@@ -389,6 +465,7 @@ pub fn resolve(
     request: &LaunchRequest,
     package_root: &Path,
     fragments: &[Value],
+    trigger_files: &[String],
     now_unix_seconds: u64,
     report: &dyn Fn(&str, u64),
 ) -> Result<Value, PluginError> {
@@ -408,13 +485,14 @@ pub fn resolve(
         .directory
         .parent()
         .map_or_else(|| area.directory.clone(), Path::to_path_buf);
-    let initialization_options = adapt_initialization_options(
+    let mut initialization_options = adapt_initialization_options(
         SERVER_ID,
         None,
         &files.extension_bundles,
-        jdt_settings(fragments),
+        jdt_settings(fragments, &request.java_runtimes),
     )
     .unwrap_or_else(|| json!({}));
+    add_trigger_files(&mut initialization_options, trigger_files);
     let writable_paths: Vec<Value> = [
         area_root,
         data_directory(request),
@@ -433,10 +511,85 @@ pub fn resolve(
         // JDT LS needs no variable beyond the ones the host passes.
         "environment": {},
         "initializationOptions": initialization_options,
-        "workspaceConfiguration": java_configuration(fragments),
+        "workspaceConfiguration": java_configuration(fragments, &request.java_runtimes),
         "gates": [service_ready_gate()],
         "writablePaths": writable_paths,
     }))
+}
+
+/// The local paths of the workspace's folders, from the host's
+/// `workspace/getFolders`. A remote workspace lists folders without a path,
+/// which leaves the result empty.
+fn workspace_folders(host: &Host, workspace: &WorkspaceContext) -> Result<Vec<PathBuf>, SdkError> {
+    let answer = host.workspace().get_folders(workspace)?;
+    Ok(answer
+        .get("folders")
+        .and_then(Value::as_array)
+        .map(|folders| {
+            folders
+                .iter()
+                .filter_map(|folder| folder.get("path").and_then(Value::as_str))
+                .filter(|path| !path.is_empty())
+                .map(PathBuf::from)
+                .collect()
+        })
+        .unwrap_or_default())
+}
+
+/// The `triggerFiles` of a launch: `file:` URIs of up to
+/// [`TRIGGER_FILE_LIMIT`] `.java` files found under `folders`, folders and
+/// entries in sorted order so the same workspace always names the same files.
+/// The scan stops at [`TRIGGER_SCAN_DEPTH`] levels, skips hidden directories
+/// and [`TRIGGER_SCAN_SKIPPED_DIRECTORIES`], does not follow symbolic links,
+/// and reads at most [`TRIGGER_SCAN_ENTRY_BUDGET`] entries. A folder that
+/// cannot be read contributes nothing; JDT LS treats a missing list as
+/// "nothing to import".
+pub fn trigger_files(folders: &[PathBuf]) -> Vec<String> {
+    let mut files = Vec::new();
+    let mut budget = TRIGGER_SCAN_ENTRY_BUDGET;
+    let mut roots: Vec<&PathBuf> = folders.iter().collect();
+    roots.sort();
+    roots.dedup();
+    for root in roots {
+        // Breadth first, so the files nearest the folder come first and a
+        // deep tree cannot use up the limit before a shallow source root.
+        let mut pending = VecDeque::from([(root.clone(), 0usize)]);
+        while let Some((directory, depth)) = pending.pop_front() {
+            let Ok(entries) = fs::read_dir(&directory) else {
+                continue;
+            };
+            let mut entries: Vec<_> = entries.filter_map(Result::ok).collect();
+            entries.sort_by_key(|entry| entry.file_name());
+            let mut subdirectories = Vec::new();
+            for entry in entries {
+                if budget == 0 {
+                    return files;
+                }
+                budget -= 1;
+                let name = entry.file_name();
+                let Some(name) = name.to_str() else {
+                    continue;
+                };
+                let Ok(kind) = entry.file_type() else {
+                    continue;
+                };
+                if kind.is_dir() {
+                    let skipped =
+                        name.starts_with('.') || TRIGGER_SCAN_SKIPPED_DIRECTORIES.contains(&name);
+                    if depth < TRIGGER_SCAN_DEPTH && !skipped {
+                        subdirectories.push((entry.path(), depth + 1));
+                    }
+                } else if kind.is_file() && name.ends_with(".java") && !name.starts_with('.') {
+                    files.push(file_uri(&entry.path()));
+                    if files.len() >= TRIGGER_FILE_LIMIT {
+                        return files;
+                    }
+                }
+            }
+            pending.extend(subdirectories);
+        }
+    }
+    files
 }
 
 /// Seconds since the Unix epoch; a clock before 1970 counts as 0, which only
@@ -461,10 +614,6 @@ pub fn resolve_launch_function(
     context.check_cancelled()?;
     let request = parse_launch_params(&params)?;
     let package_root = package_root()?;
-    let fragments = context
-        .workspace_context()
-        .map(|workspace| session.start_fragments(workspace.context_id()))
-        .unwrap_or_default();
     let diagnostics = context.diagnostics();
     let operation = context.function_id().to_owned();
     // An error from `degraded` only means the arguments were invalid, so the
@@ -472,10 +621,30 @@ pub fn resolve_launch_function(
     let report = move |code: &str, count: u64| {
         let _ = diagnostics.degraded(&operation, code, Some(count));
     };
+    let (fragments, folders) = match context.workspace_context() {
+        Some(workspace) => {
+            // The pushes after this start repeat the runtimes it configures.
+            session.set_java_runtimes(workspace, request.java_runtimes.clone());
+            let folders = match workspace_folders(context.host(), workspace) {
+                Ok(folders) => folders,
+                Err(_) => {
+                    // The launch stands without the folders; JDT LS then lays
+                    // out a plain workspace from the first opened file.
+                    report(LAUNCH_WORKSPACE_FOLDERS_UNAVAILABLE, 1);
+                    Vec::new()
+                }
+            };
+            (session.start_fragments(workspace.context_id()), folders)
+        }
+        None => (Vec::new(), Vec::new()),
+    };
+    let trigger_files = trigger_files(&folders);
+    context.check_cancelled()?;
     let answer = resolve(
         &request,
         &package_root,
         &fragments,
+        &trigger_files,
         now_unix_seconds(),
         &report,
     )?;
@@ -576,6 +745,7 @@ mod tests {
                 &fixture.request(),
                 &fixture.package(),
                 fragments,
+                &[],
                 1_000_000,
                 &report,
             )
@@ -659,7 +829,7 @@ mod tests {
             "--add-opens=java.base/java.lang=ALL-UNNAMED",
             "-Declipse.application=org.eclipse.jdt.ls.core.id1",
             "-Declipse.product=org.eclipse.jdt.ls.core.product",
-            "-Declipse.log.level=WARNING",
+            "-Declipse.log.size.max=1024",
         ] {
             assert!(
                 arguments.iter().any(|argument| argument == expected),
@@ -667,6 +837,10 @@ mod tests {
             );
         }
         assert!(!arguments.iter().any(|argument| argument == "-Xmx2048m"));
+        // The Equinox log filter would crash JDT LS 1.61 at `initialize`.
+        assert!(!arguments
+            .iter()
+            .any(|argument| argument.starts_with("-Declipse.log.level=")));
         let log_file = fixture.root.join("log").join("jdt.log");
         assert!(arguments.contains(&format!("-Dosgi.logfile={}", log_file.to_string_lossy())));
         let temporary = fixture.root.join("tmp");
@@ -764,14 +938,64 @@ mod tests {
         let (answer, _) = resolve_fixture(&fixture, &fragments);
         assert_eq!(
             answer["workspaceConfiguration"],
-            java_configuration(&fragments)
+            java_configuration(&fragments, &[])
         );
         assert_eq!(
             answer["initializationOptions"]["settings"]["java"],
             answer["workspaceConfiguration"]["java"]
         );
         let (answer, _) = resolve_fixture(&fixture, &[]);
-        assert_eq!(answer["workspaceConfiguration"], java_configuration(&[]));
+        assert_eq!(
+            answer["workspaceConfiguration"],
+            java_configuration(&[], &[])
+        );
+        assert!(answer
+            .pointer("/initializationOptions/settings/java/configuration/runtimes")
+            .is_none());
+    }
+
+    #[test]
+    fn the_java_tool_the_host_resolved_is_the_default_runtime() {
+        let fixture = Fixture::new();
+        let mut params = fixture.params();
+        params["tools"] = json!({
+            "java": {"executable": "/jdk/17/bin/java", "home": "/jdk/17", "version": "17.0.19"}
+        });
+        let request = parse_launch_params(&params).unwrap();
+        let expected = json!([{"name": "JavaSE-17", "path": "/jdk/17", "default": true}]);
+        assert_eq!(
+            request.java_runtimes,
+            vec![JdtJavaRuntime {
+                is_default: true,
+                name: "JavaSE-17".to_string(),
+                path: "/jdk/17".to_string(),
+            }]
+        );
+        let report = |_: &str, _: u64| {};
+        let answer = resolve(&request, &fixture.package(), &[], &[], 1_000_000, &report).unwrap();
+        assert_eq!(
+            answer["initializationOptions"]["settings"]["java"]["configuration"]["runtimes"],
+            expected
+        );
+        assert_eq!(
+            answer["workspaceConfiguration"]["java"]["configuration"]["runtimes"],
+            expected
+        );
+
+        // A tool chosen by executable has no home; a host that found nothing
+        // sends no entry. Neither configures a runtime.
+        for tools in [
+            json!({"java": {"executable": "/usr/bin/java"}}),
+            json!({"java": {"executable": "/usr/bin/java", "home": " ", "version": "17"}}),
+            json!({"gradle": {"executable": "/g/bin/gradle", "home": "/g", "version": "8"}}),
+            json!({}),
+        ] {
+            params["tools"] = tools;
+            assert!(parse_launch_params(&params)
+                .unwrap()
+                .java_runtimes
+                .is_empty());
+        }
     }
 
     #[test]
@@ -821,5 +1045,78 @@ mod tests {
             .iter()
             .all(|code| lithe_plugin_sdk::is_plugin_error_code(code)));
         assert!(lithe_plugin_sdk::is_function_id(LAUNCH_FUNCTION_ID));
+    }
+
+    #[test]
+    fn trigger_files_name_java_files_in_order_and_skip_hidden_and_build_trees() {
+        let fixture = Fixture::new();
+        let workspace = fixture.root.join("workspace");
+        for directory in [
+            "src/demo",
+            "src/.hidden",
+            "target/classes",
+            "node_modules/x",
+            "lib",
+            "a/b/c/d/e/f/g/h/i",
+        ] {
+            fs::create_dir_all(workspace.join(directory)).unwrap();
+        }
+        for file in [
+            "src/demo/Main.java",
+            "src/demo/notes.txt",
+            "src/.hidden/Hidden.java",
+            "target/classes/Generated.java",
+            "node_modules/x/Dep.java",
+            "lib/Util.java",
+            "lib/.Dot.java",
+            "a/b/c/d/e/f/g/h/i/Deep.java",
+        ] {
+            fs::write(workspace.join(file), b"").unwrap();
+        }
+        let files = trigger_files(&[workspace.clone(), workspace.clone()]);
+        assert_eq!(
+            files,
+            vec![
+                file_uri(&workspace.join("lib/Util.java")),
+                file_uri(&workspace.join("src/demo/Main.java")),
+            ]
+        );
+        assert!(trigger_files(&[fixture.root.join("missing")]).is_empty());
+        assert!(trigger_files(&[]).is_empty());
+    }
+
+    #[test]
+    fn trigger_files_stop_at_the_limit() {
+        let fixture = Fixture::new();
+        let workspace = fixture.root.join("many");
+        fs::create_dir_all(&workspace).unwrap();
+        for index in 0..(TRIGGER_FILE_LIMIT + 5) {
+            fs::write(workspace.join(format!("C{index:03}.java")), b"").unwrap();
+        }
+        assert_eq!(trigger_files(&[workspace]).len(), TRIGGER_FILE_LIMIT);
+    }
+
+    #[test]
+    fn resolve_passes_trigger_files_to_the_initialization_options() {
+        let fixture = Fixture::new();
+        let report = |_: &str, _: u64| {};
+        let trigger = vec!["file:///w/src/demo/Main.java".to_string()];
+        let answer = resolve(
+            &fixture.request(),
+            &fixture.package(),
+            &[],
+            &trigger,
+            1_000_000,
+            &report,
+        )
+        .unwrap();
+        assert_eq!(
+            answer["initializationOptions"]["triggerFiles"],
+            json!(["file:///w/src/demo/Main.java"])
+        );
+        let (answer, _) = resolve_fixture(&fixture, &[]);
+        assert!(answer["initializationOptions"]
+            .get("triggerFiles")
+            .is_none());
     }
 }

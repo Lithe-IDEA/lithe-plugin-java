@@ -85,6 +85,17 @@ pub const ACTIONS_BINDING_ID: &str = "javaRunActions";
 /// Host notification that reports a finished run: `{runID, exitCode?, signal?}`.
 pub const RUN_DID_EXIT_NOTIFICATION: &str = "lithe/host/run/didExit";
 
+/// Host notification that forwards a notification of a language server the
+/// manifest lists under `forwardNotifications`:
+/// `{context, serverID, generation, method, params?}`.
+pub const LANGUAGE_SERVER_NOTIFICATION: &str = "lithe/host/languageServer/didReceiveNotification";
+
+/// JDT LS notification that reports its service state.
+const LANGUAGE_STATUS_METHOD: &str = "language/status";
+
+/// `language/status` type that says the server answers workspace commands.
+const SERVICE_READY_TYPE: &str = "ServiceReady";
+
 /// Host method that starts a run owned by the host.
 const RUN_START_METHOD: &str = "lithe/host/run/start";
 
@@ -387,6 +398,24 @@ impl RunSession {
             // A thread that cannot start leaves the bindings to the next
             // `didChangeContexts`; there is nothing else to do about it.
             .ok();
+    }
+
+    /// Re-registers the actions binding of a context whose language server
+    /// just became ready, so the host collects the actions of the open
+    /// documents again.
+    ///
+    /// The host collects once when a binding is registered and then only on
+    /// edits. The first registration runs right after `initialize`, while JDT
+    /// LS is still starting, so that collection answers no actions; without
+    /// this the gutter stays empty until the user edits the file.
+    pub fn did_receive_notification(&self, params: &Value, report: &dyn Fn(&str, u64)) {
+        let Some(context_id) = service_ready_context(params) else {
+            return;
+        };
+        if let Some(stale) = lock(&self.registrations).remove(&context_id) {
+            let _ = stale.subscription.dispose();
+        }
+        self.sync_contexts_reporting(report);
     }
 
     /// Stops the result listener of a finished run.
@@ -1150,7 +1179,7 @@ fn free_port() -> Result<u16, FunctionError> {
 }
 
 /// `file:` URI of an absolute path, percent-encoding what RFC 3986 reserves.
-fn file_uri(path: &Path) -> String {
+pub(crate) fn file_uri(path: &Path) -> String {
     let text = path.to_string_lossy();
     let mut uri = String::from("file://");
     for byte in text.bytes() {
@@ -1171,6 +1200,24 @@ fn failure(code: &'static str, message: impl Into<String>) -> FunctionError {
     PluginError::new(code, message).into()
 }
 
+/// The context ID of a forwarded `language/status` `ServiceReady` of the
+/// `java` server, `None` for every other notification.
+fn service_ready_context(params: &Value) -> Option<String> {
+    if params.get("serverID").and_then(Value::as_str) != Some(SERVER_ID)
+        || params.get("method").and_then(Value::as_str) != Some(LANGUAGE_STATUS_METHOD)
+        || params
+            .get("params")
+            .and_then(|status| status.get("type"))
+            .and_then(Value::as_str)
+            != Some(SERVICE_READY_TYPE)
+    {
+        return None;
+    }
+    WorkspaceContext::from_value(&params["context"])
+        .ok()
+        .map(|reference| reference.context_id().to_owned())
+}
+
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
@@ -1179,6 +1226,31 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 mod tests {
     use super::*;
     use lithe_java_domain::lsp::languages::JavaRunMarkerStatus;
+
+    #[test]
+    fn only_a_service_ready_status_of_the_java_server_names_its_context() {
+        let ready = json!({
+            "context": {"contextID": "ctx-1", "generation": 3},
+            "serverID": SERVER_ID,
+            "generation": 2,
+            "method": LANGUAGE_STATUS_METHOD,
+            "params": {"type": SERVICE_READY_TYPE, "message": "ServiceReady"},
+        });
+        assert_eq!(service_ready_context(&ready).as_deref(), Some("ctx-1"));
+        let mut other_server = ready.clone();
+        other_server["serverID"] = json!("kotlin");
+        let mut other_method = ready.clone();
+        other_method["method"] = json!("language/progressReport");
+        let mut starting = ready.clone();
+        starting["params"]["type"] = json!("Starting");
+        let mut no_params = ready.clone();
+        no_params.as_object_mut().unwrap().remove("params");
+        let mut no_context = ready.clone();
+        no_context.as_object_mut().unwrap().remove("context");
+        for value in [other_server, other_method, starting, no_params, no_context] {
+            assert_eq!(service_ready_context(&value), None, "{value}");
+        }
+    }
 
     #[test]
     fn a_target_round_trips_through_its_params() {
