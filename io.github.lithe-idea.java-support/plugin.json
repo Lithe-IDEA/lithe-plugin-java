@@ -4,13 +4,14 @@
   "displayName": "Java Support",
   "version": "1.1.0",
   "pluginAPIVersion": 4,
-  "requires": {"backend": 2, "debugAdapters": 1, "languages": 1, "languageServers": 3, "pluginFunctions": 1, "serverProcess": 1, "settings": 2, "projectGenerators": 1, "toolDefinitions": 1, "executableResolution": 2},
+  "requires": {"backend": 2, "debugAdapters": 3, "languages": 1, "languageServers": 3, "outputLinkMatchers": 1, "pluginFunctions": 1, "serverProcess": 4, "settings": 2, "projectGenerators": 1, "toolDefinitions": 1, "executableResolution": 2},
+  "requiresTools": ["java"],
   "vendor": {
     "id": "io.github.lithe-idea",
     "displayName": "Lithe Community",
     "signatureRequirement": "none"
   },
-  "permissions": ["backend.launch", "languageServer.launch", "languageServer.request", "project.generate", "debug.launch", "debug.attach", "workspace.metadata"],
+  "permissions": ["backend.launch", "documents.contentProvider", "documents.read", "editor.actions", "languageServer.launch", "languageServer.request", "project.generate", "debug.launch", "debug.attach", "debug.start", "run.start", "window.messages", "workspace.metadata", "workspace.search"],
   "activationEvents": ["onLanguage:java", "onDebug:java", "onWorkspaceOpen"],
   "toolDefinitions": [
     {
@@ -148,8 +149,6 @@
       "launch": [
         "${executable}",
         "${runtimeArguments}",
-        "-jar",
-        "${entry}",
         "${arguments}"
       ]
     }
@@ -176,7 +175,26 @@
       },
       "configurations": {
         "attach": {"targetBindings": {"connection": {"host": "hostName", "port": "port"}}}
+      },
+      "features": {
+        "hotCodeReplace": {
+          "request": "redefineClasses",
+          "event": "hotcodereplace",
+          "changedField": "changedClasses",
+          "errorField": "errorMessage"
+        },
+        "stepFilters": {"argument": "stepFilters"}
+      },
+      "defaults": {
+        "stepFilters": {"classNameFilters": ["$JDK", "$Libraries"]}
       }
+    }
+  ],
+  "outputLinkMatchers": [
+    {
+      "id": "stack-frame",
+      "pattern": "at (?P<qualified>[\\w$.]+)\\.[\\w$<>]+\\((?P<file>\\w+\\.java):(?P<line>\\d+)\\)",
+      "resolve": {"function": "java.resolveOutputLink"}
     }
   ],
   "settings": [
@@ -213,35 +231,21 @@
       "languageID": "java",
       "languageIdentifier": "java",
       "launch": {
-        "kind": "runtime",
-        "tool": "java",
-        "packagedRuntime": "runtime/${arch}/bin/java",
-        "runtimeArguments": [
-          "-Xmx${setting:heapMaxMB}m",
-          "-Dlog.level=${setting:logLevel}",
-          "-Dosgi.logfile=${logDir}/jdt.log",
-          "-Declipse.log.include.commandline=false",
-          "-Declipse.log.size.max=1024",
-          "-Declipse.log.backup.max=2",
-          "-Declipse.log.level=WARNING"
-        ],
-        "entry": "language-server/plugins/org.eclipse.equinox.launcher_1.8.0.v20260804-1928.jar"
+        "kind": "backend",
+        "function": "java.resolveLaunch",
+        "timeoutMilliseconds": 60000
       },
-      "requestMethods": ["workspace/executeCommand"],
-      "commands": ["java.project.updateSettings"],
-      "hostIntegration": {
-        "id": "jdt",
-        "capabilities": ["debug", "run", "testing"],
-        "resources": {
-          "configuration": "language-server/configuration/${arch}",
-          "lombokAgent": "language-server/lombok/lombok.jar",
-          "extensionBundleDirectories": [
-            "language-server/java-debug",
-            "language-server/java-test/extensions"
-          ],
-          "testRunner": "language-server/java-test/runner/com.microsoft.java.test.runner-jar-with-dependencies.jar"
+      "requestMethods": ["java/classFileContents", "workspace/executeCommand"],
+      "commands": ["java.project.updateSettings", "vscode.java.buildWorkspace", "vscode.java.resolveClasspath", "vscode.java.resolveMainMethod", "vscode.java.test.findTestTypesAndMethods", "vscode.java.test.junit.argument"],
+      "forwardNotifications": ["language/eventNotification", "language/progressReport", "language/status"],
+      "state": {
+        "scope": "workspace",
+        "retention": {
+          "maxEntries": 8,
+          "maxAgeDays": 30
         }
-      }
+      },
+      "remote": "unsupported"
     }
   ],
   "pluginFunctions": {

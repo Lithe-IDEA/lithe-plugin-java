@@ -5,8 +5,9 @@
 //! plugin went away. These modules are the decision rules of that code,
 //! rewritten without any host type:
 //!
-//! - [`launch_resources`] maps the declared `hostIntegration.resources` to
-//!   the files the JDT LS launch needs;
+//! - [`launch_resources`] lists the extension bundles and names missing
+//!   files for the JDT LS launch the backend resolves (`backend/src/launch.rs`
+//!   fixes the package layout);
 //! - [`runtime`] validates the packaged JDK and decides when cached state may
 //!   be discarded;
 //! - [`workspace_state`] fingerprints a workspace, resets its index and

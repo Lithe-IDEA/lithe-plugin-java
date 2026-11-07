@@ -500,6 +500,46 @@ pub fn adapt_initialization_options(
     Some(Value::Object(options))
 }
 
+/// Names the Java files whose folders JDT LS imports as projects when the
+/// workspace has no build file (`initializationOptions.triggerFiles`).
+///
+/// JDT LS creates its default project only for a workspace without folders.
+/// With a folder, `InvisibleProjectImporter` returns before it creates the
+/// project unless `triggerFiles` names a `.java` file under the folder; then
+/// it reads the file's package declaration and strips it from the path, so
+/// `src/demo/Main.java` with `package demo;` makes `src` the source root.
+/// Without the list, the first `textDocument/didOpen` creates the project
+/// instead, and at that point the package cannot be read, so the file's own
+/// directory becomes the source root and every class fails with "declared
+/// package does not match expected package". File URIs are kept in order and
+/// without duplicates; an empty list changes nothing, and the key is left
+/// alone when no file is given.
+pub fn add_trigger_files(options: &mut Value, trigger_files: &[String]) {
+    if trigger_files.is_empty() {
+        return;
+    }
+    if !options.is_object() {
+        *options = json!({});
+    }
+    let files = options
+        .as_object_mut()
+        .expect("the initialization options were normalized to an object")
+        .entry("triggerFiles")
+        .or_insert_with(|| Value::Array(Vec::new()));
+    if !files.is_array() {
+        *files = Value::Array(Vec::new());
+    }
+    let files = files
+        .as_array_mut()
+        .expect("the trigger files were normalized to an array");
+    for file in trigger_files {
+        let file = Value::String(file.clone());
+        if !files.contains(&file) {
+            files.push(file);
+        }
+    }
+}
+
 /// Overlays the provider-owned `settings.java` values onto catalog-provided
 /// initialization options.
 ///
@@ -1015,7 +1055,17 @@ fn wrapper_arguments(
     arguments
 }
 
-fn direct_java_arguments(
+/// The complete `java` command line that starts JDT LS directly, without a
+/// shell wrapper.
+///
+/// `arguments` are the plugin's own choices followed by `-jar <launcher>`:
+/// `-Xmx` and `-Dlog.level=` replace the defaults when they are valid, other
+/// JVM options before the launcher are kept, and the options JDT LS needs
+/// (`-javaagent`, `-Xms`, `--add-opens`, the Equinox properties, tuning) are
+/// always rebuilt from `resources`. `-configuration` and `-data` come from
+/// `resources` and `data_directory`, never from `arguments`, so both point at
+/// writable directories. The plugin backend resolves its launch with this.
+pub fn direct_java_arguments(
     arguments: &[String],
     resources: &JdtDirectLaunchResources,
     data_directory: &Path,
@@ -2528,5 +2578,41 @@ mod tests {
         );
         assert!(virtual_source_content("go", &json!("class String {}")).is_none());
         assert!(virtual_source_content("java", &Value::Null).is_none());
+    }
+
+    #[test]
+    fn trigger_files_are_added_once_and_only_when_given() {
+        let mut options = json!({ "bundles": [] });
+        add_trigger_files(&mut options, &[]);
+        assert_eq!(options, json!({ "bundles": [] }));
+
+        let files = vec![
+            "file:///w/src/demo/Main.java".to_string(),
+            "file:///w/src/demo/Main.java".to_string(),
+            "file:///w/lib/Util.java".to_string(),
+        ];
+        add_trigger_files(&mut options, &files);
+        assert_eq!(
+            options["triggerFiles"],
+            json!(["file:///w/src/demo/Main.java", "file:///w/lib/Util.java"])
+        );
+
+        // A non-object value and a non-array key are replaced, an existing
+        // list is extended.
+        let mut scalar = Value::Null;
+        add_trigger_files(&mut scalar, &files[..1]);
+        assert_eq!(
+            scalar,
+            json!({ "triggerFiles": ["file:///w/src/demo/Main.java"] })
+        );
+        let mut wrong = json!({ "triggerFiles": "x" });
+        add_trigger_files(&mut wrong, &files[2..]);
+        assert_eq!(wrong["triggerFiles"], json!(["file:///w/lib/Util.java"]));
+        let mut existing = json!({ "triggerFiles": ["file:///w/lib/Util.java"] });
+        add_trigger_files(&mut existing, &files[..1]);
+        assert_eq!(
+            existing["triggerFiles"],
+            json!(["file:///w/lib/Util.java", "file:///w/src/demo/Main.java"])
+        );
     }
 }

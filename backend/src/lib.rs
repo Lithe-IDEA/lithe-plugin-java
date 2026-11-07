@@ -6,9 +6,18 @@
 //! other plugins contribute. The plugin manifest declares it as the plugin's
 //! `backend`.
 //!
-//! The Java rules themselves still run in the host for the editor providers,
-//! run configurations and the Java test workflow; the backend is where they
-//! move, one host API at a time (see `MIGRATION.md`).
+//! The run, debug and test actions of Java files are the backend's own as
+//! well ([`run`]): it collects them through editor actions and starts the
+//! processes through the host's `run/start` method. What still waits for a
+//! host API is listed in `MIGRATION.md`.
+//!
+//! # Language server launch (serverProcess 3)
+//!
+//! The manifest declares the `java` language server with
+//! `launch.kind: "backend"`, so the host asks [`launch`] for the JDT LS
+//! command line, initialization options and startup settings before each
+//! start. The launch reads the settings the [`settings_session`] knows for
+//! the workspace, so a restart starts with the last pushed settings.
 //!
 //! # Cross-plugin settings (API-35)
 //!
@@ -38,9 +47,16 @@
 //! `settings_session::SESSION_CATEGORIES`. The backend never writes to
 //! stderr, and a fact carries no path, source or tool output.
 
+pub mod launch;
 pub mod plugin_functions;
+pub mod run;
 pub mod settings_session;
 
+use crate::launch::LAUNCH_FUNCTION_ID;
+use crate::run::{
+    RunSession, COLLECT_FUNCTION_ID, LANGUAGE_SERVER_NOTIFICATION, RERUN_FUNCTION_ID,
+    RESOLVE_LINK_FUNCTION_ID, RUN_ACTION_FUNCTION_ID, RUN_DID_EXIT_NOTIFICATION,
+};
 use crate::settings_session::{
     HostServices, SettingsSession, LANGUAGE_SERVER_STATE_NOTIFICATION, SETTINGS_CHANGED_FUNCTION_ID,
 };
@@ -66,10 +82,19 @@ const NOTIFICATION_OPERATION: &str = "notification";
 /// `languageImport.settingsChanged` is a key operation: another plugin
 /// reports a change a user made, it happens rarely, and its success is the
 /// only trace that the change reached the language server.
+/// `java.resolveLaunch` is one too: it runs once per language server start
+/// and its success is the only trace of which package files the server
+/// started from. `java.runAction` and `java.rerun` are key operations
+/// because each is one user click that starts a process; collection and
+/// output link resolution run on every edit and every output line, so their
+/// successes are suppressed.
 pub const KEY_OPERATIONS: &[&str] = &[
     "debug.javaTestLaunch",
     "execution.planLaunchCommand",
     "java.prepareLaunch",
+    LAUNCH_FUNCTION_ID,
+    RERUN_FUNCTION_ID,
+    RUN_ACTION_FUNCTION_ID,
     SETTINGS_CHANGED_FUNCTION_ID,
     "runConfig.selectJava",
 ];
@@ -78,8 +103,9 @@ pub const KEY_OPERATIONS: &[&str] = &[
 ///
 /// A function can only be suppressed once it is registered, so the successes
 /// of the functions outside [`KEY_OPERATIONS`] are suppressed after the
-/// registration loop. `languageImport.settingsChanged` is registered after
-/// that loop and is a key operation, so it needs no suppression.
+/// registration loop. `languageImport.settingsChanged` and
+/// `java.resolveLaunch` are registered after that loop and are key
+/// operations, so they need no suppression.
 ///
 /// Every input is a compile-time constant, so the result is the same on each
 /// run: it fails only when a function ID is invalid, repeated or over the
@@ -120,9 +146,69 @@ pub fn backend() -> Result<Backend, SdkError> {
             Ok(())
         }
     })?;
-    backend.function(SETTINGS_CHANGED_FUNCTION_ID, move |params, context| {
-        settings_changed(&session, params, context)
+    backend.function(SETTINGS_CHANGED_FUNCTION_ID, {
+        let session = Arc::clone(&session);
+        move |params, context| settings_changed(&session, params, context)
     })?;
+    backend.function(LAUNCH_FUNCTION_ID, move |params, context| {
+        launch::resolve_launch_function(&session, params, context)
+    })?;
+
+    // The run session registers the editor actions of every workspace context
+    // and keeps the result listener of each test run; both happen outside a
+    // function call, so it holds the backend handle too.
+    let run_session = Arc::new(RunSession::new(backend.handle()));
+    let report: run::Report = {
+        let handle = backend.handle();
+        Arc::new(move |code: &str, count: u64| {
+            let _ = handle
+                .diagnostics()
+                .degraded(NOTIFICATION_OPERATION, code, Some(count));
+        })
+    };
+    backend.on_initialize({
+        let run_session = Arc::clone(&run_session);
+        let report = Arc::clone(&report);
+        move |_initialize| {
+            run_session.sync_after_initialize(Arc::clone(&report));
+            Ok(())
+        }
+    });
+    backend.on_contexts_changed({
+        let run_session = Arc::clone(&run_session);
+        let report = Arc::clone(&report);
+        move |_params| {
+            run_session.sync_contexts_reporting(&*report);
+            Ok(())
+        }
+    });
+    backend.on_host_notification(RUN_DID_EXIT_NOTIFICATION, {
+        let run_session = Arc::clone(&run_session);
+        move |params| {
+            run_session.run_did_exit(&params);
+            Ok(())
+        }
+    })?;
+    backend.on_host_notification(LANGUAGE_SERVER_NOTIFICATION, {
+        let run_session = Arc::clone(&run_session);
+        let report = Arc::clone(&report);
+        move |params| {
+            run_session.did_receive_notification(&params, &*report);
+            Ok(())
+        }
+    })?;
+    backend.function(COLLECT_FUNCTION_ID, run::collect_actions_function)?;
+    backend.suppress_success_diagnostics(COLLECT_FUNCTION_ID)?;
+    backend.function(RUN_ACTION_FUNCTION_ID, {
+        let run_session = Arc::clone(&run_session);
+        move |params, context| run::run_action_function(&run_session, params, context)
+    })?;
+    backend.function(RERUN_FUNCTION_ID, {
+        let run_session = Arc::clone(&run_session);
+        move |params, context| run::rerun_function(&run_session, params, context)
+    })?;
+    backend.function(RESOLVE_LINK_FUNCTION_ID, run::resolve_output_link_function)?;
+    backend.suppress_success_diagnostics(RESOLVE_LINK_FUNCTION_ID)?;
     Ok(backend)
 }
 
@@ -263,9 +349,9 @@ mod tests {
             .all(|code| lithe_plugin_sdk::is_plugin_error_code(code)));
     }
 
-    /// An error code names one cause. The codes `settingsChanged` answers
-    /// with, the domain codes and the diagnostics categories of the settings
-    /// modules must never share a name.
+    /// An error code names one cause. The codes `settingsChanged` and
+    /// `java.resolveLaunch` answer with, the domain codes and the diagnostics
+    /// categories of the settings and launch modules must never share a name.
     #[test]
     fn settings_relay_codes_never_share_a_name_with_another_code() {
         let domain: Vec<&str> = [
@@ -290,6 +376,10 @@ mod tests {
             .iter()
             .chain(settings_session::SESSION_CATEGORIES)
             .chain(plugin_functions::RELAY_CATEGORIES)
+            .chain(launch::LAUNCH_ERROR_CODES)
+            .chain(launch::LAUNCH_CATEGORIES)
+            .chain(run::RUN_ERROR_CODES)
+            .chain(run::RUN_CATEGORIES)
         {
             assert!(seen.insert(*name), "{name} names two causes");
         }
@@ -309,12 +399,19 @@ mod tests {
 
     #[test]
     fn key_operations_are_registered_functions_without_duplicates() {
-        // The commands, and the one function registered next to them.
+        // The commands, and the functions registered next to them.
         let commands: std::collections::BTreeSet<&str> = SUPPORTED_COMMANDS
             .iter()
             .chain(SESSION_COMMANDS)
             .copied()
-            .chain([SETTINGS_CHANGED_FUNCTION_ID])
+            .chain([
+                SETTINGS_CHANGED_FUNCTION_ID,
+                LAUNCH_FUNCTION_ID,
+                COLLECT_FUNCTION_ID,
+                RUN_ACTION_FUNCTION_ID,
+                RERUN_FUNCTION_ID,
+                RESOLVE_LINK_FUNCTION_ID,
+            ])
             .collect();
         let distinct: std::collections::BTreeSet<&str> = KEY_OPERATIONS.iter().copied().collect();
         assert_eq!(

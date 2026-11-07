@@ -18,15 +18,18 @@
 //! plugin configuration of the session, so the backend always sends the
 //! complete merged settings and never a delta.
 //!
-//! # No provider, no push
+//! # Every running server gets a push
 //!
-//! The backend pushes only when at least one provider took part, whether its
-//! answer was usable or not. While the main application still runs its own
-//! Java integration, that integration pushes JDT LS settings itself, and the
-//! plugin's whole-configuration notification would overwrite them. A
-//! workspace without Maven or Gradle plugins must therefore see no change in
-//! behavior, and the push becomes unconditional only when the integration
-//! moves into this plugin.
+//! The backend resolves the JDT LS launch itself ([`crate::launch`]), so no
+//! host integration pushes JDT LS settings any more, and this module is their
+//! only source. Once the collection of a running server finished, the backend
+//! pushes even when no Maven or Gradle plugin took part: the push then
+//! carries the plugin's own settings and the defaults.
+//!
+//! The launch answer's `workspaceConfiguration` and every push are built by
+//! the same function, [`java_configuration`], from the contributions known
+//! at that moment, so the settings JDT LS starts with and the settings a
+//! later `workspace/didChangeConfiguration` carries never disagree in shape.
 //!
 //! # Ordering and locks
 //!
@@ -46,7 +49,7 @@ use crate::plugin_functions::{
     collect_contributions, FunctionRelay, HostRelay, RelayFailure, PROVIDER_TIMEOUT,
     RELAY_KEYS_REJECTED,
 };
-use lithe_java_domain::lsp::languages::jdt::{settings_notification, JdtSettings};
+use lithe_java_domain::lsp::languages::jdt::{settings_notification, JdtJavaRuntime, JdtSettings};
 use lithe_java_domain::lsp::languages::jdt_contributions::{
     accept_answer, AcceptedSettings, Contributions, SETTINGS_CHANGED_FUNCTION,
 };
@@ -118,13 +121,13 @@ pub const SESSION_CATEGORIES: &[&str] = &[
 const NOTIFY_METHOD: &str = "lithe/host/languageServer/notify";
 
 /// Host method that sends a request to a plugin-declared server.
-const REQUEST_METHOD: &str = "lithe/host/languageServer/request";
+pub(crate) const REQUEST_METHOD: &str = "lithe/host/languageServer/request";
 
 /// LSP notification that replaces the plugin configuration of the session.
 const DID_CHANGE_CONFIGURATION: &str = "workspace/didChangeConfiguration";
 
 /// LSP request that runs a server command.
-const EXECUTE_COMMAND: &str = "workspace/executeCommand";
+pub(crate) const EXECUTE_COMMAND: &str = "workspace/executeCommand";
 
 /// What the session needs from the host, behind a trait so tests can script
 /// it. Every failure is the host's answer to one request.
@@ -271,6 +274,10 @@ struct WorkspaceState {
     /// The last applied server event, which orders the next one.
     seen: Option<(u64, ServerPhase)>,
     contributions: Contributions,
+    /// The JDKs the last launch configured for the server, from the tools
+    /// the host resolved; every push repeats them so the server keeps the
+    /// same default runtime the host runs.
+    java_runtimes: Vec<JdtJavaRuntime>,
     /// Project updates waiting for a running server.
     pending_projects: Vec<ProjectProfiles>,
     /// Set from the moment the server is running until its collection is
@@ -286,6 +293,7 @@ impl WorkspaceState {
             context,
             seen: None,
             contributions: Contributions::default(),
+            java_runtimes: Vec::new(),
             pending_projects: Vec::new(),
             collecting: None,
         }
@@ -458,9 +466,12 @@ fn parse_project(entry: &Value) -> Result<ProjectProfiles, String> {
     })
 }
 
-/// The params of the `workspace/didChangeConfiguration` for `fragments`.
-fn configuration_params(fragments: &[Value]) -> Value {
-    settings_notification(JdtSettings {
+/// The JDT LS settings this plugin owns, built from the contributed
+/// `fragments` and the `runtimes` the launch configured. The launch passes
+/// them to `initializationOptions`, and every push sends them, so both start
+/// from this one function.
+pub fn jdt_settings<'a>(fragments: &'a [Value], runtimes: &'a [JdtJavaRuntime]) -> JdtSettings<'a> {
+    JdtSettings {
         // The host overlays its own indexing policy on the plugin
         // configuration it forwards, so the plugin must not compute one.
         indexing_root_uri: None,
@@ -470,15 +481,30 @@ fn configuration_params(fragments: &[Value]) -> Value {
         completion: None,
         import_exclusions: None,
         contributed: fragments,
-        // TODO(host-api: API-23 toolchains.list): the backend has no host
-        // method that lists the JDKs installed on this machine. When API-23
-        // provides one, build the candidates from its answer, pass them
-        // through `jdt_java_runtimes`, and fill this list. JDT LS does not
-        // unregister the VMs it already knows because the key is absent, so
-        // the runtimes stay as the host configured them until then.
-        java_runtimes: &[],
-    })
-    .params
+        // The host sends the installation it resolved for the `java` tool
+        // with the launch (`tools.java`); the launch turns it into the
+        // default runtime so the server compiles for the JDK that runs the
+        // project. Without it the key is absent and JDT LS keeps the VMs it
+        // already knows, so the runtimes stay as the previous launch set them.
+        java_runtimes: runtimes,
+    }
+}
+
+/// The params of the `workspace/didChangeConfiguration` for `fragments`:
+/// `{settings: {java: ...}}`.
+fn configuration_params(fragments: &[Value], runtimes: &[JdtJavaRuntime]) -> Value {
+    settings_notification(jdt_settings(fragments, runtimes)).params
+}
+
+/// The `settings` member of the push params, `{java: ...}`. The launch
+/// answers it as `workspaceConfiguration`; Core serves the server's
+/// `workspace/configuration` requests from it and sends it after
+/// `initialized`, which is exactly what a later push replaces it with.
+pub fn java_configuration(fragments: &[Value], runtimes: &[JdtJavaRuntime]) -> Value {
+    match configuration_params(fragments, runtimes) {
+        Value::Object(mut params) => params.remove("settings").unwrap_or_else(|| json!({})),
+        _ => json!({}),
+    }
 }
 
 /// Locks `mutex` even when a panic poisoned it: the guarded data stays
@@ -514,7 +540,8 @@ impl SettingsSession {
     /// Handles `lithe/host/languageServer/didChangeState`.
     ///
     /// When the `java` server is running, this collects the providers'
-    /// settings and, if any provider took part, pushes the merged result.
+    /// settings and pushes the merged result, which is the plugin's own
+    /// settings when no provider took part.
     /// The call blocks on the host, which is allowed on a notification
     /// thread. `report` receives the categories in [`SESSION_CATEGORIES`] and
     /// [`crate::plugin_functions::RELAY_CATEGORIES`].
@@ -554,7 +581,8 @@ impl SettingsSession {
 
     /// Asks the providers for their settings. `None` when there is nothing to
     /// collect: a remote workspace, or a workspace whose location the host
-    /// would not tell.
+    /// would not tell. The push still follows, with the contributions known
+    /// before.
     fn collect(
         &self,
         workspace: &WorkspaceContext,
@@ -663,10 +691,11 @@ impl SettingsSession {
     /// Sends the merged settings and the pending project updates, if the
     /// workspace is ready for them.
     ///
-    /// Nothing is sent while the server is not running, while the collection
-    /// is still in flight (a push then would carry a partial result), or while
-    /// no provider has taken part. Whatever is not sent stays recorded for a
-    /// later flush.
+    /// Nothing is sent while the server is not running or while the
+    /// collection is still in flight (a push then would carry a partial
+    /// result). Whatever is not sent stays recorded for a later flush. A
+    /// workspace without providers is pushed as well; see the module
+    /// documentation.
     fn flush(&self, key: &str, report: &dyn Fn(&str, u64)) {
         let _delivery = lock(&self.gate);
         let (workspace, params, projects) = {
@@ -674,15 +703,12 @@ impl SettingsSession {
             let Some(state) = states.get_mut(key) else {
                 return;
             };
-            if !state.is_running()
-                || state.collecting.is_some()
-                || !state.contributions.has_providers()
-            {
+            if !state.is_running() || state.collecting.is_some() {
                 return;
             }
             (
                 state.context.clone(),
-                configuration_params(&state.contributions.fragments()),
+                configuration_params(&state.contributions.fragments(), &state.java_runtimes),
                 std::mem::take(&mut state.pending_projects),
             )
         };
@@ -702,6 +728,38 @@ impl SettingsSession {
                 report(SESSION_PROJECT_UPDATE_FAILED, 1);
             }
         }
+    }
+
+    /// The contributed settings fragments known for the workspace
+    /// `context_id`, in the order a push applies them; empty for a workspace
+    /// the session has not seen. The launch builds its startup settings from
+    /// them, so a server that restarts starts with the last pushed settings.
+    pub fn start_fragments(&self, context_id: &str) -> Vec<Value> {
+        self.lock_states()
+            .get(context_id)
+            .map(|state| state.contributions.fragments())
+            .unwrap_or_default()
+    }
+
+    /// Remembers the JDKs a launch of the workspace `workspace` configured,
+    /// so a later push repeats them instead of leaving the server with the
+    /// runtimes of an older launch. A workspace the session has not seen is
+    /// created here, as a later state event would create it.
+    pub fn set_java_runtimes(&self, workspace: &WorkspaceContext, runtimes: Vec<JdtJavaRuntime>) {
+        let mut states = self.lock_states();
+        let state = states
+            .entry(workspace.context_id().to_string())
+            .or_insert_with(|| WorkspaceState::new(workspace.clone()));
+        state.java_runtimes = runtimes;
+    }
+
+    /// The JDKs the last launch of the workspace `context_id` configured;
+    /// empty for a workspace the session has not seen.
+    pub fn java_runtimes(&self, context_id: &str) -> Vec<JdtJavaRuntime> {
+        self.lock_states()
+            .get(context_id)
+            .map(|state| state.java_runtimes.clone())
+            .unwrap_or_default()
     }
 
     /// Puts project updates back in front of the ones that arrived while they
@@ -952,12 +1010,51 @@ mod tests {
     }
 
     #[test]
-    fn no_provider_means_nothing_is_pushed() {
+    fn no_provider_still_pushes_the_plugins_own_settings() {
         let (script, session) = fixture();
         session.did_change_state(&java("running", 1), &quiet);
         // The providers were asked, and none exists.
         assert_eq!(script.provider_calls.load(Ordering::SeqCst), 1);
-        assert!(script.sent().is_empty());
+        // The push is unconditional: it carries the plugin's own settings and
+        // the defaults, and no contributed value.
+        let configurations = script.configurations();
+        assert_eq!(configurations.len(), 1, "{configurations:?}");
+        assert_eq!(
+            configurations[0].pointer("/settings/java/maven/downloadSources"),
+            Some(&json!(false))
+        );
+        assert!(configurations[0]
+            .pointer("/settings/java/import/maven/enabled")
+            .is_none());
+        assert_eq!(configurations[0], configuration_params(&[], &[]));
+    }
+
+    #[test]
+    fn the_startup_configuration_is_what_a_push_sends() {
+        let (script, session) = fixture();
+        // Before the first `running`, the launch sees no contribution.
+        assert!(session.start_fragments(workspace().context_id()).is_empty());
+
+        script.provide(
+            MAVEN,
+            json!({
+                "java.import.maven.enabled": true,
+                "java.configuration.maven.userSettings": "/m/settings.xml",
+            }),
+        );
+        session.did_change_state(&java("running", 1), &quiet);
+        let pushed = script.configurations();
+        assert_eq!(pushed.len(), 1);
+
+        // A restart's launch answers the same settings the last push sent.
+        let fragments = session.start_fragments(workspace().context_id());
+        assert_eq!(fragments.len(), 1);
+        assert_eq!(java_configuration(&fragments, &[]), pushed[0]["settings"]);
+        assert_eq!(
+            java_configuration(&[], &[]),
+            configuration_params(&[], &[])["settings"]
+        );
+        assert!(session.start_fragments("ctx-unknown").is_empty());
     }
 
     #[test]
@@ -1014,8 +1111,8 @@ mod tests {
             params.pointer("/settings/java/import/gradle/offline/enabled"),
             Some(&json!(true))
         );
-        // The defaults stay, and the runtimes key is absent so JDT LS keeps
-        // the VMs it already knows.
+        // The defaults stay, and without a launch that configured runtimes
+        // the key is absent so JDT LS keeps the VMs it already knows.
         assert_eq!(
             params.pointer("/settings/java/maven/downloadSources"),
             Some(&json!(false))
@@ -1026,6 +1123,29 @@ mod tests {
     }
 
     #[test]
+    fn a_push_repeats_the_runtimes_the_launch_configured() {
+        let (script, session) = fixture();
+        let runtimes = vec![JdtJavaRuntime {
+            is_default: true,
+            name: "JavaSE-17".to_string(),
+            path: "/jdk/17".to_string(),
+        }];
+        // The launch runs before the first `running`.
+        session.set_java_runtimes(&workspace(), runtimes.clone());
+        assert_eq!(session.java_runtimes(workspace().context_id()), runtimes);
+        assert!(session.java_runtimes("ctx-unknown").is_empty());
+
+        session.did_change_state(&java("running", 1), &quiet);
+        let pushed = script.configurations();
+        assert_eq!(pushed.len(), 1);
+        assert_eq!(
+            pushed[0].pointer("/settings/java/configuration/runtimes"),
+            Some(&json!([{"name": "JavaSE-17", "path": "/jdk/17", "default": true}]))
+        );
+        assert_eq!(pushed[0], configuration_params(&[], &runtimes));
+    }
+
+    #[test]
     fn a_remote_workspace_is_not_collected() {
         let (script, session) = fixture();
         script.provide(MAVEN, json!({ "java.import.maven.enabled": true }));
@@ -1033,7 +1153,12 @@ mod tests {
         session.did_change_state(&java("running", 1), &quiet);
         assert_eq!(script.root_calls.load(Ordering::SeqCst), 1);
         assert_eq!(script.provider_calls.load(Ordering::SeqCst), 0);
-        assert!(script.sent().is_empty());
+        // The plugin's own settings are still pushed, without a provider's.
+        let configurations = script.configurations();
+        assert_eq!(configurations.len(), 1, "{configurations:?}");
+        assert!(configurations[0]
+            .pointer("/settings/java/import/maven/enabled")
+            .is_none());
     }
 
     #[test]
@@ -1410,7 +1535,13 @@ mod tests {
             [(SESSION_ROOT_UNAVAILABLE.to_string(), 1)]
         );
         assert_eq!(script.provider_calls.load(Ordering::SeqCst), 0);
-        assert!(script.sent().is_empty());
+        // No provider was asked, so the push carries only the plugin's own
+        // settings.
+        let configurations = script.configurations();
+        assert_eq!(configurations.len(), 1, "{configurations:?}");
+        assert!(configurations[0]
+            .pointer("/settings/java/import/maven/enabled")
+            .is_none());
     }
 
     #[test]

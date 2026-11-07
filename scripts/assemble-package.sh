@@ -8,7 +8,7 @@ set -euo pipefail
 # here for the requested architecture and placed where plugin.json's
 # backend.launch.path names it). The third-party inputs are fetched and
 # checksum-verified by the shared prepare scripts; this script only arranges
-# the result in the layout plugin.json declares, plus the icons and template
+# the result in the layout the backend expects (backend/src/launch.rs), plus the icons and template
 # directories of the New Project entries (Java, Spring Boot). The assembled
 # package is read-only at runtime; projects are generated in the user's chosen
 # folder.
@@ -118,13 +118,38 @@ else
 fi
 chmod 755 "$OUTPUT_DIR/$backend_path"
 
-# plugin.json names these files exactly, so a JDT LS upgrade that renames one
-# fails here instead of at the user's first Java file.
-launcher=$(/usr/bin/plutil -extract languageServers.0.launch.entry raw "$PLUGIN_DIR/plugin.json")
-test_runner=$(/usr/bin/plutil -extract languageServers.0.hostIntegration.resources.testRunner raw "$PLUGIN_DIR/plugin.json")
-for declared in "$launcher" "$test_runner" language-server/lombok/lombok.jar "$backend_path"; do
+# The backend resolves the language server launch (plugin.json declares only
+# the function), so the layout it expects is fixed in backend/src/launch.rs
+# and checked here, where a JDT LS upgrade that renames or moves a file fails
+# instead of at the user's first Java file. backend/tests/repository_pins.rs
+# holds this list to the backend's.
+launchers=("$OUTPUT_DIR"/language-server/plugins/org.eclipse.equinox.launcher_*.jar(N))
+(( ${#launchers} == 1 )) || {
+    print -u2 -- "language-server/plugins must hold exactly one org.eclipse.equinox.launcher_*.jar, found ${#launchers}"
+    exit 1
+}
+for declared in \
+    language-server/lombok/lombok.jar \
+    language-server/java-test/runner/com.microsoft.java.test.runner-jar-with-dependencies.jar \
+    "$backend_path"; do
     [[ -f "$OUTPUT_DIR/$declared" ]] || {
-        print -u2 -- "Java Support declares $declared, which the assembled package does not contain. Update io.github.lithe-idea.java-support/plugin.json for the pinned JDT LS version."
+        print -u2 -- "The backend expects $declared, which the assembled package does not contain. Update scripts/prepare-jdtls.sh or backend/src/launch.rs for the pinned JDT LS version."
+        exit 1
+    }
+done
+for directory in language-server/java-debug language-server/java-test/extensions; do
+    [[ -n "$(find "$OUTPUT_DIR/$directory" -maxdepth 1 -name '*.jar' -print -quit 2>/dev/null)" ]] || {
+        print -u2 -- "extension bundle directory $directory holds no bundles"
+        exit 1
+    }
+done
+for runtime_arch in "${runtime_architectures[@]}"; do
+    [[ -f "$OUTPUT_DIR/language-server/configuration/$runtime_arch/config.ini" ]] || {
+        print -u2 -- "missing language-server/configuration/$runtime_arch/config.ini"
+        exit 1
+    }
+    [[ -x "$OUTPUT_DIR/runtime/$runtime_arch/bin/java" ]] || {
+        print -u2 -- "missing runtime/$runtime_arch/bin/java"
         exit 1
     }
 done
