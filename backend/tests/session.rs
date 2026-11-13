@@ -89,15 +89,15 @@ impl Host {
     }
 
     /// Sends `initialize` as a host that offers plugin functions and
-    /// `litheLogging` 1, and returns the answer.
+    /// `litheLogging` 0, and returns the answer.
     fn initialize(&mut self) -> Value {
         self.request(
             0,
             "initialize",
             json!({"rootUri": "file:///tmp/state/", "capabilities": {
                 "experimental": {
-                    "litheFunctions": {"versions": [1]},
-                    "litheLogging": {"versions": [1]}
+                    "litheFunctions": {"versions": [0]},
+                    "litheLogging": {"versions": [0]}
                 }
             }}),
         );
@@ -138,7 +138,7 @@ fn the_backend_offers_the_java_commands_as_plugin_functions() {
     assert!(encoded.contains("java.className"), "{encoded}");
     assert!(encoded.contains("runConfig.selectJava"), "{encoded}");
     assert_eq!(
-        initialized["result"]["capabilities"]["experimental"]["litheLogging"]["version"], 1,
+        initialized["result"]["capabilities"]["experimental"]["litheLogging"]["version"], 0,
         "{initialized}"
     );
 
@@ -253,7 +253,7 @@ fn initialize_without_lithe_logging_is_refused() {
         0,
         "initialize",
         json!({"rootUri": "file:///tmp/state/", "capabilities": {
-            "experimental": {"litheFunctions": {"versions": [1]}}
+            "experimental": {"litheFunctions": {"versions": [0]}}
         }}),
     );
     let refused = host.answer(0);

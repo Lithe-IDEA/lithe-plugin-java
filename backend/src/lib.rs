@@ -34,7 +34,7 @@
 //!
 //! # Logging
 //!
-//! The backend reports restricted facts through the SDK's `litheLogging` 1
+//! The backend reports restricted facts through the SDK's `litheLogging` 0
 //! channel; the SDK refuses `initialize` when the host does not offer it. The
 //! SDK reports each function's terminal fact by itself: a failure as
 //! `operationFailed` with the `pluginErrorCode`, a success as
@@ -55,7 +55,7 @@ pub mod settings_session;
 use crate::launch::LAUNCH_FUNCTION_ID;
 use crate::run::{
     RunSession, COLLECT_FUNCTION_ID, LANGUAGE_SERVER_NOTIFICATION, RERUN_FUNCTION_ID,
-    RESOLVE_LINK_FUNCTION_ID, RUN_ACTION_FUNCTION_ID, RUN_DID_EXIT_NOTIFICATION,
+    RUN_ACTION_FUNCTION_ID, RUN_DID_EXIT_NOTIFICATION,
 };
 use crate::settings_session::{
     HostServices, SettingsSession, LANGUAGE_SERVER_STATE_NOTIFICATION, SETTINGS_CHANGED_FUNCTION_ID,
@@ -85,9 +85,8 @@ const NOTIFICATION_OPERATION: &str = "notification";
 /// `java.resolveLaunch` is one too: it runs once per language server start
 /// and its success is the only trace of which package files the server
 /// started from. `java.runAction` and `java.rerun` are key operations
-/// because each is one user click that starts a process; collection and
-/// output link resolution run on every edit and every output line, so their
-/// successes are suppressed.
+/// because each is one user click that starts a process; action collection
+/// runs on edits, so its successes are suppressed.
 pub const KEY_OPERATIONS: &[&str] = &[
     "debug.javaTestLaunch",
     "execution.planLaunchCommand",
@@ -131,8 +130,10 @@ pub fn backend() -> Result<Backend, SdkError> {
     let session = Arc::new(SettingsSession::new(Arc::new(HostServices::new(
         backend.handle(),
     ))));
+    let run_session = Arc::new(RunSession::new(backend.handle(), Arc::clone(&session)));
     let handle = backend.handle();
     backend.on_host_notification(LANGUAGE_SERVER_STATE_NOTIFICATION, {
+        let run_session = Arc::clone(&run_session);
         let session = Arc::clone(&session);
         move |params| {
             // An error from `degraded` only means the arguments were invalid,
@@ -143,6 +144,7 @@ pub fn backend() -> Result<Backend, SdkError> {
                     .degraded(NOTIFICATION_OPERATION, code, Some(count));
             };
             session.did_change_state(&params, &report);
+            run_session.sync_contexts_reporting(&report);
             Ok(())
         }
     })?;
@@ -157,7 +159,6 @@ pub fn backend() -> Result<Backend, SdkError> {
     // The run session registers the editor actions of every workspace context
     // and keeps the result listener of each test run; both happen outside a
     // function call, so it holds the backend handle too.
-    let run_session = Arc::new(RunSession::new(backend.handle()));
     let report: run::Report = {
         let handle = backend.handle();
         Arc::new(move |code: &str, count: u64| {
@@ -207,8 +208,6 @@ pub fn backend() -> Result<Backend, SdkError> {
         let run_session = Arc::clone(&run_session);
         move |params, context| run::rerun_function(&run_session, params, context)
     })?;
-    backend.function(RESOLVE_LINK_FUNCTION_ID, run::resolve_output_link_function)?;
-    backend.suppress_success_diagnostics(RESOLVE_LINK_FUNCTION_ID)?;
     Ok(backend)
 }
 
@@ -410,7 +409,6 @@ mod tests {
                 COLLECT_FUNCTION_ID,
                 RUN_ACTION_FUNCTION_ID,
                 RERUN_FUNCTION_ID,
-                RESOLVE_LINK_FUNCTION_ID,
             ])
             .collect();
         let distinct: std::collections::BTreeSet<&str> = KEY_OPERATIONS.iter().copied().collect();

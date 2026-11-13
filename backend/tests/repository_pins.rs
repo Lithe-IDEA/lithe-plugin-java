@@ -39,21 +39,20 @@ fn text<'a>(value: &'a Value, key: &str) -> &'a str {
 fn cargo_resolves_the_sdk_commit_recorded_in_the_lock() {
     let lock = read_json("sdk.lock.json");
     let repository = text(&lock, "repository");
-    let tag = text(&lock, "tag");
+    let revision = text(&lock, "commit");
     let commit = text(&lock, "commit");
     assert_eq!(commit.len(), 40, "the lock must name a full commit");
-    assert!(text(&lock, "url").starts_with(&format!("{repository}/releases/download/{tag}/")));
-    assert_sha256(text(&lock, "sha256"), "sdk.lock.json sha256");
 
     let manifest = read("backend/Cargo.toml");
-    let dependency = format!(r#"lithe-plugin-sdk = {{ git = "{repository}", tag = "{tag}" }}"#);
+    let dependency =
+        format!(r#"lithe-plugin-sdk = {{ git = "{repository}", rev = "{revision}" }}"#);
     assert!(
         manifest.lines().any(|line| line.trim() == dependency),
         "backend/Cargo.toml must depend on `{dependency}`"
     );
 
     let cargo_lock = read("Cargo.lock");
-    let source = format!(r#"source = "git+{repository}?tag={tag}#{commit}""#);
+    let source = format!(r#"source = "git+{repository}?rev={revision}#{commit}""#);
     let package = cargo_lock
         .split("[[package]]")
         .find(|package| package.contains("name = \"lithe-plugin-sdk\""))
@@ -69,7 +68,7 @@ fn cargo_resolves_the_sdk_commit_recorded_in_the_lock() {
 fn the_manifest_keeps_the_community_identity_and_launches_the_packaged_backend() {
     let manifest = read_json(&format!("{PLUGIN_ID}/plugin.json"));
     assert_eq!(text(&manifest, "id"), PLUGIN_ID);
-    assert_eq!(manifest["schemaVersion"], 2);
+    assert_eq!(manifest["schemaVersion"], 0);
     // Lithe Store lists only unsigned community packages: the vendor is the
     // organization namespace and the package carries no publisher signature,
     // so nothing may require one or ask the host to check it.
@@ -161,15 +160,10 @@ fn language_server_launch_is_resolved_by_the_backend() {
         );
     }
     let requires = &manifest["requires"];
-    assert!(
-        requires["serverProcess"].as_u64().unwrap() >= 3,
-        "backend launch needs serverProcess 3"
-    );
-    assert!(
-        requires["backend"].as_u64().unwrap() >= 2,
-        "resolveParams need backend 2"
-    );
-    assert!(manifest["pluginAPIVersion"].as_u64().unwrap() >= 4);
+    assert!(requires.get("serverProcess").is_none());
+    assert!(requires.get("executableResolution").is_none());
+    assert_eq!(requires["backend"], 0);
+    assert_eq!(manifest["pluginAPIVersion"], 0);
 }
 
 #[test]

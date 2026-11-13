@@ -1,18 +1,18 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 0,
   "id": "io.github.lithe-idea.java-support",
   "displayName": "Java Support",
   "version": "1.1.0",
-  "pluginAPIVersion": 4,
-  "requires": {"backend": 2, "debugAdapters": 3, "languages": 1, "languageServers": 3, "outputLinkMatchers": 1, "pluginFunctions": 1, "serverProcess": 4, "settings": 2, "projectGenerators": 1, "toolDefinitions": 1, "executableResolution": 2},
+  "pluginAPIVersion": 0,
+  "requires": {"backend": 0, "debugAdapters": 0, "languages": 0, "languageServers": 0, "pluginFunctions": 0, "settings": 0, "projectGenerators": 0, "toolDefinitions": 0},
   "requiresTools": ["java"],
   "vendor": {
     "id": "io.github.lithe-idea",
     "displayName": "Lithe Community",
     "signatureRequirement": "none"
   },
-  "permissions": ["backend.launch", "documents.contentProvider", "documents.read", "editor.actions", "languageServer.launch", "languageServer.request", "project.generate", "debug.launch", "debug.attach", "debug.start", "run.start", "window.messages", "workspace.metadata", "workspace.search"],
-  "activationEvents": ["onLanguage:java", "onDebug:java", "onWorkspaceOpen"],
+  "permissions": ["backend.launch", "documents.contentProvider", "documents.read", "editor.actions", "languageServer.launch", "languageServer.request", "project.generate", "debug.launch", "debug.attach", "debug.start", "run.start", "window.messages", "workspace.metadata"],
+  "activationEvents": ["onLanguage:java", "onDebug:java"],
   "toolDefinitions": [
     {
       "id": "java",
@@ -190,13 +190,6 @@
       }
     }
   ],
-  "outputLinkMatchers": [
-    {
-      "id": "stack-frame",
-      "pattern": "at (?P<qualified>[\\w$.]+)\\.[\\w$<>]+\\((?P<file>\\w+\\.java):(?P<line>\\d+)\\)",
-      "resolve": {"function": "java.resolveOutputLink"}
-    }
-  ],
   "settings": [
     {
       "id": "heapMaxMB",
@@ -273,9 +266,9 @@
       "fields": [
         {
           "id": "jdk",
-          "type": "runtime",
+          "type": "tool",
           "title": "JDK",
-          "runtime": "java",
+          "tool": "java",
           "minimumVersion": "11"
         },
         {
@@ -373,10 +366,10 @@
         },
         {
           "id": "jdk",
-          "type": "runtime",
+          "type": "tool",
           "title": "JDK",
           "description": "The JDK the new project uses. It must be at least the Java version below.",
-          "runtime": "java",
+          "tool": "java",
           "minimumVersion": "17"
         },
         {

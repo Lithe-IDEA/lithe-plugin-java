@@ -1,9 +1,6 @@
 {
-  "comment": "Lithe Rust plugin SDK used by backend/. backend/Cargo.toml depends on the git tag; the backend tests require Cargo.lock to resolve exactly this commit, and scripts/verify-sdk-lock.sh --download also checks the published crate archive against sha256.",
-  "version": "0.3.0",
-  "repository": "https://github.com/Lithe-IDEA/lithe-plugin-docs",
-  "tag": "sdk-rust-v0.3.0",
-  "commit": "db17c719bad755b420600c897615c67ed8cab67c",
-  "url": "https://github.com/Lithe-IDEA/lithe-plugin-docs/releases/download/sdk-rust-v0.3.0/lithe-plugin-sdk-rust-0.3.0.crate",
-  "sha256": "5828293d73558fb14dc792f102c1b3cc9133fd220659b26cf17856506dc71bb8"
+  "comment": "SDK 0.4.0 from the exact Core revision used by the Viva integration baseline. No SDK release tag exists yet; Cargo.lock pins the git source.",
+  "version": "0.4.0",
+  "repository": "https://github.com/Lithe-IDEA/Lithe-core-rust",
+  "commit": "65cf82343c5e315aae2e335b2e8f0217b703e89a"
 }

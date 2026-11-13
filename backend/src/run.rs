@@ -25,9 +25,6 @@
 //! 4. A test launch opens one loopback port the Eclipse JUnit runner reports
 //!    to. A listener thread counts the results and shows them in a window
 //!    message; it stops when the host reports `run/didExit`.
-//! 5. The output link matcher of the manifest asks
-//!    [`RESOLVE_LINK_FUNCTION_ID`] to turn a stack frame into a file of the
-//!    workspace.
 //!
 //! # Not yet covered
 //!
@@ -38,7 +35,7 @@
 //!   host's i18n service (API-37).
 
 use crate::launch::{self, TEST_RUNNER};
-use crate::settings_session::{EXECUTE_COMMAND, REQUEST_METHOD, SERVER_ID};
+use crate::settings_session::{SettingsSession, EXECUTE_COMMAND, REQUEST_METHOD, SERVER_ID};
 use lithe_java_domain::debug::java_test_launch;
 use lithe_java_domain::lsp::languages::java_main_methods::{
     java_main_methods_command, normalize_java_main_methods,
@@ -74,10 +71,6 @@ pub const RUN_ACTION_FUNCTION_ID: &str = "java.runAction";
 /// Function the host calls to rerun a finished run; its params are the data
 /// the start passed as `rerun.data`, which are the action's params.
 pub const RERUN_FUNCTION_ID: &str = "java.rerun";
-
-/// Function the manifest's output link matcher names: it maps a stack frame
-/// (`at pkg.Class.method(Class.java:12)`) to a file of the workspace.
-pub const RESOLVE_LINK_FUNCTION_ID: &str = "java.resolveOutputLink";
 
 /// Registration ID of the editor actions binding, the same in each context.
 pub const ACTIONS_BINDING_ID: &str = "javaRunActions";
@@ -117,10 +110,6 @@ const RESOLVE_CLASSPATH_COMMAND: &str = "vscode.java.resolveClasspath";
 /// `vscode.java.buildWorkspace` answer that means the build succeeded.
 const BUILD_SUCCEEDED: i64 = 1;
 
-/// `vscode.java.buildWorkspace` answer that means the build finished with
-/// compile errors; JDT LS still produces class files, so the launch goes on.
-const BUILD_WITH_ERRORS: i64 = 2;
-
 /// Timeout of the JDT LS requests a launch makes; a workspace build may take
 /// a while on a first run.
 const LAUNCH_REQUEST_TIMEOUT_MILLISECONDS: u64 = 120_000;
@@ -131,9 +120,6 @@ const COLLECT_REQUEST_TIMEOUT_MILLISECONDS: u64 = 6_000;
 
 /// Most actions one answer carries; the contract refuses more.
 const MAX_ACTIONS: usize = 1000;
-
-/// Most files `findFiles` returns for one stack frame.
-const LINK_SEARCH_LIMIT: u64 = 50;
 
 /// How long the result listener waits for the test runner to connect before
 /// it gives up on its own; the normal end is the `run/didExit` notification.
@@ -210,6 +196,7 @@ pub const RUN_CATEGORIES: &[&str] = &[
 /// result listener per running test launch. Shared between the functions,
 /// the notification handlers and the listener threads.
 pub struct RunSession {
+    settings: Arc<SettingsSession>,
     handle: BackendHandle,
     registrations: Mutex<HashMap<String, Registration>>,
     listeners: Mutex<HashMap<String, Arc<ResultListener>>>,
@@ -285,9 +272,10 @@ impl Target {
 }
 
 impl RunSession {
-    pub fn new(handle: BackendHandle) -> Self {
+    pub fn new(handle: BackendHandle, settings: Arc<SettingsSession>) -> Self {
         Self {
             handle,
+            settings,
             registrations: Mutex::new(HashMap::new()),
             listeners: Mutex::new(HashMap::new()),
         }
@@ -313,6 +301,9 @@ impl RunSession {
             let Ok(reference) = WorkspaceContext::from_value(context) else {
                 continue;
             };
+            if !self.settings.server_is_running(&reference) {
+                continue;
+            }
             seen.insert(reference.context_id().to_owned());
             if let Some(existing) = registrations.get(reference.context_id()) {
                 if existing.generation == reference.generation() {
@@ -400,18 +391,25 @@ impl RunSession {
             .ok();
     }
 
-    /// Re-registers the actions binding of a context whose language server
-    /// just became ready, so the host collects the actions of the open
-    /// documents again.
-    ///
-    /// The host collects once when a binding is registered and then only on
-    /// edits. The first registration runs right after `initialize`, while JDT
-    /// LS is still starting, so that collection answers no actions; without
-    /// this the gutter stays empty until the user edits the file.
+    /// Refreshes open-document actions after readiness or a JDT project-model
+    /// change. Progressive imports can finish additional modules after
+    /// ServiceReady, so readiness alone is not the last collection boundary.
     pub fn did_receive_notification(&self, params: &Value, report: &dyn Fn(&str, u64)) {
-        let Some(context_id) = service_ready_context(params) else {
+        let Some(context_id) = action_refresh_context(params) else {
             return;
         };
+        let Ok(reference) = WorkspaceContext::from_value(&params["context"]) else {
+            return;
+        };
+        let Some(generation) = params.get("generation").and_then(Value::as_u64) else {
+            return;
+        };
+        if !self
+            .settings
+            .accepts_server_notification(&reference, generation)
+        {
+            return;
+        }
         if let Some(stale) = lock(&self.registrations).remove(&context_id) {
             let _ = stale.subscription.dispose();
         }
@@ -635,6 +633,26 @@ fn start(session: &RunSession, target: &Target, context: &Context) -> Result<Val
     Ok(Value::Null)
 }
 
+// Refuse launching stale bytecode when JDT reports compiler errors.
+fn require_successful_build(build: &Value) -> Result<(), FunctionError> {
+    match build.as_i64() {
+        Some(BUILD_SUCCEEDED) => {}
+        Some(_) => {
+            return Err(failure(
+                RUN_BUILD_FAILED,
+                "The workspace build failed or was cancelled.",
+            ))
+        }
+        None => {
+            return Err(failure(
+                RUN_LANGUAGE_SERVER_FAILED,
+                "The build answered without a result code.",
+            ))
+        }
+    }
+    Ok(())
+}
+
 /// The `java` arguments and working directory of one launch.
 struct Process {
     arguments: Vec<String>,
@@ -669,21 +687,7 @@ fn main_process(
         LAUNCH_REQUEST_TIMEOUT_MILLISECONDS,
     )
     .map_err(language_server_failed)?;
-    match build.as_i64() {
-        Some(BUILD_SUCCEEDED | BUILD_WITH_ERRORS) => {}
-        Some(_) => {
-            return Err(failure(
-                RUN_BUILD_FAILED,
-                "The workspace build failed or was cancelled.",
-            ))
-        }
-        None => {
-            return Err(failure(
-                RUN_LANGUAGE_SERVER_FAILED,
-                "The build answered without a result code.",
-            ))
-        }
-    }
+    require_successful_build(&build)?;
     let classpath = execute_command(
         host,
         reference,
@@ -853,92 +857,6 @@ fn relative_working_directory(root: &Path, working_directory: &str) -> String {
         Ok(relative) => relative.to_string_lossy().into_owned(),
         Err(_) => ".".to_owned(),
     }
-}
-
-/// Resolves a stack frame of the run output to a file of the workspace:
-/// `{groups: {qualified, file, line}}` to `{uri, range}` or `null`.
-pub fn resolve_output_link_function(
-    params: Value,
-    context: &Context,
-) -> Result<Value, FunctionError> {
-    context.check_cancelled()?;
-    let reference = workspace_context(context)?;
-    let group = |name: &str| {
-        params
-            .pointer(&format!("/groups/{name}"))
-            .and_then(Value::as_str)
-    };
-    let Some(file) = group("file").filter(|file| !file.is_empty()) else {
-        return Ok(Value::Null);
-    };
-    let line = group("line")
-        .and_then(|line| line.parse::<u64>().ok())
-        .filter(|line| *line >= 1)
-        .map_or(0, |line| line - 1);
-    let package_directory = group("qualified")
-        .and_then(|qualified| qualified.rsplit_once('.'))
-        .map(|(package, _)| package.replace('.', "/"))
-        .unwrap_or_default();
-    let host = context.host();
-    let workspace = host.workspace().get_context(reference)?;
-    let Some(folders) = workspace.get("folders").and_then(Value::as_array) else {
-        return Ok(Value::Null);
-    };
-    let mut best: Option<(PathBuf, usize)> = None;
-    for folder in folders {
-        let (Some(root_id), Some(root)) = (
-            folder.get("rootID").and_then(Value::as_str),
-            folder.get("path").and_then(Value::as_str),
-        ) else {
-            continue;
-        };
-        let found = host.workspace().find_files(
-            reference,
-            json!({
-                "resource": {"rootID": root_id, "path": ""},
-                "query": file,
-                "limit": LINK_SEARCH_LIMIT,
-            }),
-        )?;
-        for found in found
-            .get("matches")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-        {
-            let Some(path) = found.get("path").and_then(Value::as_str) else {
-                continue;
-            };
-            if Path::new(path)
-                .file_name()
-                .map(|name| name.to_string_lossy())
-                != Some(file.into())
-            {
-                continue;
-            }
-            let expected = format!("{package_directory}/{file}");
-            // A file in the right package directory beats any other file of
-            // the same name; among several, the first keeps the place.
-            let score = if package_directory.is_empty() || path.ends_with(&expected) {
-                2
-            } else {
-                1
-            };
-            if best.as_ref().is_none_or(|(_, current)| score > *current) {
-                best = Some((Path::new(root).join(path), score));
-            }
-        }
-    }
-    Ok(match best {
-        Some((path, _)) => json!({
-            "uri": file_uri(&path),
-            "range": {
-                "start": {"line": line, "character": 0},
-                "end": {"line": line, "character": 0},
-            },
-        }),
-        None => Value::Null,
-    })
 }
 
 /// Counts the results the Eclipse JUnit runner streams to the result port
@@ -1200,17 +1118,27 @@ fn failure(code: &'static str, message: impl Into<String>) -> FunctionError {
     PluginError::new(code, message).into()
 }
 
-/// The context ID of a forwarded `language/status` `ServiceReady` of the
-/// `java` server, `None` for every other notification.
-fn service_ready_context(params: &Value) -> Option<String> {
-    if params.get("serverID").and_then(Value::as_str) != Some(SERVER_ID)
-        || params.get("method").and_then(Value::as_str) != Some(LANGUAGE_STATUS_METHOD)
-        || params
-            .get("params")
-            .and_then(|status| status.get("type"))
-            .and_then(Value::as_str)
-            != Some(SERVICE_READY_TYPE)
-    {
+/// The context of a JDT readiness or project/classpath change. Other semantic
+/// notifications do not invalidate run markers. Accept both upstream enum
+/// names and their published numeric values without inspecting project data.
+fn action_refresh_context(params: &Value) -> Option<String> {
+    if params.get("serverID").and_then(Value::as_str) != Some(SERVER_ID) {
+        return None;
+    }
+    let refresh = match params.get("method").and_then(Value::as_str) {
+        Some(LANGUAGE_STATUS_METHOD) => {
+            params.pointer("/params/type").and_then(Value::as_str) == Some(SERVICE_READY_TYPE)
+        }
+        Some("language/eventNotification") => {
+            let event = &params["params"]["eventType"];
+            matches!(
+                event.as_str(),
+                Some("ClasspathUpdated" | "ProjectsImported" | "ProjectsDeleted")
+            ) || matches!(event.as_u64(), Some(100 | 200 | 210))
+        }
+        _ => false,
+    };
+    if !refresh {
         return None;
     }
     WorkspaceContext::from_value(&params["context"])
@@ -1228,7 +1156,14 @@ mod tests {
     use lithe_java_domain::lsp::languages::JavaRunMarkerStatus;
 
     #[test]
-    fn only_a_service_ready_status_of_the_java_server_names_its_context() {
+    fn compiler_errors_do_not_launch_previous_bytecode() {
+        assert!(require_successful_build(&json!(BUILD_SUCCEEDED)).is_ok());
+        assert!(require_successful_build(&json!(2)).is_err());
+        assert!(require_successful_build(&Value::Null).is_err());
+    }
+
+    #[test]
+    fn a_service_ready_status_of_the_java_server_names_its_context() {
         let ready = json!({
             "context": {"contextID": "ctx-1", "generation": 3},
             "serverID": SERVER_ID,
@@ -1236,7 +1171,7 @@ mod tests {
             "method": LANGUAGE_STATUS_METHOD,
             "params": {"type": SERVICE_READY_TYPE, "message": "ServiceReady"},
         });
-        assert_eq!(service_ready_context(&ready).as_deref(), Some("ctx-1"));
+        assert_eq!(action_refresh_context(&ready).as_deref(), Some("ctx-1"));
         let mut other_server = ready.clone();
         other_server["serverID"] = json!("kotlin");
         let mut other_method = ready.clone();
@@ -1248,7 +1183,30 @@ mod tests {
         let mut no_context = ready.clone();
         no_context.as_object_mut().unwrap().remove("context");
         for value in [other_server, other_method, starting, no_params, no_context] {
-            assert_eq!(service_ready_context(&value), None, "{value}");
+            assert_eq!(action_refresh_context(&value), None, "{value}");
+        }
+    }
+
+    #[test]
+    fn progressive_import_and_classpath_changes_refresh_actions() {
+        for event in [
+            json!("ProjectsImported"),
+            json!("ClasspathUpdated"),
+            json!("ProjectsDeleted"),
+            json!(100),
+            json!(200),
+            json!(210),
+        ] {
+            let notification = json!({
+                "context": {"contextID":"ctx-1", "generation":1},
+                "serverID":SERVER_ID, "generation":1,
+                "method":"language/eventNotification", "params":{"eventType":event, "data":[]},
+            });
+            assert_eq!(
+                action_refresh_context(&notification).as_deref(),
+                Some("ctx-1"),
+                "{event}"
+            );
         }
     }
 
