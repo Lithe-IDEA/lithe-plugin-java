@@ -16,3 +16,7 @@ lithe-java-domain = { path = "../crates/java-domain" }
 # has no release tag yet; sdk.lock.json and Cargo.lock must name the same commit.
 lithe-plugin-sdk = { git = "https://github.com/Lithe-IDEA/Lithe-core-rust", rev = "65cf82343c5e315aae2e335b2e8f0217b703e89a" }
 serde_json.workspace = true
+base64 = "0.22.1"
+zip.workspace = true
+url.workspace = true
+dunce = "1.0.5"

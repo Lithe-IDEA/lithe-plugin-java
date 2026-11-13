@@ -51,7 +51,7 @@ pub fn workspace_relative_path(file: &Path, root: &Path) -> Option<String> {
     let root = normalize(root);
     let relative = file.strip_prefix(&root).ok()?;
     let relative = relative.to_str()?;
-    (!relative.is_empty()).then(|| relative.to_string())
+    (!relative.is_empty()).then(|| relative.replace(std::path::MAIN_SEPARATOR, "/"))
 }
 
 /// Hints for `file`; a file outside the workspace or a failed scan has none.

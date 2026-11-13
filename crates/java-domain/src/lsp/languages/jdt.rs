@@ -471,6 +471,13 @@ pub fn adapt_initialization_options(
         .as_object_mut()
         .expect("the extended capabilities were normalized to an object")
         .insert("classFileContentsSupport".to_string(), Value::Bool(true));
+    // JDT LS 1.61's ProgressReporterManager prefers this public extension
+    // over LSP work-done progress. Its completed jobs reach the plugin through
+    // the already declared language/progressReport notification.
+    extended
+        .as_object_mut()
+        .unwrap()
+        .insert("progressReportProvider".to_string(), Value::Bool(true));
 
     if !java_extension_bundle_paths.is_empty() {
         let bundles = options
@@ -2368,6 +2375,10 @@ mod tests {
         );
         assert_eq!(
             options["extendedClientCapabilities"]["classFileContentsSupport"],
+            true
+        );
+        assert_eq!(
+            options["extendedClientCapabilities"]["progressReportProvider"],
             true
         );
         assert_eq!(

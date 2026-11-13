@@ -24,15 +24,9 @@
 > SDK. Maven and Gradle import settings come from the Maven and Gradle plugins through a function interface that
 > Lithe Core relays between plugins.
 
-> **进行中**：本仓库正在从 Lithe 主仓库拆分出来，目标是 Lithe 宿主（Rust Core 和 macOS 应用）不再包含任何 Java 专属逻辑，
-> Java 的领域规则全部由本插件提供，宿主只提供通用插件接口。插件现在带一个 Rust 后端：`plugin.json` 声明了 `backend` 2，
-> 后端承担 Maven/Gradle 导入设置的中转（见“工作方式”），并解析语言服务器的启动：`plugin.json` 的 `languageServers[0].launch`
-> 是 `kind: "backend"`、函数 `java.resolveLaunch`（`serverProcess` 3），不再有 `hostIntegration`；后端在 `backend/src/launch.rs`
-> 里定位包内的 Equinox 启动器、按架构的配置目录、Lombok 代理、java-debug 与 java-test 扩展包和随包 JDK，拼出 JDT LS 的命令行、
-> 初始化选项和 `language/status` 就绪门。由插件接管运行/调试/测试还在进行，清单见 `MIGRATION.md` 第 6 节和第 10 节。
-> 在宿主去掉内置 Java Support（旧 ID `dev.lithe.plugin.java-support`）之前，本仓库发布的版本标为预发布，原因见 `MIGRATION.md` 第 9 节。
-> Maven Archetype 生成器、Maven 与 Gradle 的项目模板已经移交 lithe-plugin-maven 和 lithe-plugin-gradle；
-> 在这两个插件接手模板之前不要发布本插件的新版本，否则“新建项目”会少掉 Maven 和 Gradle 选项。
+当前源码面向配套 Viva preview，尚未发布。API / 能力与传输版本以 `plugin.json`、`sdk.lock.json`
+和固定 Core 中的[插件资料](https://github.com/Lithe-IDEA/Lithe-core-rust/tree/65cf82343c5e315aae2e335b2e8f0217b703e89a/shared/plugins)为准。
+`MIGRATION.md` 保留迁移历史，不能用其中旧宿主、旧 API 数字推断当前兼容性。
 
 ## 当前 Viva 验证入口
 
@@ -54,11 +48,55 @@ scripts/desktop/desktop-go.sh test ./internal/workbench \
 高频动作收集没有成功 INFO。Debug Stop 同时回收 Run 持有的 JVM。
 
 本轮未验收原生日志窗口、JDT/适配器启动失败或启动中取消，以及所有降级/恢复分支；
-上述集成结果不能替代这些日志验收。生成器、JUnit/TestNG、Spring/MyBatis、Gradle 也未在本轮执行。
+上述集成结果不能替代这些日志验收。生成器、JUnit/TestNG 行内运行器、Spring/MyBatis 未在本轮执行；Gradle 扩展结果见下表。
 
-当前仅在 macOS arm64 的无头 Viva 工作台验证，不能视为原生窗口、Windows/Linux、任意复杂依赖、
-私有仓库或完整传统 Java EE 验收。Windows 包和长 classpath 尾项仍见
-[MIGRATION.md](MIGRATION.md) 与 [#7](https://github.com/Lithe-IDEA/lithe-plugin-java/issues/7)。
+无头工作台结果不能视为原生窗口、Linux、任意复杂依赖、私有仓库或完整传统 Java EE 验收。
+Windows 长 classpath 修复只覆盖 classpath，长 module-path 仍见 [#7](https://github.com/Lithe-IDEA/lithe-plugin-java/issues/7)。
+
+### 本轮扩展验证
+
+macOS arm64 的真实插件与 Viva 无头工作台已覆盖：
+
+| 流程 | 结果与边界 |
+| --- | --- |
+| 普通 Maven + 第三方 JAR | 编译、补全、运行、断点变量、继续/停止、编译错误阻止旧 class |
+| Gradle 7.6.4 Wrapper，两模块，中文空格目录 | Build 模型、compileJava、JDT 补全和同一 Run/Debug 流程；项目使用 Java 8 |
+| 普通源码、外部 JAR、Eclipse 多源码根、Ant 目录 | JDT 编译后核对 major 52，并在 Java 8 实际运行/调试；没有执行 Ant target |
+| Maven WAR / Tomcat 9.0.82 | 真实 JSP scriptlet、EL、JSTL、include HTTP 响应，以及 Servlet 断点/变量；未验收 JSP 源码补全或 JSP 断点 |
+| Commons Text 1.9，`cb85bed468e99d34b88d0c81fe20eb3b1615660e` | 原 POM 不变，加入带许可证的 API 验证入口，Maven/补全/运行/断点/继续停止通过，36.25 秒 |
+
+Windows 验证结果随原生报告另行记录，不能由上述 macOS 结果推断。ARM Windows 虚拟机上的 x64 工具经过系统仿真，耗时不能当成原生 AMD64 性能。
+原生窗口、导航/虚拟源码、JUnit/TestNG 行内运行器、Spring/MyBatis、日志窗口、启动中取消和每一种失败恢复仍未完整验收。
+
+当前真实旧项目限制：
+
+- Lanterna 3.1.1 原多版本 JAR 配置：项目 JDK 11 下 Maven/补全通过，JDT 要求启用 release，运行前构建失败，见 [#1882](https://github.com/1lck/Lithe-IDEA/issues/1882)。
+- JSQLParser 3.0：Maven 已生成 JavaCC 源码，JDT 模型仍缺相关类型，Run/Debug 未通过，见 [#1881](https://github.com/1lck/Lithe-IDEA/issues/1881)。
+- jOOL 0.9.14 的 Java 8 子项目：Maven compile/补全通过，ECJ 的泛型捕获转换报错，不能算完整支持，见 [#1883](https://github.com/1lck/Lithe-IDEA/issues/1883)。
+
+固定同一 Viva 测试二进制、Core、Java 17 和工程，关闭虚拟机，按 AB/BA 交错运行六对原始/最终真实 ZIP：12 轮全部通过。
+中位数如下；Maven 依赖与系统文件缓存保留，每轮重新安装插件并新建工作区。
+
+| 指标 | 原始 ZIP | 最终 ZIP | benchstat |
+| --- | ---: | ---: | --- |
+| 打开 Java 文件到动作可用 | 6.493 s | 6.421 s | 无显著差异，p=0.394 |
+| 首次补全 | 75.98 ms | 74.46 ms | 无显著差异，p=0.699 |
+| 热补全（每轮 12 次的中位数） | 11.76 ms | 11.87 ms | 无显著差异，p=1.000 |
+| JDT 就绪后 RSS | 793.25 MiB | 793.79 MiB | 无显著差异，p=0.589 |
+| JDT 流程结束 RSS | 816.13 MiB | 817.40 MiB | 无显著差异，p=0.699 |
+
+Windows x64 在 ARM Windows 11 虚拟机中验证：Maven 64.77 秒、Gradle 104.91 秒（含真实配置回读且中转无超时）；
+其他同一修复链路的原生结果含普通源码 52.80 秒、外部 JAR 49.46 秒、Ant 布局 55.70 秒、Eclipse 多源码根 47.11 秒、
+长 classpath 48.70 秒、JSP/Servlet 74.70 秒。它们覆盖同一补全/运行/调试/停止/拒绝旧 class 流程，安装包哈希不变。
+Windows 的三个通用工具入口单元回归与 Java 8 配置后端测试也通过。虚拟机已关闭。
+这些结果不代表原生窗口、安装器、签名、ARM64 发布包或持续压力测试验收。
+
+Java 工具定义的 JAR 入口模板由 Core 的既有工具规划接口实例化；宿主先验证包内入口路径。
+Gradle 后端只提供自己的堆选项，`-jar` 与入口位置来自 Java 插件的工具定义，裸 JVM 参数的 Run/JDT 启动保持原有流程。
+配套 Viva 必须包含工具入口接线；只有构建任务成功不能证明配置后端正常，真实回读与中转检查不可省略。
+
+GC 和初始堆的隔离试验没有获得可靠收益，因此保留 Parallel GC、Xms256m / Xmx2048m；没有提交试验用 G1/Serial/ZGC 或 JDT 1.63 / Java 25 包。
+内存报告中的 JDT 进程树 RSS 是观测时点，不是峰值、PSS 或原生客户端总内存，不能把测试驱动内存变化说成产品内存下降。
 
 ### 旧项目兼容性边界
 
@@ -131,31 +169,18 @@ Spring/MyBatis 等既有能力不属于本轮 Maven 验收范围。
 
 ## 工作方式
 
-- **领域规则**在 `crates/java-domain`，不依赖宿主：命令的 JSON 载荷和错误码与主仓库 Core 一一对应。
-  所有宿主差异（存储、Git、语言服务器通道）都是带 `TODO(host-api: API-NN)` 的占位；日志已接入宿主统一日志，见“日志”一节。
-- **插件后端**在 `backend/`：基于固定版本的 Rust SDK（`sdk.lock.json`），把每条领域命令注册为同名插件函数，
-  并带着跨插件函数的调用方与导出方两侧。`plugin.json` 用 `backend.launch`（`kind: "packaged"`，路径 `bin/lithe-java-backend`）声明它，
-  打包脚本把按架构编译好的二进制放进包的 `bin/`。后端是全机一个进程，所有工作区共享。
-- **设置中转**（Maven/Gradle 导入设置到 JDT LS）：
-  - 调用方向：宿主通知 `lithe/host/languageServer/didChangeState` 说某个工作区的 Java 语言服务器进入 `running` 后，后端通过 Core 中转发现所有导出
-    `languageImport.settings` 的插件（Maven、Gradle），逐个调用，只接受落在 JDT LS 导入设置命名空间里的键，合并后用
-    `languageServer/notify` 向语言服务器推送 `workspace/didChangeConfiguration`。语言服务器重启（代号变化）后会重新收集。
-  - 导出方向：Maven/Gradle 设置变化时调用 Java 导出的 `languageImport.settingsChanged`（`context: "workspace"`）。后端按 Core 写入的调用方插件 ID
-    **整份替换**该调用方自己的槽位，不会影响别的提供方；调用里可以附带 `projects`（`{projectUri, selectedProfiles}`），
-    后端据此向 JDT LS 发 `java.project.updateSettings`，应用 Maven profiles。Java 不会反过来调用正在调用它的插件，否则调用链会被 Core 当作环路拒绝。
-  - 过渡规则：没有任何提供方时后端什么都不推送，主仓库 jdt 宿主集成推送的设置保持生效；后端的整份替换只在至少有一个提供方参与后才发生。
-  - 清单声明：`requires.backend: 2`、`pluginFunctions: 1`、`languageServers: 3`；`pluginFunctions.calls` 为 `languageImport.settings`，
-    `exports` 为 `languageImport.settingsChanged`；权限 `backend.launch`、`languageServer.request`、`workspace.metadata`；
-    语言服务器声明 `requestMethods: ["workspace/executeCommand"]` 和 `commands: ["java.project.updateSettings"]`；激活事件 `onWorkspaceOpen`，
-    这样打开工作区时后端就会启动，Maven/Gradle 才能随时调用它。
-  - 当前不推送 `java.configuration.runtimes`：插件后端还没有列出 JDK 安装的宿主方法，等 API-23（`toolchains.list`）提供。JDT LS 不会因为缺这个键而删除已登记的 VM。
-
-  细节见 `MIGRATION.md` 第 5 节。
-- **运行/调试/测试**在 `backend/src/run.rs`：用宿主的编辑器动作（`editor/registerActions`）提供行内 Run/Debug 标记，
-  用 `run/start` 启动进程（进程用清单 `requiresTools: ["java"]` 引用的 JDK 工具定义），测试结果由后端自己在回环端口上监听
-  JUnit 运行器并用窗口消息显示，输出链接匹配器把堆栈行解析成工作区文件。细节见 `MIGRATION.md` 第 5.9 节。
-- **运行时只读**：插件包安装后在运行时只读。JDT LS、Lombok、java-debug、测试运行器、JDK 和后端二进制都在构建阶段固定来源、校验哈希（或由锁定的源码编译）后放进包里，
-  运行时状态只写宿主提供的状态目录，不写包目录。
+- Java 专属的 URI、JDT 初始化、编译/运行/调试和长 classpath 规划属于本插件及成熟上游；宿主只提供通用服务。
+  Maven / Gradle 自己解析配置，通过 `languageImport.settings` 接口提供 JDT 导入设置，Java 不维护第二套构建模型。
+- `backend/src/launch.rs` 定位已打包的 JDT、Lombok、java-debug、java-test 和运行语言服务器的 JDK。
+  宿主传入用户所选项目 JDK 的安装事实，插件据此设置 JDT 运行时；随包 JDK 不代替项目的目标版本。
+- 初始化就绪不等于索引完成。JDT 公开的 `progressReportProvider` 扩展将完成事件发到已声明的
+  `language/progressReport` 通道。只有动作查询发生瞬态失败才在完成边界刷新；同时处理完成与超时倒序，
+  每个失败周期最多自动刷新三次，成功重置预算，工作区/服务器代际隔离旧结果，关闭后删除状态。不增加空闲轮询。
+- Windows 使用原生 `java.exe`，文件 URI 由 `url` crate 处理，包路径通过 `dunce` 去除可安全简化的 verbatim 前缀，
+  避免 Lombok 的 `-javaagent` 加载失败。过长 classpath 复用领域层的 manifest JAR 规划，适用于 Java 8 及更新版本；
+  ASCII 百分号编码覆盖中文/空格，宿主写入临时 JAR 并在运行结束删除。长 module-path 尚未覆盖。
+- 已安装插件包始终只读。JDT 配置副本、索引、日志、锁和临时文件写到宿主提供的用户状态/缓存/临时目录；
+  插件包、app bundle 和 Windows 安装目录不作为可写目标。构建期固定来源、校验资源哈希，运行期不下载。
 
 ## 日志
 
@@ -176,8 +201,9 @@ Spring/MyBatis 等既有能力不属于本轮 Maven 验收范围。
 | 列出 `languageImport.settings` 提供方失败、单个提供方失败或超时、答复不可用、答复含越界键、提供方导出的函数版本不符 | WARN（`degraded`） | `backend/src/plugin_functions.rs` | 类别 `relay.providers_unavailable`、`relay.provider_failed`、`relay.provider_timed_out`、`relay.settings_rejected`、`relay.keys_rejected`、`relay.provider_version_mismatch`，计数；不含提供方 ID |
 | 取不到工作区根目录、设置推给 JDT LS 失败、单个工程的 profiles 更新失败、语言服务器状态通知格式不对 | WARN（`degraded`） | `backend/src/settings_session.rs` | 类别 `session.root_unavailable`、`session.push_failed`、`session.project_update_failed`、`session.state_invalid`，计数；操作 ID 为 `notification`（状态通知触发）或 `languageImport.settingsChanged` |
 | 插件存储清理失败 | WARN（`degraded`） | `crates/java-domain/src/host/diagnostics.rs`（`host::diagnostics`） | 类别 `storage.cleanup_failed.<阶段>`（阶段为 `jdt-configuration`、`jdt-settings`、`java-argfile-remove`），计数 |
-| 运行动作失败 | ERROR | SDK 自动 | `backend/src/run.rs` 的 `RUN_ERROR_CODES`：`run.invalid_params`、`run.context_missing`、`run.workspace_unavailable`、`run.language_server_failed`、`run.build_failed`、`run.no_tests`、`run.port_unavailable`、`run.host_rejected` |
+| 运行动作失败 | ERROR | SDK 自动 | `backend/src/run.rs` 的 `RUN_ERROR_CODES`：`run.invalid_params`、`run.context_missing`、`run.workspace_unavailable`、`run.language_server_failed`、`run.build_failed`、`run.no_tests`、`run.port_unavailable`、`run.host_rejected`、`run.classpath_failed` |
 | 动作注册、上下文读取或测试结果摘要降级 | WARN | SDK `degraded` | `RUN_CATEGORIES`：`run.actions_registration_failed`、`run.contexts_unavailable`、`run.result_summary_failed` |
+| 冷索引动作查询延迟/恢复、自动刷新耗尽 | WARN | SDK `degraded` / `recovered` | `run.actions_query_deferred`、`run.actions_query_exhausted`、`run.actions_progress_limit`，每个失败周期记录延迟及恢复/耗尽，不含工作区内容 |
 | 宿主启动 JDT LS、java-debug、项目 JVM | 宿主决定 | 声明式贡献/Run 生命周期 | 插件不重复发送启动终态；上游 stderr 由宿主按 DEBUG 接收 |
 | JDT LS 自身日志 | 上游，默认 WARNING | `plugin.json` 的 `-Dosgi.logfile=${logDir}/jdt.log` | 只写宿主提供的会话日志目录，单文件 1 MB、保留 2 个备份；用户可在设置里调 `logLevel` |
 
@@ -187,16 +213,10 @@ Rust 后端的通道是 `plugins/io.github.lithe-idea.java-support/host`；JDT L
 
 ## 安装
 
-Lithe 不再区分官方插件和普通插件，所有插件都按普通插件处理：本插件不带发布者签名（`plugin.json` 的 `vendor.signatureRequirement` 为 `none`）。
-区别只在 [Lithe Store](https://github.com/Lithe-IDEA/Lithe-store) 怎样收录：Lithe-IDEA 组织里 `lithe-plugin-*` 仓库的稳定版（非预发布）
-GitHub Release 由商店机器人自动跟踪并上架；组织之外的插件向 Lithe-store 提交 pull request，维护者审核后上架。
-
-目前本仓库只发布预发布版，商店机器人会跳过，所以还不能从 Lithe Store 安装。当前版本的 Lithe 也会拒绝或无法完整运行这个包：
-本包声明了 `backend` 2、`languageServers` 3（插件自有语言服务器会话）和 `pluginFunctions` 1，宿主要包含主仓库的
-[#1745](https://github.com/1lck/Lithe-IDEA/pull/1745)、[#1746](https://github.com/1lck/Lithe-IDEA/pull/1746) 之后的预览版才提供它们，稳定版还没有；
-此外 Lithe 仍然内置旧 ID `dev.lithe.plugin.java-support` 的 Java Support。
-（普通插件使用 JDT 宿主集成和短工具 ID `java` 的限制已由主仓库 [#1763](https://github.com/1lck/Lithe-IDEA/pull/1763) 取消。）
-具体原因和转为正式发布的条件见 `MIGRATION.md` 第 9 节。下载的 ZIP 通过 **设置 → 插件** 的 ⚙ 菜单 → **从磁盘安装插件…** 安装。
+本分支需要包含配套接线修复的 Viva preview。使用真实 ZIP 从客户端的插件安装入口安装，
+同时安装兼容当前契约的 Maven / Gradle 插件。本轮使用 Maven 已发布的 `v0.0.1` 预发布包，
+Gradle 使用未发布的 `1.0.0` 开发包；不能用旧稳定宿主的安装要求推断兼容性。
+目前没有发布新 Release、tag 或更新市场条目。
 
 ## 开发
 
@@ -224,7 +244,7 @@ cargo test --workspace --locked
 scripts/verify-sdk-lock.sh
 ```
 
-所有测试都是有界、确定性的：不联网，不读全局时间，不占固定端口。
+Rust 单元测试使用有界资源；真实 Viva 集成测试需要显式 ZIP、JDK、构建工具输入，外部依赖首次解析可能联网，不属于离线单元测试。
 
 构建并归档插件包（会下载并校验 JDT LS 与 JDK，体积较大）。本地开发、CI 和发布使用同一组命令，产出同一种归档：
 
@@ -238,27 +258,24 @@ scripts/archive-package.sh --package <上一步打印的目录> --arch arm64   #
 包里不能有 `lithe-plugin-signature.json`，`bin/` 里只能有 `backend.launch.path` 指向的后端二进制，它必须可执行且包含请求的架构（`lipo -archs`），
 并检查打包的 JDK 保留着上游的 Apple 代码签名。归档不需要签名密钥，也不调用任何签名工具。
 
-`plugin.json` 的完整格式见 lithe-plugin-docs 里的
-[插件契约](https://github.com/Lithe-IDEA/lithe-plugin-docs/blob/main/contract/v1/README.md)。
+`plugin.json` 的完整格式只在固定 Core 的 `shared/plugins/contract/v1/`，不在本仓库维护副本。
+
+### Windows 开发包
+
+在 Windows 从同一源码以 `--locked` 编译 x64 后端后，可在 macOS 组装用于原生验证的包：
+
+```sh
+node scripts/package/build-windows.mjs /path/to/lithe-java-backend.exe
+```
+
+脚本验证 x64 PE 与锁定 JDK 的 SHA-256，复用 JDT 构建入口，写入 `.artifacts/` 并清理组装临时目录。
+这是开发验证入口，不是 Windows 正式签名、安装器或发布工作流，也不能代替 Windows 运行验收。
 
 ## 发布新版本
 
-1. 修改 `io.github.lithe-idea.java-support/plugin.json` 的 `version`，合入 `main`。
-2. 推送同名标签（带 `v` 前缀，必须等于清单版本）：
-
-   ```bash
-   git tag v1.2.0 && git push origin v1.2.0
-   ```
-
-3. `Release` 工作流先在 Ubuntu 上跑 Rust 检查，再在 macOS 上构建、校验并归档 arm64 与 x86_64 两个包，然后发布。
-   发布资产是 `Lithe-Java-Support-<版本>-darwin-{arm64,x64}.zip` 和对应的 `.sha256`。没有任何步骤读取签名密钥，包也不带发布者签名。
-4. 发布保持为预发布（`--prerelease`）：Lithe Store 的自动跟踪会跳过预发布，原因有三个。一是目前的 Lithe 仍然内置旧 ID 的 Java Support；
-   二是包声明了 `backend` 2、`languageServers` 3、`pluginFunctions` 1，后端链接的 Rust SDK 0.3.0（插件函数协议 4）还要求宿主提供 `litheLogging` 1，
-   需要包含主仓库 #1745、#1746 的预览版，稳定版还没有；
-   三是 Maven 与 Gradle 的新建项目模板已经移交 lithe-plugin-maven 和 lithe-plugin-gradle，这两个插件接手之前发布新版本，
-   “新建项目”会少掉 Maven 和 Gradle 选项，所以**在它们接手模板之前不要发布本插件的新版本**。
-   等 Lithe 主仓库的阶段 E 完成（`MIGRATION.md` 第 8.2 节）、Lithe 稳定版提供上述接口、两个构建插件发布后，去掉 `--prerelease`，
-   商店就会自动上架稳定版。细节见 `MIGRATION.md` 第 9 节。
+构建和发布由现有工作流执行，正式发布前按 Lithe 的版本规则决定版本并核验兼容宿主。
+当前依赖 Viva preview，只能作为预发布；Windows 开发包尚未接入发布工作流。
+不得覆盖已发布 ZIP，也不得将本地隔离试验的 JDT/JDK 资源当作生产升级：本轮生产仍固定 JDT LS 1.61 和 Temurin 21。
 
 ## 许可
 

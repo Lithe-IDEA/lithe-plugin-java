@@ -198,7 +198,10 @@ pub fn backend() -> Result<Backend, SdkError> {
             Ok(())
         }
     })?;
-    backend.function(COLLECT_FUNCTION_ID, run::collect_actions_function)?;
+    backend.function(COLLECT_FUNCTION_ID, {
+        let run_session = Arc::clone(&run_session);
+        move |params, context| run::collect_actions_function(&run_session, params, context)
+    })?;
     backend.suppress_success_diagnostics(COLLECT_FUNCTION_ID)?;
     backend.function(RUN_ACTION_FUNCTION_ID, {
         let run_session = Arc::clone(&run_session);
