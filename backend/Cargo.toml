@@ -12,8 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 lithe-java-domain = { path = "../crates/java-domain" }
-# Pinned to the published Rust SDK release; ../sdk.lock.json records the
-# matching commit, crate archive and SHA-256; scripts/verify-sdk-lock.sh
-# checks that Cargo.lock resolved this exact commit.
-lithe-plugin-sdk = { git = "https://github.com/Lithe-IDEA/lithe-plugin-docs", tag = "sdk-rust-v0.3.0" }
+# SDK source is pinned to the Viva baseline's exact Core commit. SDK 0.4.0
+# has no release tag yet; sdk.lock.json and Cargo.lock must name the same commit.
+lithe-plugin-sdk = { git = "https://github.com/Lithe-IDEA/Lithe-core-rust", rev = "65cf82343c5e315aae2e335b2e8f0217b703e89a" }
 serde_json.workspace = true

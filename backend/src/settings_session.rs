@@ -533,6 +533,15 @@ impl SettingsSession {
         }
     }
 
+    /// Action collection must not call JDT before its authoritative running event.
+    pub(crate) fn server_is_running(&self, context: &WorkspaceContext) -> bool {
+        self.lock_states()
+            .get(context.context_id())
+            .is_some_and(|state| {
+                state.context.generation() == context.generation() && state.is_running()
+            })
+    }
+
     fn lock_states(&self) -> MutexGuard<'_, HashMap<String, WorkspaceState>> {
         lock(&self.states)
     }
@@ -983,6 +992,23 @@ mod tests {
 
     fn enabled(value: bool) -> Value {
         json!({ "settings": { "java.import.maven.enabled": value } })
+    }
+
+    #[test]
+    fn actions_wait_for_running_and_ignore_late_events_after_stop() {
+        let (_script, session) = fixture();
+        assert!(!session.server_is_running(&workspace()));
+        session.did_change_state(&java("starting", 1), &quiet);
+        assert!(!session.server_is_running(&workspace()));
+        session.did_change_state(&java("running", 1), &quiet);
+        assert!(session.server_is_running(&workspace()));
+        session.did_change_state(&java("stopped", 1), &quiet);
+        session.did_change_state(&java("running", 1), &quiet);
+        assert!(!session.server_is_running(&workspace()));
+        session.did_change_state(&java("running", 2), &quiet);
+        assert!(session.server_is_running(&workspace()));
+        let replaced = WorkspaceContext::new("ctx-1", 2).unwrap();
+        assert!(!session.server_is_running(&replaced));
     }
 
     #[test]

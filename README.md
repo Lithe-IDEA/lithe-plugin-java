@@ -1,5 +1,15 @@
 # Java Support for Lithe
 
+> **Viva 最小 Maven 工作流（本地验证，尚未发布）**：清单已迁到当前契约 0，后端使用 Core
+> `65cf82343c5e315aae2e335b2e8f0217b703e89a` 中的 Rust SDK 0.4.0（尚无对应发布标签）。
+> 本轮验证含第三方 JAR 依赖的普通 Maven 工程：JDT 补全、Maven 编译、main 运行和断点调试，包含变量读取、继续和退出。
+> 需要同时包含 Lithe 客户端的动作注册解码、动作刷新与首次调试加载修复；未修改这些行为的旧 preview 不能直接使用本包。
+> 插件只在 Java 文件/调试被使用时激活，不再在打开任何工作区时启动。
+> 运行动作等到 JDT 就绪才注册，复用设置会话已有的代际保护；编译报错时拒绝启动旧 class。
+> 当前宿主未提供 `workspace/findFiles`，因此暂不提供控制台堆栈链接，不申请无效的搜索权限。
+> 下文旧客户端/API 版本与发布说明是历史背景，不代表当前 Viva 已验收。
+
+
 [Lithe](https://github.com/1lck/Lithe-IDEA) 的 Java 插件（`io.github.lithe-idea.java-support`）：
 打包 Eclipse JDT Language Server、Lombok、java-debug、vscode-java-test 运行器和每个架构一份 Temurin JDK，
 为 Java 项目提供补全、诊断、导航、运行/调试入口、测试运行和 Spring Boot / MyBatis 索引。
@@ -22,12 +32,86 @@
 > Maven Archetype 生成器、Maven 与 Gradle 的项目模板已经移交 lithe-plugin-maven 和 lithe-plugin-gradle；
 > 在这两个插件接手模板之前不要发布本插件的新版本，否则“新建项目”会少掉 Maven 和 Gradle 选项。
 
+## 当前 Viva 验证入口
+
+先用 `scripts/build-package.sh --arch arm64` 与 `scripts/archive-package.sh` 构建真实插件包。
+在包含配套修复的 Lithe 检出中，把 `LITHE_TEST_JAVA_PLUGIN_ARCHIVE` 指向该 ZIP，
+`LITHE_TEST_MAVEN_PLUGIN_ARCHIVE` 指向兼容当前契约的 Maven ZIP，再运行：
+
+```sh
+scripts/desktop/desktop-go.sh test ./internal/workbench \
+  -run '^TestJavaPluginMavenWorkflow$' -v -count=1 -timeout=420s
+```
+
+该显式集成测试使用独立用户存储和真实安装器，不修改用户已安装的插件；每轮创建新的 Maven 工程，
+执行真实 Maven、JDT LS、Java 和 java-debug，断言补全候选、编译产物、第三方 JAR 类路径、输出、断点与局部变量。
+退出通知处理完毕后关闭工作区，核对两个已安装插件的全部文件 SHA-256 不变。
+运行日志由宿主的统一目录事件接收；测试不以模拟语言服务器或调试器代替它们。
+还覆盖再次调试后的主动停止、编译错误阻止旧 class 启动，并直接读取真实 Core 日志事实，
+确认三个运行成功各有 INFO 终态、编译失败只有一个 `run.build_failed` ERROR、操作身份保留，
+高频动作收集没有成功 INFO。Debug Stop 同时回收 Run 持有的 JVM。
+
+本轮未验收原生日志窗口、JDT/适配器启动失败或启动中取消，以及所有降级/恢复分支；
+上述集成结果不能替代这些日志验收。生成器、JUnit/TestNG、Spring/MyBatis、Gradle 也未在本轮执行。
+
+当前仅在 macOS arm64 的无头 Viva 工作台验证，不能视为原生窗口、Windows/Linux、任意复杂依赖、
+私有仓库或完整传统 Java EE 验收。Windows 包和长 classpath 尾项仍见
+[MIGRATION.md](MIGRATION.md) 与 [#7](https://github.com/Lithe-IDEA/lithe-plugin-java/issues/7)。
+
+### 旧项目兼容性边界
+
+Java 8 运行时与 Java 5/7 源码级别是两回事。实测 JDK 8 的 Maven 编译可以生成 major 49/51 的
+class，补全也可用；但包内 ECJ 3.46.100 直接拒绝 `-source 1.5` 与 `-source 1.7`，只接受
+Java 8 及以上。因此当前运行前的 JDT 构建会返回 `run.build_failed`，Java 5/7 原配置的 Run/Debug
+**未跑通**，不能用已有 class 绕过构建失败，也不能把安全拒绝测试通过写成该项目受支持。
+
+客户端的 `TestJavaPluginLegacyWorkflows` 验证 Java 8+ 的旧布局、跨模块依赖、中文空格路径、
+Profile 源码目录、Java 8 JAXB，以及旧 JUnit 的 Maven test goal；
+`TestJavaPluginLegacySourceBoundaries` 单独断言 Java 5/7 的当前限制。Eclipse/Ant 布局通过
+`.project`、`.classpath` 导入并由 JDT 构建，不代表执行了 `build.xml` 的 Ant target。
+JUnit 的 Maven goal 也不代表 Java 插件的每一种行内测试运行器都已验收。
+
+历史项目入口 `TestJavaPluginHistoricalProject` 只修改隔离副本，增加调用真实项目 API 的验证 main。
+`LITHE_TEST_JAVA_HISTORICAL_ROOT` 指向固定 commit，`LITHE_TEST_JAVA_HISTORICAL_PROBE` 提供验证表达式。
+原配置与显式 `LITHE_TEST_JAVA_HISTORICAL_SOURCE=1.8` 的临时 POM 修改必须分开报告；后者不能证明
+原 Java 5 配置可用。Java 8/11 运行时由 `LITHE_TEST_JAVA8_HOME`、`LITHE_TEST_JAVA11_HOME` 提供，测试
+会核对 class 目标版本与实际 JVM，不从 JDT 使用的随包 JDK 推断项目运行时。
+
+正常关闭时宿主仍可能通过 `destroyServer` 的预期拒绝重试等待退出，产生多条 WARN；本轮未观察到
+进程残留，已有独立重构单 [Lithe-IDEA #1860](https://github.com/1lck/Lithe-IDEA/issues/1860)。
+
+2026-11-13 本地结果：最终 arm64 ZIP 连续三轮上述完整流程通过，分别 18.54、18.23、19.20 秒。
+每轮隔离安装和工作区，但 Maven 依赖缓存与系统文件缓存没有清空；这不是首次联网下载或长期压力测试。
+插件 371 项 Rust 测试、客户端全量 Go 测试/`vet`、5 项定向竞态回归通过。
+小工程导入后的 JDT 进程树 RSS 约 0.8 GiB，是单点观测，不是峰值或客户端总内存。
+
+本轮清单的 API 和能力版本均为 0，插件归属仍为社区普通插件。权限用途如下；保留的测试、生成器、
+Spring/MyBatis 等既有能力不属于本轮 Maven 验收范围。
+
+| 权限 | 用途 |
+| --- | --- |
+| `backend.launch` | 启动包内 Rust 后端 |
+| `documents.read` | 读取当前 Java 文档以收集动作 |
+| `documents.contentProvider` | 提供 JDT 虚拟源码 |
+| `editor.actions` | 注册 Run/Debug 行内动作 |
+| `languageServer.launch` | 启动包内 JDT LS |
+| `languageServer.request` | JDT 构建、main、测试、类路径和调试扩展请求 |
+| `project.generate` | 既有 Java/Spring Boot 生成器 |
+| `debug.launch`、`debug.attach`、`debug.start` | 声明 java-debug 适配器并经 Run 工作流发起调试 |
+| `run.start` | 启动用户项目或测试 JVM |
+| `window.messages` | 显示测试结果摘要 |
+| `workspace.metadata` | 取得工作区上下文与宿主提供的状态位置 |
+
+参考资料为上述 Core commit 的 `shared/plugins/contract/v1/` 与 Rust SDK 0.4.0。
+该 commit 的 SDK README/日志指南写有 `sdk-rust-v0.4.0` 发布标签，但远端当时没有这个标签或资产，
+因此依赖固定到同一 Core commit，不把未发布标签当作可下载输入。
+
 ## 功能
 
 | 功能 | 说明 |
 | --- | --- |
 | 语言服务 | 用打包的 JDT LS（含 Lombok）提供补全、诊断、导航；JDK 随包提供，只用来运行语言服务器，项目自己的 SDK 仍由用户选择 |
-| 运行与调试 | 在 `main` 方法和测试旁显示 Run/Debug 行内动作；点击后后端经 JDT LS 构建并解析类路径，用用户选择的 JDK 通过宿主 Run 窗口启动，调试经 java-debug 连接；控制台里的堆栈行可点击跳转 |
+| 运行与调试 | 在 `main` 方法和测试旁显示 Run/Debug 行内动作；点击后后端经 JDT LS 构建并解析类路径，用用户选择的 JDK 通过宿主 Run 窗口启动，调试经 java-debug 连接；当前 Viva 包暂不提供控制台堆栈链接 |
 | 测试 | 发现 JUnit/TestNG 测试项，按类或方法启动 Eclipse JUnit 运行器（TestNG 用 vscode-java-test 运行器），运行结束后显示通过/失败计数 |
 | Spring Boot / MyBatis | 索引 Spring 端点与 MyBatis 映射，支持跳转 |
 | 新建项目 | 两个声明式项目生成器：Java（无构建系统，可选示例代码）、Spring Boot；Maven 原型和 Maven/Gradle 项目模板由 Maven、Gradle 插件提供 |
@@ -63,23 +147,31 @@
 
 ## 日志
 
-后端把日志交给宿主的统一日志 `litheLogging` 1，不写 stderr。函数 ID 都是编译期常量，注册只会因 ID 写错、重复或超出 SDK
+后端把日志交给宿主的统一日志 `litheLogging` 0，不写 stderr。函数 ID 都是编译期常量，注册只会因 ID 写错、重复或超出 SDK
 上限而失败，单元测试 `the_backend_builds_with_every_command_registered` 在 CI 里挡住这种构建；万一发生，进程在握手前以状态 1 退出，
-由宿主记录启动失败（`backend/src/main.rs`）。Rust SDK（0.2.0 起，当前 0.3.0）要求宿主提供 `litheLogging` 1，
-不提供的 Lithe 版本会拒绝启动后端；目前只有 Lithe 最新 `preview` 提供，稳定版还没有。
+由宿主记录启动失败（`backend/src/main.rs`）。当前固定的 Rust SDK 0.4.0 要求宿主提供 `litheLogging` 0，
+不提供的 Lithe 版本会拒绝启动后端；本次只验证上述配套 Viva 检出，尚未发布。
 
 | 事实 | 级别 | 来源 | 内容 |
 | --- | --- | --- | --- |
-| 关键操作成功：`runConfig.selectJava`、`debug.javaTestLaunch`、`execution.planLaunchCommand`、`java.prepareLaunch`、`languageImport.settingsChanged`（`backend/src/lib.rs` 的 `KEY_OPERATIONS`） | INFO | SDK 自动 | 操作 ID、耗时 |
+| 关键操作成功：`runConfig.selectJava`、`debug.javaTestLaunch`、`execution.planLaunchCommand`、`java.prepareLaunch`、`java.resolveLaunch`、`java.runAction`、`java.rerun`、`languageImport.settingsChanged`（`backend/src/lib.rs` 的 `KEY_OPERATIONS`） | INFO | SDK 自动 | 操作 ID、耗时 |
 | 其余函数成功（编辑器驱动或启动时的读取，如 `java.runMarkers`、`java.codeVision`、`spring.index`） | 不记录 | `suppress_success_diagnostics`（`backend/src/lib.rs`） | — |
 | 任一函数失败 | ERROR | SDK 自动 | 类别为 `pluginErrorCode`（如 `java.invalidRequest`；`languageImport.settingsChanged` 的 `relay.caller_missing`、`relay.context_missing`、`relay.invalid_params`）、耗时；不含消息与 `details` |
+| 领域命令失败类别 | ERROR | `plugin_error_code` | `java.invalidRequest`、`java.workspaceNotFound`、`java.permissionDenied`、`java.notSupported`、`java.runtimeMissing`、`java.processStartFailed`、`java.processFailed`、`java.parseFailed`、`java.cancelled`、`java.timedOut`、`java.connectionClosed`、`java.unknown`；SDK 识别的取消不记录 |
+| JDT 启动规划失败 | ERROR | SDK 自动 | `launch.invalid_params`、`launch.package_unavailable`、`launch.resource_missing`、`launch.configuration_failed` |
+| JDT 配置清理或工作区读取降级 | WARN | SDK `degraded` | `launch.configuration_cleanup_failed`、`launch.workspace_folders_unavailable` |
 | 取消 | 不记录 | SDK | — |
 | 列出 `languageImport.settings` 提供方失败、单个提供方失败或超时、答复不可用、答复含越界键、提供方导出的函数版本不符 | WARN（`degraded`） | `backend/src/plugin_functions.rs` | 类别 `relay.providers_unavailable`、`relay.provider_failed`、`relay.provider_timed_out`、`relay.settings_rejected`、`relay.keys_rejected`、`relay.provider_version_mismatch`，计数；不含提供方 ID |
 | 取不到工作区根目录、设置推给 JDT LS 失败、单个工程的 profiles 更新失败、语言服务器状态通知格式不对 | WARN（`degraded`） | `backend/src/settings_session.rs` | 类别 `session.root_unavailable`、`session.push_failed`、`session.project_update_failed`、`session.state_invalid`，计数；操作 ID 为 `notification`（状态通知触发）或 `languageImport.settingsChanged` |
 | 插件存储清理失败 | WARN（`degraded`） | `crates/java-domain/src/host/diagnostics.rs`（`host::diagnostics`） | 类别 `storage.cleanup_failed.<阶段>`（阶段为 `jdt-configuration`、`jdt-settings`、`java-argfile-remove`），计数 |
+| 运行动作失败 | ERROR | SDK 自动 | `backend/src/run.rs` 的 `RUN_ERROR_CODES`：`run.invalid_params`、`run.context_missing`、`run.workspace_unavailable`、`run.language_server_failed`、`run.build_failed`、`run.no_tests`、`run.port_unavailable`、`run.host_rejected` |
+| 动作注册、上下文读取或测试结果摘要降级 | WARN | SDK `degraded` | `RUN_CATEGORIES`：`run.actions_registration_failed`、`run.contexts_unavailable`、`run.result_summary_failed` |
+| 宿主启动 JDT LS、java-debug、项目 JVM | 宿主决定 | 声明式贡献/Run 生命周期 | 插件不重复发送启动终态；上游 stderr 由宿主按 DEBUG 接收 |
 | JDT LS 自身日志 | 上游，默认 WARNING | `plugin.json` 的 `-Dosgi.logfile=${logDir}/jdt.log` | 只写宿主提供的会话日志目录，单文件 1 MB、保留 2 个备份；用户可在设置里调 `logLevel` |
 
 日志事实只带类别、计数和耗时，不含路径、源码、工具输出或用户内容。`${logDir}` 由宿主经可写存储适配器提供，不写插件包或 app bundle。
+Rust 后端的通道是 `plugins/io.github.lithe-idea.java-support/host`；JDT LS、java-debug 与项目 JVM
+分别由宿主的语言服务器、调试和 Run 通道管理。只有 JDT LS 使用原生日志文件。
 
 ## 安装
 
