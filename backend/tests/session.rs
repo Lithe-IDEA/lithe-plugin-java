@@ -89,7 +89,7 @@ impl Host {
     }
 
     /// Sends `initialize` as a host that offers plugin functions and
-    /// `litheLogging` 1, and returns the answer.
+    /// `litheLogging` 0, and returns the answer.
     fn initialize(&mut self) -> Value {
         self.request(
             0,

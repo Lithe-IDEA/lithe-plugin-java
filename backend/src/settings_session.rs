@@ -535,10 +535,26 @@ impl SettingsSession {
 
     /// Action collection must not call JDT before its authoritative running event.
     pub(crate) fn server_is_running(&self, context: &WorkspaceContext) -> bool {
+        self.running_server_generation(context).is_some()
+    }
+
+    /// A delayed notification from a stopped/replaced process cannot refresh
+    /// actions belonging to a new process or a new workspace generation.
+    pub(crate) fn accepts_server_notification(
+        &self,
+        context: &WorkspaceContext,
+        generation: u64,
+    ) -> bool {
+        self.running_server_generation(context) == Some(generation)
+    }
+
+    fn running_server_generation(&self, context: &WorkspaceContext) -> Option<u64> {
         self.lock_states()
             .get(context.context_id())
-            .is_some_and(|state| {
-                state.context.generation() == context.generation() && state.is_running()
+            .filter(|state| state.context.generation() == context.generation())
+            .and_then(|state| match state.seen {
+                Some((generation, ServerPhase::Running)) => Some(generation),
+                _ => None,
             })
     }
 
@@ -1002,13 +1018,17 @@ mod tests {
         assert!(!session.server_is_running(&workspace()));
         session.did_change_state(&java("running", 1), &quiet);
         assert!(session.server_is_running(&workspace()));
+        assert!(session.accepts_server_notification(&workspace(), 1));
         session.did_change_state(&java("stopped", 1), &quiet);
         session.did_change_state(&java("running", 1), &quiet);
         assert!(!session.server_is_running(&workspace()));
         session.did_change_state(&java("running", 2), &quiet);
         assert!(session.server_is_running(&workspace()));
+        assert!(!session.accepts_server_notification(&workspace(), 1));
+        assert!(session.accepts_server_notification(&workspace(), 2));
         let replaced = WorkspaceContext::new("ctx-1", 2).unwrap();
         assert!(!session.server_is_running(&replaced));
+        assert!(!session.accepts_server_notification(&replaced, 2));
     }
 
     #[test]

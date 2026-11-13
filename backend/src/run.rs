@@ -391,18 +391,25 @@ impl RunSession {
             .ok();
     }
 
-    /// Re-registers the actions binding of a context whose language server
-    /// just became ready, so the host collects the actions of the open
-    /// documents again.
-    ///
-    /// The host collects once when a binding is registered and then only on
-    /// edits. The first registration runs right after `initialize`, while JDT
-    /// LS is still starting, so that collection answers no actions; without
-    /// this the gutter stays empty until the user edits the file.
+    /// Refreshes open-document actions after readiness or a JDT project-model
+    /// change. Progressive imports can finish additional modules after
+    /// ServiceReady, so readiness alone is not the last collection boundary.
     pub fn did_receive_notification(&self, params: &Value, report: &dyn Fn(&str, u64)) {
-        let Some(context_id) = service_ready_context(params) else {
+        let Some(context_id) = action_refresh_context(params) else {
             return;
         };
+        let Ok(reference) = WorkspaceContext::from_value(&params["context"]) else {
+            return;
+        };
+        let Some(generation) = params.get("generation").and_then(Value::as_u64) else {
+            return;
+        };
+        if !self
+            .settings
+            .accepts_server_notification(&reference, generation)
+        {
+            return;
+        }
         if let Some(stale) = lock(&self.registrations).remove(&context_id) {
             let _ = stale.subscription.dispose();
         }
@@ -1111,17 +1118,27 @@ fn failure(code: &'static str, message: impl Into<String>) -> FunctionError {
     PluginError::new(code, message).into()
 }
 
-/// The context ID of a forwarded `language/status` `ServiceReady` of the
-/// `java` server, `None` for every other notification.
-fn service_ready_context(params: &Value) -> Option<String> {
-    if params.get("serverID").and_then(Value::as_str) != Some(SERVER_ID)
-        || params.get("method").and_then(Value::as_str) != Some(LANGUAGE_STATUS_METHOD)
-        || params
-            .get("params")
-            .and_then(|status| status.get("type"))
-            .and_then(Value::as_str)
-            != Some(SERVICE_READY_TYPE)
-    {
+/// The context of a JDT readiness or project/classpath change. Other semantic
+/// notifications do not invalidate run markers. Accept both upstream enum
+/// names and their published numeric values without inspecting project data.
+fn action_refresh_context(params: &Value) -> Option<String> {
+    if params.get("serverID").and_then(Value::as_str) != Some(SERVER_ID) {
+        return None;
+    }
+    let refresh = match params.get("method").and_then(Value::as_str) {
+        Some(LANGUAGE_STATUS_METHOD) => {
+            params.pointer("/params/type").and_then(Value::as_str) == Some(SERVICE_READY_TYPE)
+        }
+        Some("language/eventNotification") => {
+            let event = &params["params"]["eventType"];
+            matches!(
+                event.as_str(),
+                Some("ClasspathUpdated" | "ProjectsImported" | "ProjectsDeleted")
+            ) || matches!(event.as_u64(), Some(100 | 200 | 210))
+        }
+        _ => false,
+    };
+    if !refresh {
         return None;
     }
     WorkspaceContext::from_value(&params["context"])
@@ -1146,7 +1163,7 @@ mod tests {
     }
 
     #[test]
-    fn only_a_service_ready_status_of_the_java_server_names_its_context() {
+    fn a_service_ready_status_of_the_java_server_names_its_context() {
         let ready = json!({
             "context": {"contextID": "ctx-1", "generation": 3},
             "serverID": SERVER_ID,
@@ -1154,7 +1171,7 @@ mod tests {
             "method": LANGUAGE_STATUS_METHOD,
             "params": {"type": SERVICE_READY_TYPE, "message": "ServiceReady"},
         });
-        assert_eq!(service_ready_context(&ready).as_deref(), Some("ctx-1"));
+        assert_eq!(action_refresh_context(&ready).as_deref(), Some("ctx-1"));
         let mut other_server = ready.clone();
         other_server["serverID"] = json!("kotlin");
         let mut other_method = ready.clone();
@@ -1166,7 +1183,30 @@ mod tests {
         let mut no_context = ready.clone();
         no_context.as_object_mut().unwrap().remove("context");
         for value in [other_server, other_method, starting, no_params, no_context] {
-            assert_eq!(service_ready_context(&value), None, "{value}");
+            assert_eq!(action_refresh_context(&value), None, "{value}");
+        }
+    }
+
+    #[test]
+    fn progressive_import_and_classpath_changes_refresh_actions() {
+        for event in [
+            json!("ProjectsImported"),
+            json!("ClasspathUpdated"),
+            json!("ProjectsDeleted"),
+            json!(100),
+            json!(200),
+            json!(210),
+        ] {
+            let notification = json!({
+                "context": {"contextID":"ctx-1", "generation":1},
+                "serverID":SERVER_ID, "generation":1,
+                "method":"language/eventNotification", "params":{"eventType":event, "data":[]},
+            });
+            assert_eq!(
+                action_refresh_context(&notification).as_deref(),
+                Some("ctx-1"),
+                "{event}"
+            );
         }
     }
 
