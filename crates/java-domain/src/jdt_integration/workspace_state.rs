@@ -358,7 +358,7 @@ fn io_error(message: &str, error: &io::Error) -> CoreError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs::File;
+
     use std::time::Duration;
 
     struct Fixture {
@@ -377,7 +377,7 @@ mod tests {
             let _ = fs::remove_dir_all(&root);
             let workspace = root.join("workspace");
             let cache = root.join("cache");
-            let bin = root.join("jdtls/bin");
+            let bin = root.join("jdtls").join("bin");
             for directory in [&workspace, &cache, &bin] {
                 fs::create_dir_all(directory).unwrap();
             }
@@ -400,10 +400,11 @@ mod tests {
     }
 
     fn set_modified(path: &Path, seconds: u64) {
-        File::open(path)
-            .unwrap()
-            .set_modified(UNIX_EPOCH + Duration::from_secs(seconds))
-            .unwrap();
+        filetime::set_file_mtime(
+            path,
+            filetime::FileTime::from_unix_time(seconds.try_into().unwrap(), 0),
+        )
+        .unwrap();
     }
 
     #[test]
@@ -519,7 +520,12 @@ mod tests {
         for key in [&expired, &recent, &active] {
             fs::create_dir_all(jdtls.join(key)).unwrap();
         }
+        #[cfg(unix)]
         std::os::unix::fs::symlink(jdtls.join(&recent), jdtls.join(&linked)).unwrap();
+        // A local NTFS junction exercises the alias boundary without requiring
+        // Administrator or Developer Mode merely to run this test.
+        #[cfg(windows)]
+        junction::create(jdtls.join(&recent), jdtls.join(&linked)).unwrap();
         fs::create_dir_all(jdtls.join("not-a-cache-key")).unwrap();
         set_modified(&jdtls.join(&expired), 1_000_000);
         set_modified(&jdtls.join(&recent), 3_999_999);

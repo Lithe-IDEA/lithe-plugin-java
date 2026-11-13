@@ -149,6 +149,8 @@
       "launch": [
         "${executable}",
         "${runtimeArguments}",
+        "-jar",
+        "${entry}",
         "${arguments}"
       ]
     }

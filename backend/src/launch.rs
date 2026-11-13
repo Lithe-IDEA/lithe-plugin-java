@@ -320,17 +320,24 @@ pub fn package_root() -> Result<PathBuf, PluginError> {
     let executable = std::env::current_exe()
         .and_then(fs::canonicalize)
         .map_err(|_| unavailable())?;
-    executable
+    package_root_from_executable(&executable).ok_or_else(unavailable)
+}
+
+// Java instrumentation cannot load -javaagent through a Windows verbatim
+// prefix. Simplify only when an ordinary spelling has the same identity;
+// canonicalization above still owns symlink resolution.
+fn package_root_from_executable(executable: &Path) -> Option<PathBuf> {
+    dunce::simplified(executable)
         .parent()
         .and_then(Path::parent)
         .map(Path::to_path_buf)
-        .ok_or_else(unavailable)
 }
 
 /// The package path of the Java runtime of `architecture`, as the answer's
 /// `executable.path` names it.
 pub fn runtime_executable(architecture: &str) -> String {
-    format!("{RUNTIME_DIRECTORY}/{architecture}/bin/java")
+    let executable = if cfg!(windows) { "java.exe" } else { "java" };
+    format!("{RUNTIME_DIRECTORY}/{architecture}/bin/{executable}")
 }
 
 /// Finds the JDT LS files of `architecture` in the package at `package_root`.
@@ -544,7 +551,7 @@ fn workspace_folders(host: &Host, workspace: &WorkspaceContext) -> Result<Vec<Pa
 /// and reads at most [`TRIGGER_SCAN_ENTRY_BUDGET`] entries. A folder that
 /// cannot be read contributes nothing; JDT LS treats a missing list as
 /// "nothing to import".
-pub fn trigger_files(folders: &[PathBuf]) -> Vec<String> {
+pub fn trigger_files(folders: &[PathBuf]) -> Result<Vec<String>, PluginError> {
     let mut files = Vec::new();
     let mut budget = TRIGGER_SCAN_ENTRY_BUDGET;
     let mut roots: Vec<&PathBuf> = folders.iter().collect();
@@ -563,7 +570,7 @@ pub fn trigger_files(folders: &[PathBuf]) -> Vec<String> {
             let mut subdirectories = Vec::new();
             for entry in entries {
                 if budget == 0 {
-                    return files;
+                    return Ok(files);
                 }
                 budget -= 1;
                 let name = entry.file_name();
@@ -580,16 +587,16 @@ pub fn trigger_files(folders: &[PathBuf]) -> Vec<String> {
                         subdirectories.push((entry.path(), depth + 1));
                     }
                 } else if kind.is_file() && name.ends_with(".java") && !name.starts_with('.') {
-                    files.push(file_uri(&entry.path()));
+                    files.push(file_uri(&entry.path())?);
                     if files.len() >= TRIGGER_FILE_LIMIT {
-                        return files;
+                        return Ok(files);
                     }
                 }
             }
             pending.extend(subdirectories);
         }
     }
-    files
+    Ok(files)
 }
 
 /// Seconds since the Unix epoch; a clock before 1970 counts as 0, which only
@@ -638,7 +645,7 @@ pub fn resolve_launch_function(
         }
         None => (Vec::new(), Vec::new()),
     };
-    let trigger_files = trigger_files(&folders);
+    let trigger_files = trigger_files(&folders)?;
     context.check_cancelled()?;
     let answer = resolve(
         &request,
@@ -655,6 +662,23 @@ pub fn resolve_launch_function(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(windows)]
+    fn package_paths_do_not_break_java_agent_loading() {
+        // Native Windows JDK 21 exits before initialize when -javaagent uses
+        // canonicalize's verbatim prefix, even for a normal local package.
+        let root =
+            package_root_from_executable(Path::new(r"\\?\C:\plugins\Java 支持\bin\backend.exe"))
+                .unwrap();
+        assert_eq!(root, Path::new(r"C:\plugins\Java 支持"));
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn windows_runtime_uses_the_packaged_pe_launcher() {
+        assert_eq!(runtime_executable("x86_64"), "runtime/x86_64/bin/java.exe");
+    }
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::Mutex;
 
@@ -687,8 +711,9 @@ mod tests {
             ] {
                 fs::create_dir_all(package.join(directory)).unwrap();
             }
+            let runtime = runtime_executable("arm64");
             for file in [
-                "runtime/arm64/bin/java",
+                runtime.as_str(),
                 LAUNCHER,
                 "language-server/plugins/org.eclipse.jdt.ls.core_1.50.0.jar",
                 "language-server/lombok/lombok.jar",
@@ -810,7 +835,7 @@ mod tests {
         assert!(reports.is_empty());
         assert_eq!(
             answer["executable"],
-            json!({"kind": "packaged", "path": "runtime/arm64/bin/java"})
+            json!({"kind": "packaged", "path": runtime_executable("arm64")})
         );
         let arguments = strings(&answer["arguments"]);
         let package = fixture.package();
@@ -852,7 +877,7 @@ mod tests {
             .iter()
             .position(|argument| argument == "-jar")
             .unwrap();
-        assert_eq!(arguments[jar + 1], launcher);
+        assert_eq!(Path::new(&arguments[jar + 1]), Path::new(&launcher));
         assert_eq!(arguments[jar + 2], "-configuration");
         let configuration = PathBuf::from(&arguments[jar + 3]);
         assert!(configuration.starts_with(fixture.root.join("state")));
@@ -873,16 +898,19 @@ mod tests {
         let fixture = Fixture::new();
         let (answer, _) = resolve_fixture(&fixture, &[]);
         let package = fixture.package();
-        let expected: Vec<String> = [
+        let expected: Vec<PathBuf> = [
             "language-server/java-debug/com.microsoft.java.debug.plugin-0.53.0.jar",
             "language-server/java-test/extensions/a.jar",
             "language-server/java-test/extensions/b.jar",
         ]
         .iter()
-        .map(|bundle| package.join(bundle).to_string_lossy().into_owned())
+        .map(|bundle| package.join(bundle))
         .collect();
         assert_eq!(
-            strings(&answer["initializationOptions"]["bundles"]),
+            strings(&answer["initializationOptions"]["bundles"])
+                .into_iter()
+                .map(PathBuf::from)
+                .collect::<Vec<_>>(),
             expected
         );
         assert_eq!(
@@ -908,15 +936,13 @@ mod tests {
         let (answer, _) = resolve_fixture(&fixture, &[]);
         let writable = strings(&answer["writablePaths"]);
         assert_eq!(writable.len(), 4);
-        let hosts: Vec<String> = ["state", "workspace-state", "log", "tmp"]
+        let hosts: Vec<PathBuf> = ["state", "workspace-state", "log", "tmp"]
             .iter()
-            .map(|directory| fixture.root.join(directory).to_string_lossy().into_owned())
+            .map(|directory| fixture.root.join(directory))
             .collect();
         for path in &writable {
             assert!(
-                hosts
-                    .iter()
-                    .any(|host| path == host || path.starts_with(&format!("{host}/"))),
+                hosts.iter().any(|host| Path::new(path).starts_with(host)),
                 "{path}"
             );
         }
@@ -928,7 +954,7 @@ mod tests {
             .unwrap();
         assert!(writable
             .iter()
-            .any(|path| configuration.starts_with(path) && path.starts_with(&hosts[0])));
+            .any(|path| configuration.starts_with(path) && Path::new(path).starts_with(&hosts[0])));
     }
 
     #[test]
@@ -1000,8 +1026,9 @@ mod tests {
 
     #[test]
     fn a_damaged_package_names_the_missing_file() {
+        let runtime = runtime_executable("arm64");
         for (remove, expected) in [
-            ("runtime/arm64/bin/java", "the Java runtime"),
+            (runtime.as_str(), "the Java runtime"),
             (LAUNCHER, "the JDT LS launcher"),
             ("language-server/lombok/lombok.jar", "the Lombok agent"),
         ] {
@@ -1073,16 +1100,18 @@ mod tests {
         ] {
             fs::write(workspace.join(file), b"").unwrap();
         }
-        let files = trigger_files(&[workspace.clone(), workspace.clone()]);
+        let files = trigger_files(&[workspace.clone(), workspace.clone()]).unwrap();
         assert_eq!(
             files,
             vec![
-                file_uri(&workspace.join("lib/Util.java")),
-                file_uri(&workspace.join("src/demo/Main.java")),
+                file_uri(&workspace.join("lib/Util.java")).unwrap(),
+                file_uri(&workspace.join("src/demo/Main.java")).unwrap(),
             ]
         );
-        assert!(trigger_files(&[fixture.root.join("missing")]).is_empty());
-        assert!(trigger_files(&[]).is_empty());
+        assert!(trigger_files(&[fixture.root.join("missing")])
+            .unwrap()
+            .is_empty());
+        assert!(trigger_files(&[]).unwrap().is_empty());
     }
 
     #[test]
@@ -1093,7 +1122,10 @@ mod tests {
         for index in 0..(TRIGGER_FILE_LIMIT + 5) {
             fs::write(workspace.join(format!("C{index:03}.java")), b"").unwrap();
         }
-        assert_eq!(trigger_files(&[workspace]).len(), TRIGGER_FILE_LIMIT);
+        assert_eq!(
+            trigger_files(&[workspace]).unwrap().len(),
+            TRIGGER_FILE_LIMIT
+        );
     }
 
     #[test]

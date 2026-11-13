@@ -28,15 +28,18 @@
 //!
 //! # Not yet covered
 //!
-//! - Long command lines are passed as they are. The domain's argfile planning
-//!   (`execution::launch_command`) is not applied, because macOS accepts the
-//!   lengths JDT LS produces for ordinary projects.
+//! - Oversized Windows classpaths use a host-owned manifest JAR. Long module
+//!   paths and other oversized arguments still need separate planning.
 //! - The result summary is English text until plugin backends can reach the
 //!   host's i18n service (API-37).
 
 use crate::launch::{self, TEST_RUNNER};
 use crate::settings_session::{SettingsSession, EXECUTE_COMMAND, REQUEST_METHOD, SERVER_ID};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use lithe_java_domain::debug::java_test_launch;
+use lithe_java_domain::execution::{
+    plan_manifest_classpath_launch, ClasspathJarPlan, ClasspathJarRequest, ClasspathStyle,
+};
 use lithe_java_domain::lsp::languages::java_main_methods::{
     java_main_methods_command, normalize_java_main_methods,
 };
@@ -54,7 +57,7 @@ use lithe_plugin_sdk::{
 };
 use serde_json::{json, Map};
 use std::collections::{HashMap, HashSet};
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Cursor, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -159,6 +162,9 @@ pub const RUN_PORT_UNAVAILABLE: &str = "run.port_unavailable";
 /// Plugin error code of a launch the host refused to start.
 pub const RUN_HOST_REJECTED: &str = "run.host_rejected";
 
+/// Preparing the host-owned manifest JAR failed before a process was started.
+pub const RUN_CLASSPATH_FAILED: &str = "run.classpath_failed";
+
 /// Every plugin error code the run functions answer with.
 pub const RUN_ERROR_CODES: &[&str] = &[
     RUN_INVALID_PARAMS,
@@ -169,6 +175,7 @@ pub const RUN_ERROR_CODES: &[&str] = &[
     RUN_NO_TESTS,
     RUN_PORT_UNAVAILABLE,
     RUN_HOST_REJECTED,
+    RUN_CLASSPATH_FAILED,
 ];
 
 /// Category reported when registering the actions binding in a context failed.
@@ -190,7 +197,17 @@ pub const RUN_CATEGORIES: &[&str] = &[
     RUN_ACTIONS_REGISTRATION_FAILED,
     RUN_CONTEXTS_UNAVAILABLE,
     RUN_RESULT_SUMMARY_FAILED,
+    RUN_ACTIONS_QUERY_DEFERRED,
+    RUN_ACTIONS_QUERY_EXHAUSTED,
+    RUN_ACTIONS_PROGRESS_LIMIT,
 ];
+
+/// A cold JDT query is deferred until an upstream work-completion event.
+pub const RUN_ACTIONS_QUERY_DEFERRED: &str = "run.actions_query_deferred";
+/// Automatic action refreshes reached their per-cycle budget.
+pub const RUN_ACTIONS_QUERY_EXHAUSTED: &str = "run.actions_query_exhausted";
+/// Upstream progress exceeded the bounded per-workspace job set.
+pub const RUN_ACTIONS_PROGRESS_LIMIT: &str = "run.actions_progress_limit";
 
 /// The run state of the backend: the actions binding per context and the
 /// result listener per running test launch. Shared between the functions,
@@ -200,6 +217,91 @@ pub struct RunSession {
     handle: BackendHandle,
     registrations: Mutex<HashMap<String, Registration>>,
     listeners: Mutex<HashMap<String, Arc<ResultListener>>>,
+    /// One bounded recovery record per active workspace, never per document.
+    action_queries: Mutex<HashMap<String, ActionQueryState>>,
+}
+
+const MAX_ACTION_QUERY_REFRESHES: u8 = 3;
+const MAX_ACTION_PROGRESS_JOBS: usize = 128;
+
+#[derive(Default)]
+struct ActionQueryRetry {
+    completed_work: u64,
+    /// No more than three automatic refreshes in one deferred query cycle.
+    retries: u8,
+    pending: bool,
+    degraded: bool,
+    exhausted_reported: bool,
+    active_work: HashSet<String>,
+    progress_limit: bool,
+}
+
+impl ActionQueryRetry {
+    // A completed JDT job may race the timeout response. In that order the
+    // caller retries immediately; otherwise the next completion owns it.
+    fn defer(&mut self, started: u64) -> (bool, bool) {
+        let first = !self.degraded;
+        self.degraded = true;
+        let immediate = self.retries < MAX_ACTION_QUERY_REFRESHES
+            && !self.progress_limit
+            && self.active_work.is_empty()
+            && self.completed_work != started;
+        self.pending = self.retries < MAX_ACTION_QUERY_REFRESHES && !immediate;
+        if immediate {
+            self.retries += 1;
+        }
+        (first, immediate)
+    }
+
+    fn progress(&mut self, id: &str, complete: bool) -> bool {
+        if complete {
+            self.active_work.remove(id);
+            if self.active_work.is_empty() && !self.progress_limit {
+                return self.work_completed();
+            }
+        } else if self.active_work.contains(id) || self.active_work.len() < MAX_ACTION_PROGRESS_JOBS
+        {
+            self.active_work.insert(id.to_owned());
+        } else {
+            // An untracked job must not make recovery run too early.
+            self.progress_limit = true;
+        }
+        false
+    }
+
+    fn work_completed(&mut self) -> bool {
+        self.completed_work = self.completed_work.wrapping_add(1);
+        let retry = std::mem::take(&mut self.pending);
+        if retry {
+            self.retries += 1;
+        }
+        retry
+    }
+
+    fn exhaustion(&mut self) -> bool {
+        self.retries == MAX_ACTION_QUERY_REFRESHES
+            && !std::mem::replace(&mut self.exhausted_reported, true)
+    }
+
+    fn succeeded(&mut self) -> bool {
+        self.exhausted_reported = false;
+        self.progress_limit = false;
+        self.pending = false;
+        self.retries = 0;
+        std::mem::take(&mut self.degraded)
+    }
+}
+
+struct ActionQueryState {
+    context_generation: u64,
+    server_generation: u64,
+    retry: ActionQueryRetry,
+}
+
+#[derive(Clone, Copy)]
+struct ActionQueryTicket {
+    server_generation: u64,
+    completed_work: u64,
 }
 
 /// The actions binding registered in one context generation.
@@ -278,6 +380,7 @@ impl RunSession {
             settings,
             registrations: Mutex::new(HashMap::new()),
             listeners: Mutex::new(HashMap::new()),
+            action_queries: Mutex::new(HashMap::new()),
         }
     }
 
@@ -343,7 +446,106 @@ impl RunSession {
                 let _ = stale.subscription.dispose();
             }
         }
+        lock(&self.action_queries).retain(|id, _| seen.contains(id));
         Ok(failures)
+    }
+
+    fn query_started(&self, reference: &WorkspaceContext) -> Option<ActionQueryTicket> {
+        let server_generation = self.settings.running_server_generation(reference)?;
+        let mut states = lock(&self.action_queries);
+        let state = states
+            .entry(reference.context_id().to_owned())
+            .or_insert_with(|| ActionQueryState {
+                context_generation: reference.generation(),
+                server_generation,
+                retry: ActionQueryRetry::default(),
+            });
+        if state.context_generation != reference.generation()
+            || state.server_generation != server_generation
+        {
+            *state = ActionQueryState {
+                context_generation: reference.generation(),
+                server_generation,
+                retry: ActionQueryRetry::default(),
+            };
+        }
+        Some(ActionQueryTicket {
+            server_generation,
+            completed_work: state.retry.completed_work,
+        })
+    }
+
+    fn query_finished(
+        &self,
+        reference: &WorkspaceContext,
+        ticket: Option<ActionQueryTicket>,
+        deferred: bool,
+    ) {
+        let Some(ticket) = ticket else {
+            return;
+        };
+        if !self
+            .settings
+            .accepts_server_notification(reference, ticket.server_generation)
+        {
+            return;
+        }
+        let (degraded, recovered, refresh, exhausted) = {
+            let mut states = lock(&self.action_queries);
+            let Some(state) = states.get_mut(reference.context_id()) else {
+                return;
+            };
+            if state.context_generation != reference.generation()
+                || state.server_generation != ticket.server_generation
+            {
+                return;
+            }
+            if deferred {
+                let (first, refresh) = state.retry.defer(ticket.completed_work);
+                (first, false, refresh, !refresh && state.retry.exhaustion())
+            } else {
+                (false, state.retry.succeeded(), false, false)
+            }
+        };
+        // Categories and operation are compile-time constants accepted by the
+        // SDK. Recovery is reported once after a complete successful query.
+        if degraded {
+            let _ = self.handle.diagnostics().degraded(
+                COLLECT_FUNCTION_ID,
+                RUN_ACTIONS_QUERY_DEFERRED,
+                Some(1),
+            );
+        }
+        if exhausted {
+            let _ = self.handle.diagnostics().degraded(
+                COLLECT_FUNCTION_ID,
+                RUN_ACTIONS_QUERY_EXHAUSTED,
+                Some(u64::from(MAX_ACTION_QUERY_REFRESHES)),
+            );
+        }
+        if recovered {
+            let _ = self.handle.diagnostics().recovered(
+                COLLECT_FUNCTION_ID,
+                RUN_ACTIONS_QUERY_DEFERRED,
+                Some(1),
+            );
+        }
+        if refresh {
+            self.refresh_actions(reference.context_id(), &|code, count| {
+                let _ = self
+                    .handle
+                    .diagnostics()
+                    .degraded(COLLECT_FUNCTION_ID, code, Some(count));
+            });
+        }
+    }
+
+    fn refresh_actions(&self, context_id: &str, report: &dyn Fn(&str, u64)) {
+        if let Some(stale) = lock(&self.registrations).remove(context_id) {
+            // log-exempt: expected absence: a removed context already disposed its binding.
+            let _ = stale.subscription.dispose();
+        }
+        self.sync_contexts_reporting(report);
     }
 
     /// Runs [`Self::sync_contexts`] and reports its failures as `degraded`
@@ -395,9 +597,14 @@ impl RunSession {
     /// change. Progressive imports can finish additional modules after
     /// ServiceReady, so readiness alone is not the last collection boundary.
     pub fn did_receive_notification(&self, params: &Value, report: &dyn Fn(&str, u64)) {
-        let Some(context_id) = action_refresh_context(params) else {
+        let model_changed = action_refresh_context(params);
+        let progress = action_progress_notification(params);
+        if model_changed.is_none() && progress.is_none() {
             return;
-        };
+        }
+        if params.get("serverID").and_then(Value::as_str) != Some(SERVER_ID) {
+            return;
+        }
         let Ok(reference) = WorkspaceContext::from_value(&params["context"]) else {
             return;
         };
@@ -410,10 +617,29 @@ impl RunSession {
         {
             return;
         }
-        if let Some(stale) = lock(&self.registrations).remove(&context_id) {
-            let _ = stale.subscription.dispose();
+        let (retry, limited) = if let Some((id, complete)) = progress {
+            self.query_started(&reference);
+            let mut states = lock(&self.action_queries);
+            states
+                .get_mut(reference.context_id())
+                .filter(|state| {
+                    state.context_generation == reference.generation()
+                        && state.server_generation == generation
+                })
+                .map_or((false, false), |state| {
+                    let was_limited = state.retry.progress_limit;
+                    let retry = state.retry.progress(id, complete);
+                    (retry, !was_limited && state.retry.progress_limit)
+                })
+        } else {
+            (false, false)
+        };
+        if limited {
+            report(RUN_ACTIONS_PROGRESS_LIMIT, 1);
         }
-        self.sync_contexts_reporting(report);
+        if model_changed.is_some() || retry {
+            self.refresh_actions(reference.context_id(), report);
+        }
     }
 
     /// Stops the result listener of a finished run.
@@ -431,7 +657,11 @@ impl RunSession {
 ///
 /// Answers no actions when the language server is not running or busy: the
 /// gutter is empty until it is, and the host collects again on the next edit.
-pub fn collect_actions_function(params: Value, context: &Context) -> Result<Value, FunctionError> {
+pub fn collect_actions_function(
+    session: &RunSession,
+    params: Value,
+    context: &Context,
+) -> Result<Value, FunctionError> {
     context.check_cancelled()?;
     let reference = workspace_context(context)?;
     let path = params
@@ -440,8 +670,9 @@ pub fn collect_actions_function(params: Value, context: &Context) -> Result<Valu
         .filter(|path| !path.is_empty())
         .ok_or_else(|| failure(RUN_INVALID_PARAMS, "The document has no path."))?;
     let root = workspace_root(context.host(), reference)?;
-    let uri = file_uri(&root.join(path));
+    let uri = file_uri(&root.join(path))?;
     let host = context.host();
+    let ticket = session.query_started(reference);
     let main_methods = match execute_command(
         host,
         reference,
@@ -449,7 +680,10 @@ pub fn collect_actions_function(params: Value, context: &Context) -> Result<Valu
         COLLECT_REQUEST_TIMEOUT_MILLISECONDS,
     ) {
         Ok(value) => value,
-        Err(error) if is_transient(&error) => return Ok(json!({"actions": []})),
+        Err(error) if is_transient(&error) => {
+            session.query_finished(reference, ticket, true);
+            return Ok(json!({"actions": []}));
+        }
         Err(error) => return Err(language_server_failed(error)),
     };
     context.check_cancelled()?;
@@ -460,9 +694,13 @@ pub fn collect_actions_function(params: Value, context: &Context) -> Result<Valu
         COLLECT_REQUEST_TIMEOUT_MILLISECONDS,
     ) {
         Ok(value) => value,
-        Err(error) if is_transient(&error) => return Ok(json!({"actions": []})),
+        Err(error) if is_transient(&error) => {
+            session.query_finished(reference, ticket, true);
+            return Ok(json!({"actions": []}));
+        }
         Err(error) => return Err(language_server_failed(error)),
     };
+    session.query_finished(reference, ticket, false);
     let methods = normalize_java_main_methods(&main_methods)
         .map(|methods| methods.methods)
         .unwrap_or_default();
@@ -598,17 +836,29 @@ fn start(session: &RunSession, target: &Target, context: &Context) -> Result<Val
         arguments.append(&mut process.arguments);
         process.arguments = arguments;
     }
+    let (arguments, temporary_files) = match run_arguments(&process, &root, cfg!(windows)) {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            if let Some(listener) = listener {
+                listener.stop();
+            }
+            return Err(error);
+        }
+    };
     let mut params = json!({
         "context": reference.to_value(),
         "label": target.label,
         "process": {
             "executable": {"kind": "tool", "tool": RUN_TOOL},
-            "arguments": process.arguments,
+            "arguments": arguments,
             "workingDirectory": process.working_directory,
             "environment": {},
         },
         "rerun": {"function": RERUN_FUNCTION_ID, "data": target.to_value()},
     });
+    if !temporary_files.is_empty() {
+        params["temporaryFiles"] = Value::Array(temporary_files);
+    }
     if let Some(port) = debug_port {
         params["debug"] = json!({
             "configurationType": DEBUG_CONFIGURATION_TYPE,
@@ -658,6 +908,55 @@ struct Process {
     arguments: Vec<String>,
     /// Workspace-relative; `.` is the first folder itself.
     working_directory: String,
+}
+
+/// Adapts Java arguments to the host's temporary-file contract.
+fn run_arguments(
+    process: &Process,
+    root: &Path,
+    windows: bool,
+) -> Result<(Vec<String>, Vec<Value>), FunctionError> {
+    if !windows {
+        return Ok((process.arguments.clone(), Vec::new()));
+    }
+    let working_directory = root.join(&process.working_directory);
+    let plan = plan_manifest_classpath_launch(
+        ClasspathJarRequest {
+            executable: "java.exe",
+            arguments: &process.arguments,
+            working_directory: &working_directory.to_string_lossy(),
+            classpath_jar_path: Path::new("${temporaryFile:classpath.jar}"),
+            limit: None,
+            java_feature_version: None,
+            style: ClasspathStyle::Windows,
+        },
+        |path| Path::new(path).is_dir(),
+    );
+    let ClasspathJarPlan::ClasspathJar {
+        arguments,
+        manifest,
+    } = plan
+    else {
+        return Ok((process.arguments.clone(), Vec::new()));
+    };
+    let bytes = manifest_jar(&manifest)
+        .map_err(|error| failure(RUN_CLASSPATH_FAILED, error.to_string()))?;
+    Ok((
+        arguments,
+        vec![json!({"name": "classpath.jar", "base64": BASE64.encode(bytes)})],
+    ))
+}
+
+/// The host writes these bytes under its scratch directory and removes them
+/// with the run, including failure and cancellation. No plugin file is changed.
+fn manifest_jar(manifest: &str) -> Result<Vec<u8>, zip::result::ZipError> {
+    let mut archive = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    archive.start_file(
+        "META-INF/MANIFEST.MF",
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored),
+    )?;
+    archive.write_all(manifest.as_bytes())?;
+    Ok(archive.finish()?.into_inner())
 }
 
 /// Builds the workspace and resolves the classpath of a main class.
@@ -753,7 +1052,7 @@ fn test_process(
     let found = execute_command(
         host,
         reference,
-        java_test_items_command(&file_uri(&file_path)),
+        java_test_items_command(&file_uri(&file_path)?),
         LAUNCH_REQUEST_TIMEOUT_MILLISECONDS,
     )
     .map_err(language_server_failed)?;
@@ -1097,18 +1396,17 @@ fn free_port() -> Result<u16, FunctionError> {
 }
 
 /// `file:` URI of an absolute path, percent-encoding what RFC 3986 reserves.
-pub(crate) fn file_uri(path: &Path) -> String {
-    let text = path.to_string_lossy();
-    let mut uri = String::from("file://");
-    for byte in text.bytes() {
-        let keep = byte.is_ascii_alphanumeric() || b"-._~/".contains(&byte);
-        if keep {
-            uri.push(byte as char);
-        } else {
-            uri.push_str(&format!("%{byte:02X}"));
-        }
-    }
-    uri
+pub(crate) fn file_uri(path: &Path) -> Result<String, PluginError> {
+    // The URL crate owns drive letters, UNC, verbatim prefixes and escaping.
+    // Reject paths it cannot represent instead of silently changing characters.
+    url::Url::from_file_path(path)
+        .map(String::from)
+        .map_err(|()| {
+            PluginError::new(
+                RUN_INVALID_PARAMS,
+                "The file path must be an absolute native path.",
+            )
+        })
 }
 
 /// Path separator of the `-cp` and `--module-path` values.
@@ -1121,6 +1419,17 @@ fn failure(code: &'static str, message: impl Into<String>) -> FunctionError {
 /// The context of a JDT readiness or project/classpath change. Other semantic
 /// notifications do not invalidate run markers. Accept both upstream enum
 /// names and their published numeric values without inspecting project data.
+fn action_progress_notification(params: &Value) -> Option<(&str, bool)> {
+    if params.get("method").and_then(Value::as_str) != Some("language/progressReport") {
+        return None;
+    }
+    let id = params
+        .pointer("/params/id")?
+        .as_str()
+        .filter(|id| !id.is_empty() && id.len() <= 128)?;
+    Some((id, params.pointer("/params/complete")?.as_bool()?))
+}
+
 fn action_refresh_context(params: &Value) -> Option<String> {
     if params.get("serverID").and_then(Value::as_str) != Some(SERVER_ID) {
         return None;
@@ -1154,6 +1463,84 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 mod tests {
     use super::*;
     use lithe_java_domain::lsp::languages::JavaRunMarkerStatus;
+
+    #[test]
+    fn a_deferred_query_retries_at_a_work_boundary_in_either_order() {
+        let mut retry = ActionQueryRetry::default();
+        assert_eq!(retry.defer(0), (true, false));
+        assert!(retry.work_completed());
+        assert!(
+            !retry.work_completed(),
+            "one boundary consumes the pending retry"
+        );
+        assert!(retry.succeeded(), "report recovery once");
+        assert!(!retry.succeeded());
+
+        let start = retry.completed_work;
+        assert!(!retry.work_completed());
+        assert_eq!(
+            retry.defer(start),
+            (true, true),
+            "completion raced the timeout"
+        );
+        assert!(!retry.work_completed());
+        assert_eq!(retry.defer(retry.completed_work), (false, false));
+        assert!(retry.work_completed());
+    }
+
+    #[test]
+    fn automatic_query_recovery_has_a_budget_and_success_rearms_it() {
+        let mut retry = ActionQueryRetry::default();
+        for _ in 0..MAX_ACTION_QUERY_REFRESHES {
+            assert!(!retry.defer(retry.completed_work).1);
+            assert!(retry.work_completed());
+        }
+        assert!(!retry.defer(retry.completed_work).1);
+        assert!(
+            !retry.work_completed(),
+            "no retry loop if JDT keeps timing out"
+        );
+        assert!(retry.succeeded());
+        assert!(!retry.defer(retry.completed_work).1);
+        assert!(retry.work_completed());
+    }
+
+    #[test]
+    fn indexing_is_not_retried_when_an_unrelated_job_ends() {
+        let mut retry = ActionQueryRetry::default();
+        assert!(!retry.progress("index", false));
+        assert_eq!(retry.defer(0), (true, false));
+        assert!(!retry.progress("build", false));
+        assert!(!retry.progress("build", true));
+        assert!(!retry.defer(0).1, "still busy indexing");
+        assert!(retry.progress("index", true));
+        assert!(
+            !retry.progress("index", true),
+            "duplicate completion does not refresh"
+        );
+    }
+
+    #[test]
+    fn progress_bookkeeping_is_bounded_and_malformed_events_do_not_recover() {
+        let mut retry = ActionQueryRetry::default();
+        for id in 0..MAX_ACTION_PROGRESS_JOBS + 1 {
+            retry.progress(&id.to_string(), false);
+        }
+        assert_eq!(retry.active_work.len(), MAX_ACTION_PROGRESS_JOBS);
+        assert!(retry.progress_limit);
+        for value in [
+            json!({"method":"$/progress","params":{"value":{"kind":"end"}}}),
+            json!({"method":"language/progressReport","params":{"complete":true}}),
+        ] {
+            assert!(action_progress_notification(&value).is_none());
+        }
+        assert_eq!(
+            action_progress_notification(
+                &json!({"method":"language/progressReport","params":{"id":"index","complete":true}})
+            ),
+            Some(("index", true))
+        );
+    }
 
     #[test]
     fn compiler_errors_do_not_launch_previous_bytecode() {
@@ -1332,11 +1719,35 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(windows))]
     fn file_uris_percent_encode_reserved_characters() {
         assert_eq!(
-            file_uri(Path::new("/Users/me/My Project/src/Main.java")),
+            file_uri(Path::new("/Users/me/My Project/src/Main.java")).unwrap(),
             "file:///Users/me/My%20Project/src/Main.java"
         );
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn windows_file_uris_preserve_drives_unc_and_unicode() {
+        for (path, expected) in [
+            (
+                r"C:\old project\中文\Main.java",
+                "file:///C:/old%20project/%E4%B8%AD%E6%96%87/Main.java",
+            ),
+            (r"\\server\share\Main.java", "file://server/share/Main.java"),
+            (
+                r"\\?\C:\old project\Main.java",
+                "file:///C:/old%20project/Main.java",
+            ),
+        ] {
+            assert_eq!(file_uri(Path::new(path)).unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn file_uris_reject_relative_paths() {
+        assert!(file_uri(Path::new("relative/Main.java")).is_err());
     }
 
     #[test]
@@ -1346,5 +1757,55 @@ mod tests {
             assert!(lithe_plugin_sdk::is_plugin_error_code(code), "{code}");
             assert!(seen.insert(*code), "{code} is listed twice");
         }
+    }
+
+    #[test]
+    fn oversized_windows_classpath_uses_a_host_owned_binary_file() {
+        let classpath = (0..500)
+            .map(|i| {
+                format!(
+                    "C:\\old project\\中文 modules\\dependency-{i:04}\\a-library-version-1.0.0.jar"
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(";");
+        let process = Process {
+            arguments: vec![
+                "-Dfixture=true".into(),
+                "-cp".into(),
+                classpath,
+                "demo.Main".into(),
+                "hello world".into(),
+            ],
+            working_directory: ".".into(),
+        };
+        let (arguments, files) =
+            run_arguments(&process, Path::new("C:\\old project"), true).unwrap();
+        assert_eq!(arguments[2], "${temporaryFile:classpath.jar}");
+        assert_eq!(arguments[3..], ["demo.Main", "hello world"]);
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0]["name"], "classpath.jar");
+        assert!(files[0]["base64"]
+            .as_str()
+            .is_some_and(|data| !data.is_empty()));
+        let bytes = BASE64.decode(files[0]["base64"].as_str().unwrap()).unwrap();
+        let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
+        assert_eq!(archive.len(), 1);
+        let mut manifest = String::new();
+        std::io::Read::read_to_string(
+            &mut archive.by_name("META-INF/MANIFEST.MF").unwrap(),
+            &mut manifest,
+        )
+        .unwrap();
+        assert!(manifest.is_ascii());
+        assert!(
+            manifest.starts_with("Manifest-Version: 1.0\r\nClass-Path: file:/C:/old%20project/")
+        );
+        assert!(manifest.contains("%E4%B8%AD%E6%96%87"));
+        assert!(manifest.split("\r\n").all(|line| line.len() <= 72));
+        let (posix_arguments, posix_files) =
+            run_arguments(&process, Path::new("/work"), false).unwrap();
+        assert_eq!(posix_arguments, process.arguments);
+        assert!(posix_files.is_empty());
     }
 }

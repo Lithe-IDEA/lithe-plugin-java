@@ -86,6 +86,23 @@ pub fn plan_classpath_jar_launch(
     request: ClasspathJarRequest<'_>,
     is_directory: impl Fn(&str) -> bool,
 ) -> ClasspathJarPlan {
+    if request
+        .java_feature_version
+        .is_none_or(|version| version >= FIRST_ARGFILE_JAVA_VERSION)
+    {
+        return ClasspathJarPlan::Direct;
+    }
+    plan_manifest_classpath_launch(request, is_directory)
+}
+
+/// Shortens a class path using a manifest JAR on every supported Java release.
+/// Unlike native-encoded argument files, its ASCII file URLs preserve Unicode
+/// independently of the Windows code page. Module-path arguments stay unchanged.
+/// This entry point deliberately does not inspect `java_feature_version`.
+pub fn plan_manifest_classpath_launch(
+    request: ClasspathJarRequest<'_>,
+    is_directory: impl Fn(&str) -> bool,
+) -> ClasspathJarPlan {
     let executable_name = request
         .executable
         .rsplit(['/', '\\'])
@@ -94,9 +111,6 @@ pub fn plan_classpath_jar_launch(
     if !["java", "java.exe", "javaw", "javaw.exe"]
         .iter()
         .any(|name| executable_name.eq_ignore_ascii_case(name))
-        || request
-            .java_feature_version
-            .is_none_or(|version| version >= FIRST_ARGFILE_JAVA_VERSION)
     {
         return ClasspathJarPlan::Direct;
     }

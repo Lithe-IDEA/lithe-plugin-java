@@ -548,7 +548,7 @@ impl SettingsSession {
         self.running_server_generation(context) == Some(generation)
     }
 
-    fn running_server_generation(&self, context: &WorkspaceContext) -> Option<u64> {
+    pub(crate) fn running_server_generation(&self, context: &WorkspaceContext) -> Option<u64> {
         self.lock_states()
             .get(context.context_id())
             .filter(|state| state.context.generation() == context.generation())
