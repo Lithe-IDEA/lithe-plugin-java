@@ -1,7 +1,7 @@
 // Build-time Linux runtime preparation. Downloaded inputs are immutable and
 // keyed by SHA-256; extracted runtimes belong only to this checkout.
 import {createHash} from 'node:crypto';
-import {createReadStream,createWriteStream,readFileSync,mkdirSync,existsSync,rmSync,mkdtempSync,cpSync,renameSync} from 'node:fs';
+import {createReadStream,createWriteStream,readFileSync,mkdirSync,existsSync,rmSync,mkdtempSync,cpSync,renameSync,statSync} from 'node:fs';
 import {join,dirname,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {execFileSync} from 'node:child_process';
@@ -15,6 +15,11 @@ export function verifyELF(bytes,arch){
  if(bytes.length<64 || !bytes.subarray(0,6).equals(Buffer.from([127,69,76,70,2,1])))throw Error('An ELF64 little-endian binary is required');
  if(bytes.readUInt16LE(18)!==target.machine)throw Error(`ELF architecture differs from Linux ${arch}`);
  if(![2,3].includes(bytes.readUInt16LE(16)))throw Error('An ELF executable or shared object is required');
+}
+// Shared libraries are mapped by the loader and need no execute permission.
+export function verifyBinary(path,arch,{executable=false}={}){
+ verifyELF(readFileSync(path),arch);
+ if(executable && !(statSync(path).mode & 0o111))throw Error(`Executable permission missing: ${path}`);
 }
 export async function digest(path){
  const hash=createHash('sha256');for await(const bytes of createReadStream(path))hash.update(bytes);return hash.digest('hex');

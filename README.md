@@ -245,12 +245,12 @@ fixtures/                        # 与主仓库共享的契约样例（JSON）
 third_party/                     # JDT LS 与 JDK 的来源地址和 SHA-256
 sdk.lock.json                    # 后端链接的 Rust SDK：标签、提交、crate 归档的 SHA-256
 scripts/                         # 组装、校验、归档插件包，检查 SDK 锁
-.github/workflows/ci.yml         # PR：格式、lint、测试、SDK 锁，以及 macOS 上的打包任务（构建并归档两个架构）
+.github/workflows/ci.yml         # PR：格式、lint、测试、SDK 锁，以及 macOS 双架构打包和 Linux 双架构原生验证
 .github/workflows/release.yml    # 推送 v<版本> 标签：测试后打包并发布 GitHub Release（预发布）
 MIGRATION.md                     # 主仓库路径到本仓库的映射、待宿主接口清单、主仓库删除清单
 ```
 
-Rust 部分需要 Rust 工具链和 Cargo；打包脚本需要 macOS、Node.js 22、`zsh`、`curl`、`ditto`，不需要 Xcode 或 Swift 工具链。
+Rust 部分需要 Rust 工具链和 Cargo；macOS 打包脚本需要 macOS、Node.js 22、`zsh`、`curl`、`ditto`，不需要 Xcode 或 Swift 工具链。
 打包脚本会用 `cargo build --release --locked -p lithe-java-backend --target <triple>` 编译后端，所以还要安装两个 Apple target：
 `rustup target add aarch64-apple-darwin x86_64-apple-darwin`（`--arch arm64` 用前者，`x86_64` 用后者，`universal` 两个都编译再用 `lipo -create` 合并）。
 
@@ -291,7 +291,7 @@ node scripts/package/build-windows.mjs /path/to/lithe-java-backend.exe
 ## 发布新版本
 
 构建和发布由现有工作流执行，正式发布前按 Lithe 的版本规则决定版本并核验兼容宿主。
-当前依赖 Viva preview，只能作为预发布。推送匹配版本的标签后，工作流为 macOS arm64/x64 与 Windows x64 生成 ZIP 和 SHA-256，并创建草稿预发布；维护者下载核对后再公开草稿。发布说明必须位于 `docs/releases/v<版本>.md`，缺失则终止发布。
+当前依赖 Viva preview，只能作为预发布。推送匹配版本的标签后，工作流为 macOS arm64/x64、Windows x64 与 Linux ARM64/x64 生成 ZIP 和 SHA-256，并创建草稿预发布；维护者下载核对后再公开草稿。发布说明必须位于 `docs/releases/v<版本>.md`，缺失则终止发布。
 不得覆盖已发布 ZIP，也不得将本地隔离试验的 JDT/JDK 资源当作生产升级：本轮生产仍固定 JDT LS 1.61 和 Temurin 21。
 
 ## 许可

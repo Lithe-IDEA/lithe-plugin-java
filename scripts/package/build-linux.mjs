@@ -4,7 +4,7 @@
 import {execFileSync} from 'node:child_process';
 import {chmodSync,cpSync,mkdirSync,readFileSync,rmSync,mkdtempSync,readdirSync,lstatSync,statSync,writeFileSync} from 'node:fs';
 import {join,resolve} from 'node:path';
-import {architectures,root,prepareJDK,digest,verifyELF} from './linux-runtime.mjs';
+import {architectures,root,prepareJDK,digest,verifyELF,verifyBinary} from './linux-runtime.mjs';
 import {collectNotices,verifyNotices} from './collect-notices.mjs';
 import {patch,verifyPatch} from './patch-jdt-decompiler.mjs';
 const arch=process.argv[2];const target=architectures[arch];
@@ -28,8 +28,7 @@ function verify(directory){
  if(JSON.stringify(actual)!==JSON.stringify(manifest))throw Error('Packaged manifest changed');
  for(const name of ['LICENSE','NOTICE'])if(!readFileSync(join(directory,name)).equals(readFileSync(join(root,name))))throw Error(`Missing or modified ${name}`);
  for(const path of [manifest.backend.launch.path,`runtime/${target.runtime}/bin/java`,`runtime/${target.runtime}/lib/server/libjvm.so`]){
-  verifyELF(readFileSync(join(directory,path)),arch);
-  if(!(statSync(join(directory,path)).mode & 0o111))throw Error(`Executable permission missing: ${path}`);
+  verifyBinary(join(directory,path),arch,{executable:!path.endsWith('/libjvm.so')});
  }
  if(!readFileSync(join(directory,'language-server/configuration',target.runtime,'config.ini')).equals(readFileSync(join(jdt,target.configuration,'config.ini'))))throw Error('Wrong Equinox platform configuration');
  const walk=path=>{for(const name of readdirSync(path)){const file=join(path,name);const s=lstatSync(file);if(s.isSymbolicLink())throw Error(`Package link: ${file}`);if(s.isDirectory())walk(file);}};walk(directory);
