@@ -1,30 +1,9 @@
 name: Release
 
-# Push a tag v<version> matching plugin.json to publish a GitHub Release with
-# one unsigned plugin archive per macOS architecture and its SHA-256 file.
-#
-# No step receives a signing key. Checkouts do not keep the workflow token.
-#
-# Releases stay pre-releases, which Lithe Store's tracker skips, for these
-# reasons:
-#   1. Lithe still bundles Java Support under the old ID
-#      dev.lithe.plugin.java-support.
-#   2. The package declares the Rust backend (backend 2), plugin-owned
-#      language server sessions (languageServers 3, requestMethods and
-#      commands) and plugin functions (pluginFunctions 1), and the backend
-#      links the Rust plugin SDK 0.3.0 (plugin function protocol 4). A host
-#      that predates the Lithe changes #1745 and #1746 does not offer them and
-#      rejects the package. Only the latest Lithe preview contains them so far;
-#      no stable Lithe does. The SDK also requires the host to offer
-#      litheLogging 1 and refuses to start without it.
-#   3. The Maven and Gradle project templates have moved to lithe-plugin-maven
-#      and lithe-plugin-gradle. Until those plugins carry them, a release
-#      would drop the Maven and Gradle choices from New Project.
-# Remove --prerelease below once a stable Lithe accepts the package (stage E in
-# MIGRATION.md), stops bundling Java Support, and offers backend 2,
-# languageServers 3, pluginFunctions 1 and litheLogging 1, and once the Maven
-# and Gradle plugins are published. The Store then lists stable releases of
-# this repository automatically.
+# Tags must match plugin.json. Build unsigned macOS arm64/x64 and Windows
+# x64 packages from the same source revision, then upload a draft prerelease.
+# The maintainer verifies the downloaded assets before publishing the draft.
+# Contract 0 currently requires the matching Viva preview, not stable Lithe.
 on:
   push:
     tags: ["v*"]
@@ -57,9 +36,32 @@ jobs:
       - name: Check the pinned plugin SDK release
         run: scripts/verify-sdk-lock.sh --download
 
+  windows:
+    name: Build Windows x64 backend
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@v2
+      - name: Test the native Windows backend
+        run: cargo test --workspace --locked --target x86_64-pc-windows-msvc
+      - name: Build the native Windows backend
+        run: cargo build --release --locked -p lithe-java-backend --target x86_64-pc-windows-msvc
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-backend
+          path: target/x86_64-pc-windows-msvc/release/lithe-java-backend.exe
+          if-no-files-found: error
+          retention-days: 7
+
   release:
     name: Publish ${{ github.ref_name }}
-    needs: test
+    needs: [test, windows]
     runs-on: macos-26
     timeout-minutes: 60
     permissions:
@@ -73,6 +75,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin, x86_64-apple-darwin
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-backend
+          path: .artifacts/windows-backend
       - name: Check the tag matches plugin.json
         run: |
           set -euo pipefail
@@ -87,6 +96,12 @@ jobs:
           for arch in arm64 x86_64; do
             scripts/build-package.sh --arch "$arch"
           done
+      - name: Assemble the Windows archive
+        run: |
+          set -euo pipefail
+          archive=$(node scripts/package/build-windows.mjs .artifacts/windows-backend/lithe-java-backend.exe)
+          mkdir -p dist
+          cp "$archive" "$archive.sha256" dist/
       - name: Archive and publish
         env:
           GH_TOKEN: ${{ github.token }}
@@ -98,17 +113,16 @@ jobs:
             scripts/archive-package.sh --package ".artifacts/package/$arch/io.github.lithe-idea.java-support" \
               --arch "$arch" >> "$checksums"
           done
+          notes="docs/releases/$GITHUB_REF_NAME.md"
+          test -s "$notes"
+          cp "$notes" "$RUNNER_TEMP/notes.md"
           {
-            echo "Java Support（\`io.github.lithe-idea.java-support\`）${GITHUB_REF_NAME#v}。每个 macOS 架构一个归档，附 SHA-256 文件。"
             echo
-            echo "兼容性：目前的 Lithe 仍内置 Java Support；这个包还需要宿主提供 \`backend\` 2、\`languageServers\` 3、\`pluginFunctions\` 1 和 \`litheLogging\` 1（含 #1745、#1746 的 Lithe 预览版之后），不满足的版本会拒绝安装；稳定版要等 Lithe 主仓库完成 Java 拆分的阶段 E。Maven 与 Gradle 的新建项目模板已移交 lithe-plugin-maven 和 lithe-plugin-gradle，这两个插件接手前，这个包的新建项目里没有 Maven 和 Gradle 选项。"
-            echo
-            echo "安装：预发布版本，Lithe Store 自动追踪会跳过。宿主支持后下载对应架构的 ZIP，在 设置 → 插件 的 ⚙ 菜单中选择 从磁盘安装插件…。"
-            echo
-            echo "SHA-256："
+            echo '### SHA-256'
             echo '```'
             sed 's#  dist/#  #' "$checksums"
+            cat dist/*windows-x64.zip.sha256
             echo '```'
-          } > "$RUNNER_TEMP/notes.md"
-          gh release create "$GITHUB_REF_NAME" dist/*.zip dist/*.zip.sha256 --verify-tag --prerelease \
+          } >> "$RUNNER_TEMP/notes.md"
+          gh release create "$GITHUB_REF_NAME" dist/*.zip dist/*.zip.sha256 --verify-tag --draft --prerelease \
             --title "Java Support $GITHUB_REF_NAME" --notes-file "$RUNNER_TEMP/notes.md"
