@@ -46,7 +46,9 @@ export function patch(packageRoot){
  if(hash(readFileSync(source))!==spec.sourceSHA256 || hash(readFileSync(jar))!==spec.originalCoreJarSHA256)throw Error('Decompiler patch inputs do not match the lock');
  // Always use the pinned host-architecture JDK; the output is Java bytecode
  // shared by macOS and Windows, even when packaging another architecture.
- const jdk=run(join(root,'scripts/prepare-jdk.sh'),[],{encoding:'utf8',env:{...process.env,LITHE_JDK_TARGET_ARCH:process.arch==='arm64'?'arm64':'x86_64'}}).trim();
+ const jdk=process.platform==='linux'
+  ? run(process.execPath,[join(root,'scripts/package/linux-runtime.mjs'),process.arch==='arm64'?'arm64':'x64'],{encoding:'utf8',timeout:300000}).trim()
+  : run(join(root,'scripts/prepare-jdk.sh'),[],{encoding:'utf8',env:{...process.env,LITHE_JDK_TARGET_ARCH:process.arch==='arm64'?'arm64':'x86_64'}}).trim();
  const stage=mkdtempSync(join(tmpdir(),'lithe-jdt-decompiler-'));
  try{
   const classes=join(stage,'classes');mkdirSync(classes);
@@ -68,7 +70,7 @@ export function patch(packageRoot){
   const target=join(stage,'patched.jar');run(join(jdk,'bin/jar'),['--create','--file',target,'--manifest',mainManifest,'-C',unpack,'.']);
   const directory=join(packageRoot,'licenses/jdt-decompiler');mkdirSync(directory,{recursive:true});cpSync(source,join(directory,'FernFlowerDecompiler.java'));
   const jdkSpec=JSON.parse(readFileSync(join(root,'third_party/jdk/manifest.json'),'utf8'));
-  const compilerPlatform=process.arch==='arm64'?'macos-aarch64':'macos-x86_64';
+  const compilerPlatform=`${process.platform==='linux'?'linux':'macos'}-${process.arch==='arm64'?'aarch64':'x86_64'}`;
   const metadata={...spec,compiler:{version:jdkSpec.version,platform:compilerPlatform,archiveSHA256:jdkSpec.platforms[compilerPlatform].sha256},patchedCoreJarSHA256:hash(readFileSync(target)),upstreamSignaturesRemoved:true,classes:generated.map(path=>({path,sha256:hash(readFileSync(join(classes,path)))}))};
   // The package staging directory is writable build output. Never patch an
   // installed bundle or the downloaded/cache copy of the upstream distribution.

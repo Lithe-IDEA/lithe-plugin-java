@@ -301,3 +301,7 @@ node scripts/package/build-windows.mjs /path/to/lithe-java-backend.exe
 ### 随包许可
 
 两端构建都会复制自身 LICENSE/NOTICE，并用 Cargo 锁定的非 dev 构建图收集 Rust 依赖的许可，写入 licenses/rust 和不含本机路径的哈希清单。SDK 沿其 Git 检出查找共享许可；crate 未携带主许可时，只接受 third_party/rust-notices 中与 crate VCS 修订及 SHA-256 匹配的固定文本。tree-sitter 内嵌的 Unicode 许可一并保留。缺少许可或来源不匹配会终止打包；不在运行期下载，不跨工作树共享生成目录。
+
+## Linux ARM64 / x64
+
+Linux 构建、资源归属与原生验证入口见 [Linux 构建与验证](docs/linux-packaging.md)。

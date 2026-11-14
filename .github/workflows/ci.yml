@@ -81,3 +81,48 @@ jobs:
           path: dist/
           retention-days: 7
           if-no-files-found: error
+
+  linux:
+    name: Build and run Linux ${{ matrix.arch }} package
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            arch: x64
+          - os: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install packaging tools
+        run: sudo apt-get update && sudo apt-get install -y zsh zip unzip
+      - name: Restore checksum-verified downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            .artifacts/jdtls-downloads
+            .artifacts/jdk-downloads
+          key: linux-${{ matrix.arch }}-${{ hashFiles('third_party/*/manifest.json') }}
+      - name: Test the native backend
+        run: cargo test --workspace --locked
+      - name: Build and verify the archive
+        run: node scripts/package/build-linux.mjs "${{ matrix.arch }}"
+      - name: Start the packaged backend and language server
+        run: node scripts/package/smoke-linux.mjs dist/*-linux-${{ matrix.arch }}.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: java-linux-${{ matrix.arch }}
+          path: |
+            dist/*-linux-*.zip
+            dist/*-linux-*.zip.sha256
+          if-no-files-found: error
+          retention-days: 7
