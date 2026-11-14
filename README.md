@@ -1,6 +1,6 @@
 # Java Support for Lithe
 
-> **Viva 预览版 Java 支持（1.1.1）**：清单已迁到当前契约 0，后端使用 Core
+> **Viva 预览版 Java 支持（1.1.2）**：清单已迁到当前契约 0，后端使用 Core
 > `65cf82343c5e315aae2e335b2e8f0217b703e89a` 中的 Rust SDK 0.4.0（尚无对应发布标签）。
 > 本轮验证含第三方 JAR 依赖的普通 Maven 工程：JDT 补全、Maven 编译、main 运行和断点调试，包含变量读取、继续和退出。
 > 需要同时包含 Lithe 客户端的动作注册解码、动作刷新与首次调试加载修复；未修改这些行为的旧 preview 不能直接使用本包。
@@ -24,7 +24,7 @@
 > SDK. Maven and Gradle import settings come from the Maven and Gradle plugins through a function interface that
 > Lithe Core relays between plugins.
 
-1.1.1 面向包含主仓库 [#1884](https://github.com/1lck/Lithe-IDEA/pull/1884) 的配套 Viva preview（客户端修订 `607f00967d70a7017d49805183d0d2e6ffdf1c0d` 或更新版本）。API / 能力与传输版本以 `plugin.json`、`sdk.lock.json`
+1.1.2 面向包含主仓库 [#1884](https://github.com/1lck/Lithe-IDEA/pull/1884) 的配套 Viva preview（客户端修订 `607f00967d70a7017d49805183d0d2e6ffdf1c0d` 或更新版本）。API / 能力与传输版本以 `plugin.json`、`sdk.lock.json`
 和固定 Core 中的[插件资料](https://github.com/Lithe-IDEA/Lithe-core-rust/tree/65cf82343c5e315aae2e335b2e8f0217b703e89a/shared/plugins)为准。
 `MIGRATION.md` 保留迁移历史，不能用其中旧宿主、旧 API 数字推断当前兼容性。
 
@@ -233,7 +233,7 @@ scripts/                         # 组装、校验、归档插件包，检查 SD
 MIGRATION.md                     # 主仓库路径到本仓库的映射、待宿主接口清单、主仓库删除清单
 ```
 
-Rust 部分需要 Rust 工具链和 Cargo；打包脚本需要 macOS、`zsh`、`curl`、`ditto`，不需要 Xcode 或 Swift 工具链。
+Rust 部分需要 Rust 工具链和 Cargo；打包脚本需要 macOS、Node.js 22、`zsh`、`curl`、`ditto`，不需要 Xcode 或 Swift 工具链。
 打包脚本会用 `cargo build --release --locked -p lithe-java-backend --target <triple>` 编译后端，所以还要安装两个 Apple target：
 `rustup target add aarch64-apple-darwin x86_64-apple-darwin`（`--arch arm64` 用前者，`x86_64` 用后者，`universal` 两个都编译再用 `lipo -create` 合并）。
 
@@ -280,3 +280,7 @@ node scripts/package/build-windows.mjs /path/to/lithe-java-backend.exe
 ## 许可
 
 插件自身的代码按 Apache License 2.0 发布（见 `LICENSE`）。插件包内的第三方组件各自保留原许可，见 `NOTICE`。
+
+### 随包许可
+
+两端构建都会复制自身 LICENSE/NOTICE，并用 Cargo 锁定的非 dev 构建图收集 Rust 依赖的许可，写入 licenses/rust 和不含本机路径的哈希清单。SDK 沿其 Git 检出查找共享许可；crate 未携带主许可时，只接受 third_party/rust-notices 中与 crate VCS 修订及 SHA-256 匹配的固定文本。tree-sitter 内嵌的 Unicode 许可一并保留。缺少许可或来源不匹配会终止打包；不在运行期下载，不跨工作树共享生成目录。
