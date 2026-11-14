@@ -8,7 +8,7 @@ OUTPUT_DIR="${LITHE_JDTLS_ROOT:-$ROOT_DIR/.artifacts/jdtls}"
 CACHE_DIR="$ROOT_DIR/.artifacts/jdtls-downloads"
 
 manifest_value() {
-    /usr/bin/plutil -extract "$1" raw -o - "$MANIFEST"
+    node "$ROOT_DIR/scripts/package/json-value.mjs" "$MANIFEST" "$1"
 }
 
 archive_url="$(manifest_value archiveURL)"
@@ -37,7 +37,7 @@ java_debug_server_version="$(manifest_value javaDebugServerVersion)"
 java_test_extension_version="$(manifest_value javaTestExtensionVersion)"
 java_test_plugin_version="$(manifest_value javaTestPluginVersion)"
 minimum_java_version="$(manifest_value minimumJavaVersion)"
-bundled_jdk_version="$(/usr/bin/plutil -extract version raw -o - "$ROOT_DIR/third_party/jdk/manifest.json")"
+bundled_jdk_version="$(node "$ROOT_DIR/scripts/package/json-value.mjs" "$ROOT_DIR/third_party/jdk/manifest.json" version)"
 archive_path="${LITHE_JDTLS_ARCHIVE:-$CACHE_DIR/jdtls-$jdtls_version-$archive_sha256.tar.gz}"
 license_path="$CACHE_DIR/EPL-2.0-$license_sha256.txt"
 lombok_path="$CACHE_DIR/lombok-$lombok_version-$lombok_sha256.jar"
@@ -134,6 +134,7 @@ validate_output() {
             exit 1
         }
     done
+    [[ -f "$OUTPUT_DIR/config_linux/config.ini" && -f "$OUTPUT_DIR/config_linux_arm/config.ini" ]] || { print -u2 -- "JDTLS Linux configurations are missing: $OUTPUT_DIR"; exit 1; }
     [[ -d "$OUTPUT_DIR/config_win" ]] || { print -u2 -- "JDTLS Windows configuration is missing: $OUTPUT_DIR"; exit 1; }
     [[ -x "$OUTPUT_DIR/bin/jdtls" ]] || { print -u2 -- "JDTLS launcher is missing: $OUTPUT_DIR/bin/jdtls"; exit 1; }
     [[ -f "$OUTPUT_DIR/bin/jdtls.ps1" ]] || { print -u2 -- "JDTLS Windows launcher is missing: $OUTPUT_DIR"; exit 1; }
@@ -218,7 +219,7 @@ mkdir -p "$OUTPUT_DIR/java-test/extensions" "$OUTPUT_DIR/java-test/runner"
 # already installed" at every start.
 : > "$OUTPUT_DIR/$java_test_bundle_list"
 java_test_bundle_index=0
-while java_test_bundle="$(/usr/bin/plutil -extract "contributes.javaExtensions.$java_test_bundle_index" raw -o - "$java_test_extraction/extension/package.json" 2>/dev/null)"; do
+while java_test_bundle="$(node "$ROOT_DIR/scripts/package/json-value.mjs" "$java_test_extraction/extension/package.json" "contributes.javaExtensions.$java_test_bundle_index" 2>/dev/null)"; do
     (( java_test_bundle_index += 1 ))
     [[ -e "$OUTPUT_DIR/plugins/${java_test_bundle:t}" ]] && continue
     cp "$java_test_extraction/extension/${java_test_bundle#./}" "$OUTPUT_DIR/java-test/extensions/${java_test_bundle:t}"
