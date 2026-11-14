@@ -1,0 +1,14 @@
+{
+  "id": "jdtls-1.61.0-missing-inner-class-1",
+  "upstreamRevision": "08eafe6ff60c7159ef88571d47b6a9ef82fef94e",
+  "upstreamSource": "https://github.com/eclipse-jdtls/eclipse.jdt.ls/blob/08eafe6ff60c7159ef88571d47b6a9ef82fef94e/org.eclipse.jdt.ls.core/src/org/eclipse/jdt/ls/core/internal/decompiler/FernFlowerDecompiler.java",
+  "upstreamSourceSHA256": "63ceebf6a377b0b1805586d44d6bf13d7ba5ccecaf92879d85d2e4f708730008",
+  "sourceSHA256": "f188e0f7097c6b87d03fcca472c71b1b09faf44b0b91c51204e8677d493f28ae",
+  "originalCoreJarSHA256": "b382afc38a89e41959a56aee532ae567c7f804c3e4d4f13444114468789ec032",
+  "classEntries": [
+    "org/eclipse/jdt/ls/core/internal/decompiler/FernFlowerDecompiler$1.class",
+    "org/eclipse/jdt/ls/core/internal/decompiler/FernFlowerDecompiler$BytecodeProvider.class",
+    "org/eclipse/jdt/ls/core/internal/decompiler/FernFlowerDecompiler$ResultSaver.class",
+    "org/eclipse/jdt/ls/core/internal/decompiler/FernFlowerDecompiler.class"
+  ]
+}

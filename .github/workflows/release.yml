@@ -30,8 +30,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Test package notices
-        run: node --test --test-timeout=60000 scripts/package/collect-notices.test.mjs
+      - name: Test package resources
+        run: node --test --test-timeout=60000 scripts/package/*.test.mjs
       - name: Check formatting
         run: cargo fmt --all --check
       - name: Lint
