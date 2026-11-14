@@ -48,7 +48,12 @@ cmp -s "$manifest" "$ROOT_DIR/$PLUGIN_ID/plugin.json" ||
 [[ "${PACKAGE:A:t}" == "$PLUGIN_ID" ]] ||
     fail "the package directory must be named $PLUGIN_ID"
 
-allowed=(plugin.json bin icons templates language-server runtime)
+for notice in LICENSE NOTICE; do
+    cmp -s "$PACKAGE/$notice" "$ROOT_DIR/$notice" || fail "missing or modified $notice"
+done
+node "$ROOT_DIR/scripts/package/collect-notices.mjs" --verify "$PACKAGE"
+
+allowed=(plugin.json bin icons templates language-server runtime LICENSE NOTICE licenses)
 for entry in "$PACKAGE"/*(DN); do
     (( ${allowed[(Ie)${entry:t}]} )) || fail "undeclared top-level entry ${entry:t}"
 done

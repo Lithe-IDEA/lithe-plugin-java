@@ -159,3 +159,6 @@ if [[ -n "$(find "$OUTPUT_DIR" -type l -print -quit)" ]]; then
     print -u2 -- "The Java Support package contains symbolic links: $(find "$OUTPUT_DIR" -type l -print -quit)"
     exit 1
 fi
+
+# Notices are build inputs, copied alongside the binary from locked sources.
+node "$ROOT_DIR/scripts/package/collect-notices.mjs" "$OUTPUT_DIR" >&2

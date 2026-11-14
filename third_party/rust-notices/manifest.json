@@ -1,0 +1,18 @@
+[
+  {
+    "name": "tree-sitter",
+    "version": "0.25.10",
+    "revision": "da6fe9beb4f7f67beb75914ca8e0d48ae48d6406",
+    "url": "https://raw.githubusercontent.com/tree-sitter/tree-sitter/da6fe9beb4f7f67beb75914ca8e0d48ae48d6406/LICENSE",
+    "file": "tree-sitter-0.25.10.LICENSE",
+    "sha256": "5f9cf9fb6acb1972b35ae29119ce563bb60ec097656bc4b69b9bac2d04c7a147"
+  },
+  {
+    "name": "tree-sitter-java",
+    "version": "0.23.5",
+    "revision": "94703d5a6bed02b98e438d7cad1136c01a60ba2c",
+    "url": "https://raw.githubusercontent.com/tree-sitter/tree-sitter-java/94703d5a6bed02b98e438d7cad1136c01a60ba2c/LICENSE",
+    "file": "tree-sitter-java-0.23.5.LICENSE",
+    "sha256": "52ed137b039cd9c46409bc22e89938af911c95b157feae2d040b51e6084369a7"
+  }
+]

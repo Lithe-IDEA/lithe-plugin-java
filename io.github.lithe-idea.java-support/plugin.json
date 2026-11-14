@@ -2,7 +2,7 @@
   "schemaVersion": 0,
   "id": "io.github.lithe-idea.java-support",
   "displayName": "Java Support",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "pluginAPIVersion": 0,
   "requires": {"backend": 0, "debugAdapters": 0, "languages": 0, "languageServers": 0, "pluginFunctions": 0, "settings": 0, "projectGenerators": 0, "toolDefinitions": 0},
   "requiresTools": ["java"],

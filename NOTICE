@@ -42,3 +42,7 @@ here from the Lithe repository; the file names its origin.
 
 Lithe is not affiliated with OpenIDEA, JetBrains s.r.o., the Eclipse
 Foundation, Microsoft or their products.
+
+Rust build dependency license texts and a per-file SHA-256 manifest are
+provided under licenses/rust/ in distributed plugin archives. The manifest
+records the locked crate names, versions and license expressions.

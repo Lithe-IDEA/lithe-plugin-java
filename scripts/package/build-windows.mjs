@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
+import { collectNotices, verifyNotices } from './collect-notices.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 if (process.platform !== 'darwin') throw new Error('Assemble this development package on macOS.');
@@ -86,6 +87,8 @@ try {
   await writeFile(join(packageRoot, 'plugin.json'), `${JSON.stringify(manifest, null, 2)}\n`);
   await mkdir(join(packageRoot, 'bin'));
   await cp(resolve(backend), join(packageRoot, manifest.backend.launch.path));
+  collectNotices(packageRoot);
+  verifyNotices(packageRoot);
   const target = join(artifacts, `Lithe-Java-Support-${manifest.version}-windows-x64.zip`);
   execFileSync('/usr/bin/ditto', ['-c', '-k', '--keepParent', packageRoot, target], { timeout: 120_000 });
   await writeFile(`${target}.sha256`, `${await digest(target)}  ${target.split('/').at(-1)}\n`);
