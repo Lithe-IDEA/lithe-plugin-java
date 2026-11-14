@@ -162,3 +162,6 @@ fi
 
 # Notices are build inputs, copied alongside the binary from locked sources.
 node "$ROOT_DIR/scripts/package/collect-notices.mjs" "$OUTPUT_DIR" >&2
+
+# Compile the locked upstream decompiler fix only in package staging.
+node "$ROOT_DIR/scripts/package/patch-jdt-decompiler.mjs" "$OUTPUT_DIR" >&2

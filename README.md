@@ -1,6 +1,6 @@
 # Java Support for Lithe
 
-> **Viva 预览版 Java 支持（1.1.3）**：清单已迁到当前契约 0，后端使用 Core
+> **Viva 预览版 Java 支持（1.2.0）**：清单已迁到当前契约 0，后端使用 Core
 > `65cf82343c5e315aae2e335b2e8f0217b703e89a` 中的 Rust SDK 0.4.0（尚无对应发布标签）。
 > 本轮验证含第三方 JAR 依赖的普通 Maven 工程：JDT 补全、Maven 编译、main 运行和断点调试，包含变量读取、继续和退出。
 > 需要同时包含 Lithe 客户端的动作注册解码、动作刷新与首次调试加载修复；未修改这些行为的旧 preview 不能直接使用本包。
@@ -24,9 +24,26 @@
 > SDK. Maven and Gradle import settings come from the Maven and Gradle plugins through a function interface that
 > Lithe Core relays between plugins.
 
-1.1.3 面向包含主仓库 [#1884](https://github.com/1lck/Lithe-IDEA/pull/1884) 的配套 Viva preview（客户端修订 `607f00967d70a7017d49805183d0d2e6ffdf1c0d` 或更新版本）。API / 能力与传输版本以 `plugin.json`、`sdk.lock.json`
+1.2.0 面向包含主仓库 [#1884](https://github.com/1lck/Lithe-IDEA/pull/1884) 的配套 Viva preview（客户端修订 `607f00967d70a7017d49805183d0d2e6ffdf1c0d` 或更新版本）。API / 能力与传输版本以 `plugin.json`、`sdk.lock.json`
 和固定 Core 中的[插件资料](https://github.com/Lithe-IDEA/Lithe-core-rust/tree/65cf82343c5e315aae2e335b2e8f0217b703e89a/shared/plugins)为准。
 `MIGRATION.md` 保留迁移历史，不能用其中旧宿主、旧 API 数字推断当前兼容性。
+
+## 二进制依赖源码
+
+1.2.0 新增 `jdt:` 只读类内容提供者；配套 Viva 客户端需包含虚拟文档语言/URI
+同步和过期内容导航取消修复。较旧的兼容 Viva 仍可使用此前的 Maven/Gradle 工作流，
+但不保证打开反编译类后继续导航。新能力不增加 API、权限或运行时下载。
+
+类型和方法定义复用 JDT 的源码附加与反编译结果。没有源码的类也可只读打开，并继续
+跳到依赖的其他类；方法定位使用 JDT 返回的行号。每份内容最多 1 MiB，插件不持有额外
+源码缓存，关闭标签或工作区沿用宿主资源回收。缺失依赖的成员不能保证解析。
+
+针对残缺旧库，构建阶段修正锁定 JDT 1.61.0 对缺失内部类的遍历，避免整个外部类为空；
+无法恢复缺失的内部类本身。修改后的 JDT core JAR 不再具有 Eclipse JAR 签名，随包包含
+修改的 EPL 源码和完整哈希清单；原生 JVM 签名不变。来源、验证和移除条件见
+[补丁说明](third_party/jdtls/patches/README.md)。安装包和下载缓存运行时保持只读。
+
+`.jsp` 仍按 HTML 打开；Java 补全、跳转和 JSP 源码断点不属于此次新增能力。
 
 ## 当前 Viva 验证入口
 

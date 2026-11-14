@@ -265,3 +265,15 @@ fn initialize_without_lithe_logging_is_refused() {
         "closing stdin without exit is a failure exit"
     );
 }
+
+#[test]
+fn binary_content_callback_is_available_before_provider_registration() {
+    let mut host = Host::start();
+    let initialized = host.initialize();
+    let exit = host.close();
+    assert_eq!(exit, 1);
+    assert!(
+        initialized.to_string().contains("java.classFileContents"),
+        "{initialized}"
+    );
+}

@@ -118,4 +118,6 @@ for runtime_arch in "${runtime_architectures[@]}"; do
         fail "$runtime/lib/server/libjvm.dylib lost its upstream code signature"
 done
 
+node "$ROOT_DIR/scripts/package/patch-jdt-decompiler.mjs" --verify "$PACKAGE"
+
 print -u2 -- "Verified Java Support package $PACKAGE ($ARCH)"

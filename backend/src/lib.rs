@@ -47,6 +47,7 @@
 //! `settings_session::SESSION_CATEGORIES`. The backend never writes to
 //! stderr, and a fact carries no path, source or tool output.
 
+pub mod class_content;
 pub mod launch;
 pub mod plugin_functions;
 pub mod run;
@@ -130,11 +131,18 @@ pub fn backend() -> Result<Backend, SdkError> {
     let session = Arc::new(SettingsSession::new(Arc::new(HostServices::new(
         backend.handle(),
     ))));
+    let content_session = Arc::new(class_content::ClassContentSession::new(backend.handle()));
+    backend.function(class_content::CONTENT_FUNCTION, {
+        let session = Arc::clone(&session);
+        move |params, context| class_content::read(&session, params, context)
+    })?;
+    backend.suppress_success_diagnostics(class_content::CONTENT_FUNCTION)?;
     let run_session = Arc::new(RunSession::new(backend.handle(), Arc::clone(&session)));
     let handle = backend.handle();
     backend.on_host_notification(LANGUAGE_SERVER_STATE_NOTIFICATION, {
         let run_session = Arc::clone(&run_session);
         let session = Arc::clone(&session);
+        let content_session = Arc::clone(&content_session);
         move |params| {
             // An error from `degraded` only means the arguments were invalid,
             // and the session passes controlled categories and counts.
@@ -144,6 +152,7 @@ pub fn backend() -> Result<Backend, SdkError> {
                     .degraded(NOTIFICATION_OPERATION, code, Some(count));
             };
             session.did_change_state(&params, &report);
+            content_session.sync_reporting(&session, &report);
             run_session.sync_contexts_reporting(&report);
             Ok(())
         }
@@ -152,8 +161,25 @@ pub fn backend() -> Result<Backend, SdkError> {
         let session = Arc::clone(&session);
         move |params, context| settings_changed(&session, params, context)
     })?;
-    backend.function(LAUNCH_FUNCTION_ID, move |params, context| {
-        launch::resolve_launch_function(&session, params, context)
+    backend.function(LAUNCH_FUNCTION_ID, {
+        let session = Arc::clone(&session);
+        let content_session = Arc::clone(&content_session);
+        move |params, context| {
+            let plan = launch::resolve_launch_function(&session, params, context)?;
+            if let Some(workspace) = context.workspace_context() {
+                if content_session.ensure(workspace).is_err() {
+                    // The old language workflows remain available if a host
+                    // refuses this optional contribution; diagnose the loss.
+                    let _ = context.diagnostics().degraded(
+                        LAUNCH_FUNCTION_ID,
+                        class_content::REGISTRATION_FAILED,
+                        Some(1),
+                    );
+                }
+            }
+            context.check_cancelled()?;
+            Ok(plan)
+        }
     })?;
 
     // The run session registers the editor actions of every workspace context
@@ -178,7 +204,10 @@ pub fn backend() -> Result<Backend, SdkError> {
     backend.on_contexts_changed({
         let run_session = Arc::clone(&run_session);
         let report = Arc::clone(&report);
+        let content_session = Arc::clone(&content_session);
+        let session = Arc::clone(&session);
         move |_params| {
+            content_session.sync_reporting(&session, &*report);
             run_session.sync_contexts_reporting(&*report);
             Ok(())
         }
