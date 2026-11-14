@@ -269,7 +269,7 @@ node scripts/package/build-windows.mjs /path/to/lithe-java-backend.exe
 ```
 
 脚本验证 x64 PE 与锁定 JDK 的 SHA-256，复用 JDT 构建入口，写入 `.artifacts/` 并清理组装临时目录。
-发布工作流在 Windows 从同一标签构建并测试 x64 后端，再通过此入口组装 ZIP；本地验证复用相同入口。包不带发布者签名，不含安装器，打包成功也不能代替 Windows 运行验收。
+发布工作流在 Windows 从同一标签构建并测试 x64 后端，静态链接编译器运行库，再通过此入口组装 ZIP；本地验证复用相同入口。发布前用成熟的 PE 检查工具拒绝额外的 VC++/MinGW 运行库 DLL 依赖，保持后端无需另装编译器运行库。包不带发布者签名，不含安装器，打包成功也不能代替 Windows 运行验收。
 
 ## 发布新版本
 
