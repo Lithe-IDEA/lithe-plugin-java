@@ -38,6 +38,9 @@ jobs:
 
   windows:
     name: Build Windows x64 backend
+    env:
+      # The plugin must run without a separately installed VC++ runtime.
+      RUSTFLAGS: -C target-feature=+crt-static
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
@@ -96,6 +99,14 @@ jobs:
           for arch in arm64 x86_64; do
             scripts/build-package.sh --arch "$arch"
           done
+      - name: Verify Windows runtime dependencies
+        run: |
+          set -euo pipefail
+          /usr/bin/objdump -p .artifacts/windows-backend/lithe-java-backend.exe > "$RUNNER_TEMP/windows-imports.txt"
+          if grep -Ei 'DLL Name:.*(VCRUNTIME|MSVCP|libgcc|libstdc|libwinpthread)' "$RUNNER_TEMP/windows-imports.txt"; then
+            echo "::error::Windows backend depends on a separately installed compiler runtime"
+            exit 1
+          fi
       - name: Assemble the Windows archive
         run: |
           set -euo pipefail

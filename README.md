@@ -1,6 +1,6 @@
 # Java Support for Lithe
 
-> **Viva 预览版 Java 支持（1.1.0）**：清单已迁到当前契约 0，后端使用 Core
+> **Viva 预览版 Java 支持（1.1.1）**：清单已迁到当前契约 0，后端使用 Core
 > `65cf82343c5e315aae2e335b2e8f0217b703e89a` 中的 Rust SDK 0.4.0（尚无对应发布标签）。
 > 本轮验证含第三方 JAR 依赖的普通 Maven 工程：JDT 补全、Maven 编译、main 运行和断点调试，包含变量读取、继续和退出。
 > 需要同时包含 Lithe 客户端的动作注册解码、动作刷新与首次调试加载修复；未修改这些行为的旧 preview 不能直接使用本包。
@@ -24,7 +24,7 @@
 > SDK. Maven and Gradle import settings come from the Maven and Gradle plugins through a function interface that
 > Lithe Core relays between plugins.
 
-1.1.0 面向包含主仓库 [#1884](https://github.com/1lck/Lithe-IDEA/pull/1884) 的配套 Viva preview（客户端修订 `607f00967d70a7017d49805183d0d2e6ffdf1c0d` 或更新版本）。API / 能力与传输版本以 `plugin.json`、`sdk.lock.json`
+1.1.1 面向包含主仓库 [#1884](https://github.com/1lck/Lithe-IDEA/pull/1884) 的配套 Viva preview（客户端修订 `607f00967d70a7017d49805183d0d2e6ffdf1c0d` 或更新版本）。API / 能力与传输版本以 `plugin.json`、`sdk.lock.json`
 和固定 Core 中的[插件资料](https://github.com/Lithe-IDEA/Lithe-core-rust/tree/65cf82343c5e315aae2e335b2e8f0217b703e89a/shared/plugins)为准。
 `MIGRATION.md` 保留迁移历史，不能用其中旧宿主、旧 API 数字推断当前兼容性。
 
@@ -269,7 +269,7 @@ node scripts/package/build-windows.mjs /path/to/lithe-java-backend.exe
 ```
 
 脚本验证 x64 PE 与锁定 JDK 的 SHA-256，复用 JDT 构建入口，写入 `.artifacts/` 并清理组装临时目录。
-发布工作流在 Windows 从同一标签构建并测试 x64 后端，再通过此入口组装 ZIP；本地验证复用相同入口。包不带发布者签名，不含安装器，打包成功也不能代替 Windows 运行验收。
+发布工作流在 Windows 从同一标签构建并测试 x64 后端，静态链接编译器运行库，再通过此入口组装 ZIP；本地验证复用相同入口。发布前用成熟的 PE 检查工具拒绝额外的 VC++/MinGW 运行库 DLL 依赖，保持后端无需另装编译器运行库。包不带发布者签名，不含安装器，打包成功也不能代替 Windows 运行验收。
 
 ## 发布新版本
 
