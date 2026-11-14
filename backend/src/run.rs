@@ -56,7 +56,7 @@ use lithe_plugin_sdk::{
     WorkspaceContext,
 };
 use serde_json::{json, Map};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{BufRead, BufReader, Cursor, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
@@ -223,6 +223,9 @@ pub struct RunSession {
 
 const MAX_ACTION_QUERY_REFRESHES: u8 = 3;
 const MAX_ACTION_PROGRESS_JOBS: usize = 128;
+/// Remember recent terminal job IDs because SDK notification workers may run
+/// out of wire order. This per-server history has the same bound as live jobs.
+const MAX_COMPLETED_ACTION_PROGRESS_JOBS: usize = 128;
 
 #[derive(Default)]
 struct ActionQueryRetry {
@@ -233,6 +236,7 @@ struct ActionQueryRetry {
     degraded: bool,
     exhausted_reported: bool,
     active_work: HashSet<String>,
+    completed_jobs: VecDeque<String>,
     progress_limit: bool,
 }
 
@@ -254,8 +258,17 @@ impl ActionQueryRetry {
     }
 
     fn progress(&mut self, id: &str, complete: bool) -> bool {
+        // Completion is terminal for a JDT job ID. A delayed worker must not
+        // resurrect it, nor may a duplicate end consume another retry budget.
+        if self.completed_jobs.iter().any(|completed| completed == id) {
+            return false;
+        }
         if complete {
             self.active_work.remove(id);
+            if self.completed_jobs.len() == MAX_COMPLETED_ACTION_PROGRESS_JOBS {
+                self.completed_jobs.pop_front();
+            }
+            self.completed_jobs.push_back(id.to_owned());
             if self.active_work.is_empty() && !self.progress_limit {
                 return self.work_completed();
             }
@@ -1518,6 +1531,45 @@ mod tests {
             !retry.progress("index", true),
             "duplicate completion does not refresh"
         );
+    }
+
+    #[test]
+    fn completed_progress_cannot_be_resurrected_by_a_late_worker() {
+        let mut retry = ActionQueryRetry::default();
+        // SDK notification workers can acquire the lock in a different order
+        // from the wire: an earlier running update may follow completion.
+        assert!(!retry.progress("build", true));
+        assert!(!retry.progress("build", false));
+        assert!(!retry.progress("index", false));
+        assert_eq!(retry.defer(retry.completed_work), (true, false));
+        assert!(
+            retry.progress("index", true),
+            "late build update must not block recovery"
+        );
+        let completed = retry.completed_work;
+        assert!(!retry.progress("index", true));
+        assert_eq!(
+            retry.completed_work, completed,
+            "duplicate completion is not new work"
+        );
+    }
+
+    #[test]
+    fn terminal_progress_history_is_bounded_and_keeps_recent_jobs() {
+        let mut retry = ActionQueryRetry::default();
+        for id in 0..MAX_COMPLETED_ACTION_PROGRESS_JOBS * 2 {
+            retry.progress(&id.to_string(), true);
+        }
+        assert_eq!(
+            retry.completed_jobs.len(),
+            MAX_COMPLETED_ACTION_PROGRESS_JOBS
+        );
+        let recent = (MAX_COMPLETED_ACTION_PROGRESS_JOBS * 2 - 1).to_string();
+        let completed = retry.completed_work;
+        retry.progress(&recent, false);
+        retry.progress(&recent, true);
+        assert!(retry.active_work.is_empty());
+        assert_eq!(retry.completed_work, completed);
     }
 
     #[test]
