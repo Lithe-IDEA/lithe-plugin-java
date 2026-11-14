@@ -24,6 +24,11 @@ export function verifyBinary(path,arch,{executable=false}={}){
 export async function digest(path){
  const hash=createHash('sha256');for await(const bytes of createReadStream(path))hash.update(bytes);return hash.digest('hex');
 }
+export function copyRuntime(source,destination){
+ // Both BSD and GNU cp resolve the JDK's legal/ links with -RL. Node's
+ // recursive copy can retain links, which become dangling after staging ends.
+ execFileSync('cp',['-RL',source,destination],{timeout:120000});
+}
 export async function prepareJDK(arch){
  const target=architectures[arch];if(!target)throw Error(`Unsupported Linux architecture: ${arch}`);
  const manifest=JSON.parse(readFileSync(join(root,'third_party/jdk/manifest.json')));
@@ -51,7 +56,7 @@ export async function prepareJDK(arch){
   rmSync(output,{recursive:true,force:true});
   // The plugin contract forbids links. Dereference upstream JDK links only
   // during packaging; runtime code never modifies these installed resources.
-  cpSync(runtime,output,{recursive:true,dereference:true});
+  copyRuntime(runtime,output);
   return output;
  }finally{rmSync(staging,{recursive:true,force:true});}
 }
