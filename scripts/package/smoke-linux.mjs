@@ -17,7 +17,7 @@ try{
  execFileSync('unzip',['-q',archive,'-d',stage],{timeout:120000});
  const pkg=join(stage,'io.github.lithe-idea.java-support');const before=inventory(pkg);
  const workspace=join(stage,'workspace');mkdirSync(workspace);writeFileSync(join(workspace,'Hello.java'),'class Hello { String value; }\n');
- const params={serverID:'java',platform:{os:'linux',arch:process.arch==='arm64'?'arm64':'x86_64'},settings:{heapMaxMB:512,logLevel:'WARNING'}};
+ const params={serverID:'java',platform:{os:'linux',arch:process.arch==='arm64'?'arm64':'x86_64'},settings:{logLevel:'WARNING'}};
  for(const [key,name] of Object.entries({stateDirectory:'state',workspaceStateDirectory:'workspace-state',logDirectory:'logs',temporaryDirectory:'tmp'})){params[key]=join(stage,name);mkdirSync(params[key]);}
  backend=new Client(join(pkg,'bin/lithe-java-backend'));
  const initialized=await backend.request('initialize',{rootUri:pathToFileURL(workspace).href,capabilities:{experimental:{litheFunctions:{versions:[0]},litheLogging:{versions:[0]}}}});

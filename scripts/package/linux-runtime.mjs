@@ -1,7 +1,7 @@
 // Build-time Linux runtime preparation. Downloaded inputs are immutable and
 // keyed by SHA-256; extracted runtimes belong only to this checkout.
 import {createHash} from 'node:crypto';
-import {createReadStream,createWriteStream,readFileSync,mkdirSync,existsSync,rmSync,mkdtempSync,cpSync,renameSync,statSync} from 'node:fs';
+import {createReadStream,createWriteStream,readFileSync,mkdirSync,existsSync,rmSync,mkdtempSync,renameSync,statSync} from 'node:fs';
 import {join,dirname,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {execFileSync} from 'node:child_process';

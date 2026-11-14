@@ -4,6 +4,8 @@
 
 `node scripts/package/smoke-linux.mjs <zip>` 在原生 runner 上运行解压后的后端握手与 `java.resolveLaunch`，启动包内 Java 和 JDT LS，执行 initialize/shutdown，并对比整个安装目录的文件内容与权限。状态目录和 Equinox 配置副本在临时用户目录；结束时清理进程组和目录。
 
+Linux 产物面向 GNU/glibc 环境，原生 CI 使用 Ubuntu 24.04；本包不面向 musl/Alpine。
+
 ## 资源与验证边界
 
 所有下载、解压、编译与归档都属于本插件仓库的构建阶段。`dist/` 为输出包；`.artifacts/`、`.cache/`、`target/` 或工具自身缓存为本地构建状态，不跨工作树共享可变状态。校验过的下载以固定来源与摘要识别，提取结果不作为可信下载源。运行时只读取已安装插件，缓存、日志、索引和工作区状态归用户可写目录。Linux 不使用 macOS 代码签名或 Sparkle；本次不改变 macOS 包签名与更新基线。

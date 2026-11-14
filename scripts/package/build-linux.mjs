@@ -2,7 +2,7 @@
 // Linux packages use fixed, verified JDK/JDT inputs and a native backend from
 // this source checkout. All writes are build outputs, never installed files.
 import {execFileSync} from 'node:child_process';
-import {chmodSync,cpSync,mkdirSync,readFileSync,rmSync,mkdtempSync,readdirSync,lstatSync,statSync,writeFileSync} from 'node:fs';
+import {chmodSync,cpSync,mkdirSync,readFileSync,rmSync,mkdtempSync,readdirSync,lstatSync,writeFileSync} from 'node:fs';
 import {join,resolve} from 'node:path';
 import {architectures,root,prepareJDK,digest,verifyELF,verifyBinary} from './linux-runtime.mjs';
 import {collectNotices,verifyNotices} from './collect-notices.mjs';

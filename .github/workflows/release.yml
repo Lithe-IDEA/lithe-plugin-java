@@ -1,7 +1,7 @@
 name: Release
 
-# Tags must match plugin.json. Build unsigned macOS arm64/x64 and Windows
-# x64 packages from the same source revision, then upload a draft prerelease.
+# Tags must match plugin.json. Build macOS arm64/x64, Windows x64 and Linux
+# ARM64/x64 packages from the same revision, then upload a draft prerelease.
 # The maintainer verifies the downloaded assets before publishing the draft.
 # Contract 0 currently requires the matching Viva preview, not stable Lithe.
 on:
