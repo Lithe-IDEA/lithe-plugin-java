@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Assemble on macOS, using the backend built from this checkout on Windows.
 // All runtime inputs come from the committed manifests; installed packages are
-// never written. This is a development package, not a release/publishing entry.
+// never written. Release CI supplies the backend artifact built from the same tag;
+// the resulting unsigned ZIP is also used for native development validation.
 import { createHash } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
 import { cp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';

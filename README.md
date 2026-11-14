@@ -1,6 +1,6 @@
 # Java Support for Lithe
 
-> **Viva 最小 Maven 工作流（本地验证，尚未发布）**：清单已迁到当前契约 0，后端使用 Core
+> **Viva 预览版 Java 支持（1.1.0）**：清单已迁到当前契约 0，后端使用 Core
 > `65cf82343c5e315aae2e335b2e8f0217b703e89a` 中的 Rust SDK 0.4.0（尚无对应发布标签）。
 > 本轮验证含第三方 JAR 依赖的普通 Maven 工程：JDT 补全、Maven 编译、main 运行和断点调试，包含变量读取、继续和退出。
 > 需要同时包含 Lithe 客户端的动作注册解码、动作刷新与首次调试加载修复；未修改这些行为的旧 preview 不能直接使用本包。
@@ -24,7 +24,7 @@
 > SDK. Maven and Gradle import settings come from the Maven and Gradle plugins through a function interface that
 > Lithe Core relays between plugins.
 
-当前源码面向配套 Viva preview，尚未发布。API / 能力与传输版本以 `plugin.json`、`sdk.lock.json`
+1.1.0 面向包含主仓库 [#1884](https://github.com/1lck/Lithe-IDEA/pull/1884) 的配套 Viva preview（客户端修订 `607f00967d70a7017d49805183d0d2e6ffdf1c0d` 或更新版本）。API / 能力与传输版本以 `plugin.json`、`sdk.lock.json`
 和固定 Core 中的[插件资料](https://github.com/Lithe-IDEA/Lithe-core-rust/tree/65cf82343c5e315aae2e335b2e8f0217b703e89a/shared/plugins)为准。
 `MIGRATION.md` 保留迁移历史，不能用其中旧宿主、旧 API 数字推断当前兼容性。
 
@@ -187,7 +187,7 @@ Spring/MyBatis 等既有能力不属于本轮 Maven 验收范围。
 后端把日志交给宿主的统一日志 `litheLogging` 0，不写 stderr。函数 ID 都是编译期常量，注册只会因 ID 写错、重复或超出 SDK
 上限而失败，单元测试 `the_backend_builds_with_every_command_registered` 在 CI 里挡住这种构建；万一发生，进程在握手前以状态 1 退出，
 由宿主记录启动失败（`backend/src/main.rs`）。当前固定的 Rust SDK 0.4.0 要求宿主提供 `litheLogging` 0，
-不提供的 Lithe 版本会拒绝启动后端；本次只验证上述配套 Viva 检出，尚未发布。
+不提供的 Lithe 版本会拒绝启动后端；本次验证范围以本文列出的配套 Viva 检出为准。
 
 | 事实 | 级别 | 来源 | 内容 |
 | --- | --- | --- | --- |
@@ -260,7 +260,7 @@ scripts/archive-package.sh --package <上一步打印的目录> --arch arm64   #
 
 `plugin.json` 的完整格式只在固定 Core 的 `shared/plugins/contract/v1/`，不在本仓库维护副本。
 
-### Windows 开发包
+### Windows 包
 
 在 Windows 从同一源码以 `--locked` 编译 x64 后端后，可在 macOS 组装用于原生验证的包：
 
@@ -269,12 +269,12 @@ node scripts/package/build-windows.mjs /path/to/lithe-java-backend.exe
 ```
 
 脚本验证 x64 PE 与锁定 JDK 的 SHA-256，复用 JDT 构建入口，写入 `.artifacts/` 并清理组装临时目录。
-这是开发验证入口，不是 Windows 正式签名、安装器或发布工作流，也不能代替 Windows 运行验收。
+发布工作流在 Windows 从同一标签构建并测试 x64 后端，再通过此入口组装 ZIP；本地验证复用相同入口。包不带发布者签名，不含安装器，打包成功也不能代替 Windows 运行验收。
 
 ## 发布新版本
 
 构建和发布由现有工作流执行，正式发布前按 Lithe 的版本规则决定版本并核验兼容宿主。
-当前依赖 Viva preview，只能作为预发布；Windows 开发包尚未接入发布工作流。
+当前依赖 Viva preview，只能作为预发布。推送匹配版本的标签后，工作流为 macOS arm64/x64 与 Windows x64 生成 ZIP 和 SHA-256，并创建草稿预发布；维护者下载核对后再公开草稿。发布说明必须位于 `docs/releases/v<版本>.md`，缺失则终止发布。
 不得覆盖已发布 ZIP，也不得将本地隔离试验的 JDT/JDK 资源当作生产升级：本轮生产仍固定 JDT LS 1.61 和 Temurin 21。
 
 ## 许可
