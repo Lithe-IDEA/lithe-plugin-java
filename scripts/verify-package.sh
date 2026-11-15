@@ -53,7 +53,7 @@ for notice in LICENSE NOTICE; do
 done
 node "$ROOT_DIR/scripts/package/collect-notices.mjs" --verify "$PACKAGE"
 
-allowed=(plugin.json bin icons templates language-server runtime LICENSE NOTICE licenses)
+allowed=(plugin.json bin icons templates l10n language-server runtime LICENSE NOTICE licenses)
 for entry in "$PACKAGE"/*(DN); do
     (( ${allowed[(Ie)${entry:t}]} )) || fail "undeclared top-level entry ${entry:t}"
 done

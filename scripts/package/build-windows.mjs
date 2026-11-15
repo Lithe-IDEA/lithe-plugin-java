@@ -75,7 +75,7 @@ try {
   if (!/^JAVA_VERSION="21\./m.test(release)) throw new Error('The pinned runtime must be Java 21.');
   await mkdir(join(packageRoot, 'runtime'), { recursive: true });
   await cp(runtime, join(packageRoot, 'runtime/x86_64'), { recursive: true });
-  for (const name of ['icons', 'templates']) await cp(join(root, id, name), join(packageRoot, name), { recursive: true });
+  for (const name of ['icons', 'templates', 'l10n']) await cp(join(root, id, name), join(packageRoot, name), { recursive: true });
   const languageServer = join(packageRoot, 'language-server');
   await mkdir(languageServer);
   for (const name of ['plugins', 'features', 'lombok', 'java-debug', 'java-test', 'manifest.json', 'LICENSE-EPL-2.0.txt']) {

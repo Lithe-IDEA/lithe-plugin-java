@@ -1,0 +1,12 @@
+{
+  "settingActions": {
+    "compiler": {
+      "title": "读取编译设置",
+      "description": "读取工具的实际配置；保存时写入页面列出的原生配置文件。"
+    },
+    "libraries": {
+      "title": "读取本地 JAR 依赖",
+      "description": "读取项目实际引用的 JAR；保存时更新页面列出的原生配置文件。"
+    }
+  }
+}

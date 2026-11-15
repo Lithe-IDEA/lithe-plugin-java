@@ -37,7 +37,7 @@ function verify(directory){
 try{
  mkdirSync(pkg);
  cpSync(join(root,id,'plugin.json'),join(pkg,'plugin.json'));
- for(const name of ['icons','templates'])cpSync(join(root,id,name),join(pkg,name),{recursive:true});
+ for(const name of ['icons','templates','l10n'])cpSync(join(root,id,name),join(pkg,name),{recursive:true});
  mkdirSync(join(pkg,'runtime'));cpSync(runtime,join(pkg,'runtime',target.runtime),{recursive:true});
  const language=join(pkg,'language-server');mkdirSync(language);
  for(const name of ['plugins','features','lombok','java-debug','java-test','manifest.json','LICENSE-EPL-2.0.txt'])cpSync(join(jdt,name),join(language,name),{recursive:true});

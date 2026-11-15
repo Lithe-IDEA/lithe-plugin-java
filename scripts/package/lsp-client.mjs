@@ -1,10 +1,11 @@
 // Bounded integration-test client. Each child owns a process group; cleanup
 // runs after success, protocol failure, and request timeout.
-import {spawn} from 'node:child_process';
+import {spawn,execFileSync} from 'node:child_process';
 export class Client {
  constructor(executable,args=[],options={}){
+  this.hostRequests=options.hostRequests??{};const {hostRequests,...spawnOptions}=options;
   this.next=1;this.pending=new Map();this.buffer=Buffer.alloc(0);this.stderr='';
-  this.child=spawn(executable,args,{...options,detached:true,stdio:['pipe','pipe','pipe']});
+  this.child=spawn(executable,args,{...spawnOptions,detached:true,stdio:['pipe','pipe','pipe']});
   this.exited=new Promise(resolve=>{this.child.once('exit',(code,signal)=>{this.fail(Error(`Process exited: ${code}/${signal}: ${this.stderr}`));resolve();});this.child.once('error',error=>{this.fail(error);resolve();});});
   this.child.stdin.on('error',error=>this.fail(error));
   this.child.stderr.on('data',bytes=>{this.stderr=(this.stderr+bytes).slice(-65536);});
@@ -18,8 +19,9 @@ export class Client {
      if(this.buffer.length<end+4+length)return;
      const message=JSON.parse(this.buffer.subarray(end+4,end+4+length));this.buffer=this.buffer.subarray(end+4+length);
      if(message.method && message.id!==undefined){
-      const result=message.method==='workspace/configuration'?(message.params?.items??[]).map(()=>({})):null;
-      this.send({id:message.id,result});
+      const handler=this.hostRequests[message.method];
+      if(handler){Promise.resolve().then(()=>handler(message.params)).then(result=>this.send({id:message.id,result}),error=>this.send({id:message.id,error:{code:-32603,message:error.message}}));}
+      else{const result=message.method==='workspace/configuration'?(message.params?.items??[]).map(()=>({})):null;this.send({id:message.id,result});}
      }else if(message.id!==undefined){const item=this.pending.get(message.id);if(item){this.pending.delete(message.id);clearTimeout(item.timer);message.error?item.reject(Error(JSON.stringify(message.error))):item.resolve(message.result);}}
     }
    }catch(error){this.fail(error);}
@@ -37,7 +39,7 @@ export class Client {
  }
  async close(){
   this.fail(Error('Client closed'));
-  if(this.child.pid){try{process.kill(-this.child.pid,'SIGKILL');}catch(error){if(error.code!=='ESRCH')throw error;}}
+  if(this.child.pid){try{if(process.platform==='win32'){if(this.child.exitCode===null)execFileSync('taskkill.exe',['/PID',String(this.child.pid),'/T','/F'],{timeout:5000,windowsHide:true,stdio:'ignore'});}else process.kill(-this.child.pid,'SIGKILL');}catch(error){if(error.code!=='ESRCH')throw error;}}
   let timer;try{await Promise.race([this.exited,new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('Process cleanup timed out')),5000);})]);}finally{clearTimeout(timer);}
  }
 }
