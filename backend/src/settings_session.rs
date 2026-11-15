@@ -53,7 +53,9 @@ use lithe_java_domain::lsp::languages::jdt::{settings_notification, JdtJavaRunti
 use lithe_java_domain::lsp::languages::jdt_contributions::{
     accept_answer, AcceptedSettings, Contributions, SETTINGS_CHANGED_FUNCTION,
 };
-use lithe_plugin_sdk::{BackendHandle, Cancellation, PluginError, Value, WorkspaceContext};
+use lithe_plugin_sdk::{
+    BackendHandle, Cancellation, FunctionError, PluginError, Value, WorkspaceContext,
+};
 use serde_json::{json, Map};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -118,7 +120,7 @@ pub const SESSION_CATEGORIES: &[&str] = &[
 ];
 
 /// Host method that sends a notification to a plugin-declared server.
-const NOTIFY_METHOD: &str = "lithe/host/languageServer/notify";
+pub(crate) const NOTIFY_METHOD: &str = "lithe/host/languageServer/notify";
 
 /// Host method that sends a request to a plugin-declared server.
 pub(crate) const REQUEST_METHOD: &str = "lithe/host/languageServer/request";
@@ -278,6 +280,7 @@ struct WorkspaceState {
     /// the host resolved; every push repeats them so the server keeps the
     /// same default runtime the host runs.
     java_runtimes: Vec<JdtJavaRuntime>,
+    native_root: Option<std::path::PathBuf>,
     /// Project updates waiting for a running server.
     pending_projects: Vec<ProjectProfiles>,
     /// Set from the moment the server is running until its collection is
@@ -294,6 +297,7 @@ impl WorkspaceState {
             seen: None,
             contributions: Contributions::default(),
             java_runtimes: Vec::new(),
+            native_root: None,
             pending_projects: Vec::new(),
             collecting: None,
         }
@@ -507,6 +511,21 @@ pub fn java_configuration(fragments: &[Value], runtimes: &[JdtJavaRuntime]) -> V
     }
 }
 
+/// Adds native upstream workspace sources without replacing runtimes or import
+/// contributions. Only the owning plugin's allowlisted keys can be overlaid.
+pub fn with_native_settings(
+    mut settings: Value,
+    root: &std::path::Path,
+) -> Result<Value, FunctionError> {
+    let native = crate::project_settings::native_settings(root)?;
+    for (section, values) in native.as_object().into_iter().flatten() {
+        for (key, value) in values.as_object().into_iter().flatten() {
+            settings["java"][section][key] = value.clone();
+        }
+    }
+    Ok(settings)
+}
+
 /// Locks `mutex` even when a panic poisoned it: the guarded data stays
 /// consistent because every critical section here only swaps whole values.
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -623,6 +642,11 @@ impl SettingsSession {
                 return None;
             }
         };
+        if let Some(state) = self.lock_states().get_mut(workspace.context_id()) {
+            if state.context.generation() == workspace.generation() {
+                state.native_root = Some(std::path::PathBuf::from(&root));
+            }
+        }
         let relay = self.host.relay(workspace);
         // The collection belongs to no function call, so nothing cancels it;
         // a provider that does not answer ends at the relay's own timeout.
@@ -723,7 +747,7 @@ impl SettingsSession {
     /// documentation.
     fn flush(&self, key: &str, report: &dyn Fn(&str, u64)) {
         let _delivery = lock(&self.gate);
-        let (workspace, params, projects) = {
+        let (workspace, params, projects, native_root) = {
             let mut states = self.lock_states();
             let Some(state) = states.get_mut(key) else {
                 return;
@@ -735,7 +759,19 @@ impl SettingsSession {
                 state.context.clone(),
                 configuration_params(&state.contributions.fragments(), &state.java_runtimes),
                 std::mem::take(&mut state.pending_projects),
+                state.native_root.clone(),
             )
+        };
+        let params = match native_root {
+            Some(root) => match with_native_settings(params["settings"].clone(), &root) {
+                Ok(settings) => json!({"settings":settings}),
+                Err(_) => {
+                    report(SESSION_PUSH_FAILED, 1);
+                    self.requeue_projects(key, projects);
+                    return;
+                }
+            },
+            None => params,
         };
         if self.host.push_configuration(&workspace, params).is_err() {
             report(SESSION_PUSH_FAILED, 1);
@@ -753,6 +789,36 @@ impl SettingsSession {
                 report(SESSION_PROJECT_UPDATE_FAILED, 1);
             }
         }
+    }
+
+    /// Reloads native workspace sources after the host published them. The
+    /// complete current configuration retains the selected runtime and imports.
+    pub fn refresh_native_settings(
+        &self,
+        workspace: &WorkspaceContext,
+        root: &std::path::Path,
+    ) -> Result<(), FunctionError> {
+        let _delivery = lock(&self.gate);
+        let settings = {
+            let states = self.lock_states();
+            let state = states.get(workspace.context_id()).ok_or_else(|| {
+                PluginError::new(
+                    "java.nativeSettings.unavailable",
+                    "The Java language server is unavailable.",
+                )
+            })?;
+            java_configuration(&state.contributions.fragments(), &state.java_runtimes)
+        };
+        let settings = with_native_settings(settings, root)?;
+        self.host
+            .push_configuration(workspace, json!({"settings":settings}))
+            .map_err(|_| {
+                PluginError::new(
+                    "java.nativeSettings.pushFailed",
+                    "Java project settings could not be refreshed.",
+                )
+            })?;
+        Ok(())
     }
 
     /// The contributed settings fragments known for the workspace

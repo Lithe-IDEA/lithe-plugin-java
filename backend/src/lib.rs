@@ -50,6 +50,7 @@
 pub mod class_content;
 pub mod launch;
 pub mod plugin_functions;
+pub mod project_settings;
 pub mod run;
 pub mod settings_session;
 
@@ -239,6 +240,18 @@ pub fn backend() -> Result<Backend, SdkError> {
     backend.function(RERUN_FUNCTION_ID, {
         let run_session = Arc::clone(&run_session);
         move |params, context| run::rerun_function(&run_session, params, context)
+    })?;
+    let projects = Arc::new(project_settings::ProjectSettings::default());
+    for (function, libraries) in [("compiler.settings", false), ("libraries.settings", true)] {
+        let projects = Arc::clone(&projects);
+        let session = Arc::clone(&session);
+        backend.function(function, move |params, context| {
+            projects.snapshot(params, context, libraries, &session)
+        })?;
+        backend.suppress_success_diagnostics(function)?;
+    }
+    backend.function("compiler.prepareSettings", move |params, context| {
+        projects.edit(params, context)
     })?;
     Ok(backend)
 }

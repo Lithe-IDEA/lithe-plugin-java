@@ -647,7 +647,7 @@ pub fn resolve_launch_function(
     };
     let trigger_files = trigger_files(&folders)?;
     context.check_cancelled()?;
-    let answer = resolve(
+    let mut answer = resolve(
         &request,
         &package_root,
         &fragments,
@@ -655,6 +655,14 @@ pub fn resolve_launch_function(
         now_unix_seconds(),
         &report,
     )?;
+    if let Some(folder) = folders.first() {
+        let configuration = crate::settings_session::with_native_settings(
+            answer["workspaceConfiguration"].clone(),
+            folder,
+        )?;
+        answer["workspaceConfiguration"] = configuration.clone();
+        answer["initializationOptions"]["settings"] = configuration;
+    }
     context.check_cancelled()?;
     Ok(answer)
 }

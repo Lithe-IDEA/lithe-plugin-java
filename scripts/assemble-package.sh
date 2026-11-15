@@ -54,9 +54,10 @@ backend_path=$(/usr/bin/plutil -extract backend.launch.path raw -o - "$PLUGIN_DI
 
 jdtls_root=$(LITHE_ARCH="$ARCH" "$ROOT_DIR/scripts/prepare-jdtls.sh")
 language_server="$OUTPUT_DIR/language-server"
-rm -rf "$language_server" "$OUTPUT_DIR/runtime" "$OUTPUT_DIR/icons" "$OUTPUT_DIR/templates" "$OUTPUT_DIR/bin"
+rm -rf "$language_server" "$OUTPUT_DIR/runtime" "$OUTPUT_DIR/icons" "$OUTPUT_DIR/templates" "$OUTPUT_DIR/l10n" "$OUTPUT_DIR/bin"
 cp -R "$PLUGIN_DIR/icons" "$OUTPUT_DIR/icons"
 cp -R "$PLUGIN_DIR/templates" "$OUTPUT_DIR/templates"
+cp -R "$PLUGIN_DIR/l10n" "$OUTPUT_DIR/l10n"
 mkdir -p "$language_server/configuration"
 
 # Only what a macOS launch reads is packaged. The wrapper scripts and the

@@ -2,9 +2,9 @@
   "schemaVersion": 0,
   "id": "io.github.lithe-idea.java-support",
   "displayName": "Java Support",
-  "version": "1.3.0",
+  "version": "2.0.0",
   "pluginAPIVersion": 0,
-  "requires": {"backend": 0, "debugAdapters": 0, "languages": 0, "languageServers": 0, "pluginFunctions": 0, "settings": 0, "projectGenerators": 0, "toolDefinitions": 0},
+  "requires": {"backend": 0, "debugAdapters": 0, "languages": 0, "languageServers": 0, "pluginFunctions": 0, "settings": 0, "projectGenerators": 0, "toolDefinitions": 0, "sourceSettings": 0},
   "requiresTools": ["java"],
   "vendor": {
     "id": "io.github.lithe-idea",
@@ -485,5 +485,6 @@
         {"path": "build.gradle.kts", "when": {"field": "type", "equals": "gradle-project-kotlin"}}
       ]
     }
-  ]
+  ],
+  "settingActions": [{"id": "compiler", "title": "Read compiler settings", "description": "Read actual Eclipse JDT project settings. Save writes the displayed native preferences or library configuration files.", "function": "compiler.settings", "sourceEditor": {"editFunction": "compiler.prepareSettings", "languageID": "java"}, "page": {"compilerID": "java"}}, {"id": "libraries", "title": "Read local JAR dependencies", "description": "Read actual Eclipse JDT project settings. Save writes the displayed native preferences or library configuration files.", "function": "libraries.settings", "sourceEditor": {"editFunction": "compiler.prepareSettings", "languageID": "java"}, "page": {"languageID": "java"}}]
 }

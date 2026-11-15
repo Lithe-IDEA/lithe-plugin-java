@@ -33,6 +33,8 @@ jobs:
           node-version: 22
       - name: Test package resources
         run: node --test --test-timeout=60000 scripts/package/*.test.mjs
+      - name: Test bounded integration tool cleanup
+        run: node --test --test-timeout=15000 scripts/compiler/process.test.mjs
       - name: Check formatting
         run: cargo fmt --all --check
       - name: Lint
@@ -74,6 +76,17 @@ jobs:
             package=$(scripts/build-package.sh --arch "$arch")
             scripts/archive-package.sh --package "$package" --arch "$arch"
           done
+      - name: Verify native compiler settings and JARs with JDT
+        run: |
+          package=".artifacts/package/$(uname -m)/io.github.lithe-idea.java-support"
+          node scripts/compiler/test-live.mjs "$package"
+          LITHE_JAVA_PROJECT_KIND=eclipse node scripts/compiler/test-live.mjs "$package"
+      - name: Upload native compiler projections
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-compiler-projection
+          path: .artifacts/compiler/visual-*.json
+          if-no-files-found: error
       - name: Upload the archives
         uses: actions/upload-artifact@v4
         with:
@@ -126,3 +139,42 @@ jobs:
             dist/*-linux-*.zip.sha256
           if-no-files-found: error
           retention-days: 7
+
+  native-settings-visual:
+    name: Native compiler settings screenshots
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    needs: package
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-compiler-projection
+          path: .artifacts/compiler
+      - name: Read pinned host revision
+        id: host
+        run: echo "revision=$(node -p 'JSON.parse(require("fs").readFileSync("compiler-host.json")).revision')" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          repository: 1lck/Lithe-IDEA
+          ref: ${{ steps.host.outputs.revision }}
+          path: .artifacts/host
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: .artifacts/host/desktop/go.mod
+          cache: false
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.100.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Render actual compiler projections through the native host
+        run: node scripts/compiler/visual.mjs .artifacts/host
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-compiler-settings-screenshots
+          path: .artifacts/compiler/visual/
+          if-no-files-found: error
+          retention-days: 14
