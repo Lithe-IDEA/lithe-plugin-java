@@ -13,7 +13,7 @@ import {setTimeout as delay} from 'node:timers/promises';
 import {Client} from '../package/lsp-client.mjs';
 const pkg=resolve(process.argv[2]??'.artifacts/package/arm64/io.github.lithe-idea.java-support');
 const manifest=JSON.parse(readFileSync(join(pkg,'plugin.json')));
-const stage=realpathSync(mkdtempSync(join(tmpdir(),'lithe-java-native-')));
+const stage=realpathSync.native(mkdtempSync(join(tmpdir(),'lithe-java-native-')));
 const root=join(stage,'workspace');mkdirSync(root);let backend,server,configuration={};
 const eclipse=process.env.LITHE_JAVA_PROJECT_KIND==='eclipse';
 const sourceFile=join(root,eclipse?'src/Main.java':'Main.java');
