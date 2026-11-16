@@ -6,7 +6,11 @@
 //! platform in `cargo test`; the assembled package is checked separately by
 //! `scripts/verify-package.sh`.
 
-use lithe_java_backend::launch::{LAUNCHER_PREFIX, LAUNCH_FUNCTION_ID, PACKAGE_LAYOUT};
+use lithe_java_backend::jdtls::SERVER_HOME_SETTING;
+use lithe_java_backend::launch::{
+    EXTENSIONS_DIRECTORY, LAUNCH_FUNCTION_ID, MINIMUM_SERVER_JAVA_VERSION, PACKAGE_LAYOUT,
+    SERVER_RUNTIME_TOOL,
+};
 use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -168,14 +172,15 @@ fn language_server_launch_is_resolved_by_the_backend() {
 
 #[test]
 fn package_scripts_name_every_path_the_backend_resolves() {
-    // plugin.json no longer lists the language server files, so the scripts
-    // that assemble and verify the package are held to the backend's layout.
+    // plugin.json does not list the packaged JDT LS extensions, so the
+    // scripts that assemble and verify the package are held to the backend's
+    // layout.
     for script in ["scripts/assemble-package.sh", "scripts/verify-package.sh"] {
         let source = read(script);
         for path in PACKAGE_LAYOUT {
             assert!(
-                path.starts_with("language-server/") || *path == "runtime",
-                "{path} must stay inside language-server/ or runtime/"
+                path.starts_with(&format!("{EXTENSIONS_DIRECTORY}/")),
+                "{path} must stay inside {EXTENSIONS_DIRECTORY}/"
             );
             assert!(
                 !path.split('/').any(|part| part == ".."),
@@ -183,31 +188,73 @@ fn package_scripts_name_every_path_the_backend_resolves() {
             );
             assert!(source.contains(path), "{script} does not check {path}");
         }
-        assert!(
-            source.contains(LAUNCHER_PREFIX),
-            "{script} does not check for the Equinox launcher JAR"
-        );
     }
 }
 
 #[test]
+fn the_users_jdt_ls_runs_on_the_declared_runtime_tool() {
+    // JDT LS and its JDK come from the user's machine: the package ships
+    // neither, the backend answers the runtime tool the manifest defines, and
+    // the user can choose the JDT LS folder in a setting the backend reads.
+    let manifest = read_json(&format!("{PLUGIN_ID}/plugin.json"));
+    let tools: Vec<&str> = manifest["requiresTools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|tool| tool.as_str().unwrap())
+        .collect();
+    assert_eq!(tools, ["java", SERVER_RUNTIME_TOOL]);
+    let definitions = manifest["toolDefinitions"].as_array().unwrap();
+    let runtime = definitions
+        .iter()
+        .find(|definition| definition["id"] == SERVER_RUNTIME_TOOL)
+        .expect("the manifest defines the JDT LS runtime tool");
+    let java = definitions
+        .iter()
+        .find(|definition| definition["id"] == "java")
+        .unwrap();
+    // The runtime finds JDKs where the project JDK is found.
+    assert_eq!(runtime["discovery"], java["discovery"]);
+    assert_eq!(runtime["executableLayouts"], java["executableLayouts"]);
+    // It exports nothing, so JDT LS keeps the environment the host gives it.
+    assert!(runtime.get("exports").is_none());
+    assert!(runtime.get("pathPrepend").is_none());
+
+    let setting = manifest["settings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|setting| setting["id"] == SERVER_HOME_SETTING)
+        .expect("the manifest declares the JDT LS folder setting");
+    assert_eq!(text(setting, "type"), "directory");
+    assert_eq!(text(setting, "default"), "");
+
+    let pins = read_json("third_party/jdtls/manifest.json");
+    assert_eq!(
+        pins["minimumJavaVersion"].as_u64(),
+        Some(MINIMUM_SERVER_JAVA_VERSION),
+        "the tested JDT LS and the backend must agree on its oldest Java"
+    );
+    assert!(
+        !repository_root().join("third_party/jdk").exists(),
+        "the package ships no JDK"
+    );
+}
+
+#[test]
 fn third_party_inputs_are_pinned_by_https_url_and_sha256() {
-    for relative in [
-        "third_party/jdtls/manifest.json",
-        "third_party/jdk/manifest.json",
-    ] {
-        let mut pins = 0;
-        visit(&read_json(relative), &mut |key, value| {
-            let lowered = key.to_ascii_lowercase();
-            if lowered.ends_with("sha256") {
-                assert_sha256(value, &format!("{relative} {key}"));
-                pins += 1;
-            } else if lowered.ends_with("url") {
-                assert!(value.starts_with("https://"), "{relative} {key}: {value}");
-            }
-        });
-        assert!(pins >= 4, "{relative} pins only {pins} checksums");
-    }
+    let relative = "third_party/jdtls/manifest.json";
+    let mut pins = 0;
+    visit(&read_json(relative), &mut |key, value| {
+        let lowered = key.to_ascii_lowercase();
+        if lowered.ends_with("sha256") {
+            assert_sha256(value, &format!("{relative} {key}"));
+            pins += 1;
+        } else if lowered.ends_with("url") {
+            assert!(value.starts_with("https://"), "{relative} {key}: {value}");
+        }
+    });
+    assert!(pins >= 4, "{relative} pins only {pins} checksums");
 }
 
 #[test]

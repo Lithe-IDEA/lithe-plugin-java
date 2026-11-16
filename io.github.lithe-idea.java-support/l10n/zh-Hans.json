@@ -1,4 +1,28 @@
 {
+  "settings": {
+    "languageServerHome": {
+      "title": "语言服务器目录",
+      "description": "Eclipse JDT Language Server 的目录，即包含 plugins 和 config 目录的那一层。留空时自动查找：JDTLS_HOME、PATH 上的 jdtls，以及 Homebrew、mason.nvim、Scoop 或 VS Code Java 扩展安装的 JDT LS。",
+      "placeholder": "自动查找"
+    },
+    "heapMaxMB": {
+      "title": "最大内存",
+      "description": "Java 语言服务器堆内存的上限。大型多模块项目可以调高。"
+    },
+    "logLevel": {
+      "title": "语言服务器日志级别",
+      "description": "Java 语言服务器写入自身日志的详细程度。级别越安静，写盘越少。",
+      "options": {
+        "ALL": "全部消息",
+        "INFO": "信息",
+        "WARNING": "警告",
+        "SEVERE": "仅错误"
+      }
+    }
+  },
+  "sections": {
+    "Language server": "语言服务器"
+  },
   "settingActions": {
     "compiler": {
       "title": "读取编译设置",

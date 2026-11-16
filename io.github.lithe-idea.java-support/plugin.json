@@ -2,10 +2,10 @@
   "schemaVersion": 0,
   "id": "io.github.lithe-idea.java-support",
   "displayName": "Java Support",
-  "version": "2.0.1",
+  "version": "3.0.0",
   "pluginAPIVersion": 0,
   "requires": {"backend": 0, "debugAdapters": 0, "languages": 0, "languageServers": 0, "pluginFunctions": 0, "settings": 0, "projectGenerators": 0, "toolDefinitions": 0, "sourceSettings": 0},
-  "requiresTools": ["java"],
+  "requiresTools": ["java", "jdtls-runtime"],
   "vendor": {
     "id": "io.github.lithe-idea",
     "displayName": "Lithe Community",
@@ -216,6 +216,36 @@
             "macos",
             "linux"
           ]
+        },
+        {
+          "root": {
+            "kind": "absolute",
+            "path": "/opt/homebrew/opt"
+          },
+          "pattern": "openjdk*/libexec/openjdk.jdk",
+          "platforms": [
+            "macos"
+          ]
+        },
+        {
+          "root": {
+            "kind": "absolute",
+            "path": "/usr/local/opt"
+          },
+          "pattern": "openjdk*/libexec/openjdk.jdk",
+          "platforms": [
+            "macos"
+          ]
+        },
+        {
+          "root": {
+            "kind": "absolute",
+            "path": "/home/linuxbrew/.linuxbrew/opt"
+          },
+          "pattern": "openjdk*/libexec",
+          "platforms": [
+            "linux"
+          ]
         }
       ],
       "homeVariable": "JAVA_HOME",
@@ -236,6 +266,222 @@
       "pathPrepend": [
         "${home}/bin"
       ],
+      "launch": [
+        "${executable}",
+        "${runtimeArguments}",
+        "-jar",
+        "${entry}",
+        "${arguments}"
+      ]
+    },
+    {
+      "id": "jdtls-runtime",
+      "displayName": "JDK for JDT LS",
+      "icon": {
+        "host": "plugin"
+      },
+      "executableLayouts": [
+        {
+          "path": "bin/java",
+          "platforms": [
+            "macos",
+            "linux"
+          ]
+        },
+        {
+          "path": "bin/java.exe",
+          "platforms": [
+            "windows"
+          ]
+        }
+      ],
+      "executables": [
+        {
+          "id": "default",
+          "kind": "setting",
+          "settingID": "executable",
+          "layer": "global"
+        },
+        {
+          "id": "global-request",
+          "kind": "toolchain",
+          "scope": "global"
+        },
+        {
+          "id": "shell",
+          "kind": "command",
+          "command": "java"
+        },
+        {
+          "id": "detected",
+          "kind": "toolchain",
+          "scope": "installed"
+        }
+      ],
+      "version": {
+        "arguments": [
+          "-version"
+        ],
+        "pattern": "version \\\"(?:1\\.)?(\\d+(?:\\.\\d+)*)"
+      },
+      "homeLayouts": [
+        {
+          "match": "*.jdk",
+          "home": "Contents/Home",
+          "platforms": [
+            "macos"
+          ]
+        },
+        {
+          "match": "*",
+          "home": "."
+        }
+      ],
+      "discovery": [
+        {
+          "root": {
+            "kind": "absolute",
+            "path": "/Library/Java/JavaVirtualMachines"
+          },
+          "pattern": "*.jdk",
+          "platforms": [
+            "macos"
+          ]
+        },
+        {
+          "root": {
+            "kind": "home"
+          },
+          "pattern": "Library/Java/JavaVirtualMachines/*.jdk",
+          "platforms": [
+            "macos"
+          ]
+        },
+        {
+          "root": {
+            "kind": "absolute",
+            "path": "C:\\Program Files\\Java"
+          },
+          "pattern": "*",
+          "platforms": [
+            "windows"
+          ]
+        },
+        {
+          "root": {
+            "kind": "absolute",
+            "path": "C:\\Program Files\\Eclipse Adoptium"
+          },
+          "pattern": "*",
+          "platforms": [
+            "windows"
+          ]
+        },
+        {
+          "root": {
+            "kind": "absolute",
+            "path": "C:\\Program Files\\Microsoft"
+          },
+          "pattern": "jdk-*",
+          "platforms": [
+            "windows"
+          ]
+        },
+        {
+          "root": {
+            "kind": "absolute",
+            "path": "C:\\Program Files\\Zulu"
+          },
+          "pattern": "*",
+          "platforms": [
+            "windows"
+          ]
+        },
+        {
+          "root": {
+            "kind": "absolute",
+            "path": "C:\\Program Files\\Amazon Corretto"
+          },
+          "pattern": "*",
+          "platforms": [
+            "windows"
+          ]
+        },
+        {
+          "root": {
+            "kind": "absolute",
+            "path": "C:\\Program Files\\BellSoft"
+          },
+          "pattern": "*",
+          "platforms": [
+            "windows"
+          ]
+        },
+        {
+          "root": {
+            "kind": "absolute",
+            "path": "/usr/lib/jvm"
+          },
+          "pattern": "*",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "root": {
+            "kind": "home"
+          },
+          "pattern": ".jdks/*",
+          "platforms": [
+            "windows",
+            "linux"
+          ]
+        },
+        {
+          "root": {
+            "kind": "home"
+          },
+          "pattern": ".sdkman/candidates/java/*",
+          "platforms": [
+            "macos",
+            "linux"
+          ]
+        },
+        {
+          "root": {
+            "kind": "absolute",
+            "path": "/opt/homebrew/opt"
+          },
+          "pattern": "openjdk*/libexec/openjdk.jdk",
+          "platforms": [
+            "macos"
+          ]
+        },
+        {
+          "root": {
+            "kind": "absolute",
+            "path": "/usr/local/opt"
+          },
+          "pattern": "openjdk*/libexec/openjdk.jdk",
+          "platforms": [
+            "macos"
+          ]
+        },
+        {
+          "root": {
+            "kind": "absolute",
+            "path": "/home/linuxbrew/.linuxbrew/opt"
+          },
+          "pattern": "openjdk*/libexec",
+          "platforms": [
+            "linux"
+          ]
+        }
+      ],
+      "commands": [
+        "java"
+      ],
+      "wrappers": [],
       "launch": [
         "${executable}",
         "${runtimeArguments}",
@@ -283,6 +529,18 @@
     }
   ],
   "settings": [
+    {
+      "id": "languageServerHome",
+      "type": "directory",
+      "title": "Language server folder",
+      "description": "Folder of the Eclipse JDT Language Server, the one that contains plugins and the config folders. Leave empty to find JDT LS installed with Homebrew, mason.nvim, Scoop or the VS Code Java extension, or through JDTLS_HOME or jdtls on PATH.",
+      "default": "",
+      "placeholder": "Automatic",
+      "page": {
+        "languageID": "java"
+      },
+      "section": "Language server"
+    },
     {
       "id": "heapMaxMB",
       "type": "integer",

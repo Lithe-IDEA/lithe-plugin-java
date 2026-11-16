@@ -3,24 +3,33 @@
 //! Before the host starts the `java` language server it calls
 //! [`LAUNCH_FUNCTION_ID`] with the contract's `resolveParams` and the
 //! workspace `context`, and it starts the process the answer describes. This
-//! module does what the host's `jdt` integration did: it finds the JDT LS
-//! files in the installed package, gives Equinox a writable copy of the
-//! packaged configuration, and builds the JDT LS command line, its
-//! initialization options and its settings.
+//! module does what the host's `jdt` integration did: it finds the user's
+//! JDT LS installation, gives Equinox a writable copy of its configuration,
+//! and builds the JDT LS command line, its initialization options and its
+//! settings.
 //!
 //! # Where the files are
 //!
-//! `resolveParams` carries no package directory. The manifest installs the
-//! backend at `bin/lithe-java-backend`, so the package root is the parent of
-//! the directory of the running executable ([`package_root`]). Every package
-//! path below is relative to that root, and the launcher is found by name
-//! instead of by a pinned version, so a JDT LS update changes no code.
+//! JDT LS itself is not in the package: [`crate::jdtls`] finds the
+//! installation on the machine, the way the Go plugin uses the user's own
+//! `gopls`. The answer runs it with the plugin's `jdtls-runtime` tool
+//! ([`SERVER_RUNTIME_TOOL`]), a JDK the host resolves from the user's choice
+//! and discovery, and refuses one older than
+//! [`MINIMUM_SERVER_JAVA_VERSION`] when the host reports its version.
+//!
+//! The package only carries what the plugin adds to JDT LS: the Lombok agent
+//! and the Java Debug and Java Test extension bundles. `resolveParams` carries
+//! no package directory. The manifest installs the backend at
+//! `bin/lithe-java-backend`, so the package root is the parent of the
+//! directory of the running executable ([`package_root`]), and every package
+//! path below is relative to it.
 //!
 //! # Where the launch writes
 //!
-//! The package is read-only: neither the backend nor JDT LS writes into it.
-//! The launch writes only into the four directories the host provides for
-//! this start, and the answer lists them as `writablePaths`:
+//! The package and the JDT LS installation are read-only: neither the backend
+//! nor JDT LS writes into them. The launch writes only into the four
+//! directories the host provides for this start, and the answer lists them as
+//! `writablePaths`:
 //!
 //! - `stateDirectory`: the Equinox configuration area, one per `config.ini`
 //!   digest, which the backend prepares before it answers;
@@ -39,6 +48,10 @@
 //!
 //! [`settings_session::java_configuration`]: crate::settings_session::java_configuration
 
+use crate::jdtls::{
+    self, SearchEnvironment, ServerInstallation, LAUNCH_SERVER_INVALID, LAUNCH_SERVER_MISSING,
+    SERVER_HOME_SETTING,
+};
 use crate::run::file_uri;
 use crate::settings_session::{java_configuration, jdt_settings, SettingsSession, SERVER_ID};
 use lithe_java_domain::jdt_integration::launch_resources::{bundles_in, missing_resource_message};
@@ -70,6 +83,9 @@ pub const LAUNCH_PACKAGE_UNAVAILABLE: &str = "launch.package_unavailable";
 pub const LAUNCH_RESOURCE_MISSING: &str = "launch.resource_missing";
 /// The writable Equinox configuration area could not be prepared.
 pub const LAUNCH_CONFIGURATION_FAILED: &str = "launch.configuration_failed";
+/// The JDK the host resolved for [`SERVER_RUNTIME_TOOL`] is older than
+/// [`MINIMUM_SERVER_JAVA_VERSION`].
+pub const LAUNCH_RUNTIME_TOO_OLD: &str = "launch.runtime_too_old";
 
 /// Every `pluginErrorCode` `java.resolveLaunch` answers with, one per cause.
 pub const LAUNCH_ERROR_CODES: &[&str] = &[
@@ -77,7 +93,24 @@ pub const LAUNCH_ERROR_CODES: &[&str] = &[
     LAUNCH_PACKAGE_UNAVAILABLE,
     LAUNCH_RESOURCE_MISSING,
     LAUNCH_CONFIGURATION_FAILED,
+    LAUNCH_SERVER_MISSING,
+    LAUNCH_SERVER_INVALID,
+    LAUNCH_RUNTIME_TOO_OLD,
 ];
+
+/// The plugin's tool definition of the JDK that runs JDT LS. It is not the
+/// `java` tool: that one is the project's JDK, which may be far older than
+/// JDT LS accepts.
+pub const SERVER_RUNTIME_TOOL: &str = "jdtls-runtime";
+/// Oldest Java feature release JDT LS runs on.
+pub const MINIMUM_SERVER_JAVA_VERSION: u64 = 21;
+/// Message of [`LAUNCH_RUNTIME_TOO_OLD`].
+///
+/// TODO(host-api: API-37 i18n): user-facing text must go through the host's
+/// i18n table.
+pub const RUNTIME_TOO_OLD_MESSAGE: &str = "The Eclipse JDT Language Server needs Java 21 or \
+later, but the JDK chosen for it is older. Choose a JDK 21 or later for \"JDK for JDT LS\" in \
+Settings > Build, Execution, Deployment > Toolchains.";
 
 /// Configuration areas of older JDT LS versions could not be removed. Only
 /// disk space is at stake, so the launch goes on.
@@ -136,45 +169,34 @@ pub const ARCHITECTURES: &[&str] = &["arm64", "x86_64"];
 /// service ready.
 pub const SERVICE_READY_GATE_ID: &str = "service-ready";
 
-// Package layout. `plugin.json` no longer names these files (a backend
+// Package layout. `plugin.json` does not name these files (a backend
 // launch declares only the function); this module is the single source for
 // where `scripts/assemble-package.sh` puts them and `scripts/verify-package.sh`
 // checks them, and `backend/tests/repository_pins.rs` holds both scripts to
 // [`PACKAGE_LAYOUT`].
 
-/// Package directory that holds the Equinox launcher JAR.
-pub const LAUNCHER_DIRECTORY: &str = "language-server/plugins";
-/// File name prefix of the Equinox launcher JAR; the version follows it.
-pub const LAUNCHER_PREFIX: &str = "org.eclipse.equinox.launcher_";
-/// File name suffix of the Equinox launcher JAR.
-pub const LAUNCHER_SUFFIX: &str = ".jar";
-/// Package directory with one Equinox configuration per architecture.
-pub const CONFIGURATION_DIRECTORY: &str = "language-server/configuration";
+/// Package directory of everything the plugin adds to the user's JDT LS.
+pub const EXTENSIONS_DIRECTORY: &str = "jdtls-extensions";
 /// Package path of the Lombok agent JDT LS runs with.
-pub const LOMBOK_AGENT: &str = "language-server/lombok/lombok.jar";
+pub const LOMBOK_AGENT: &str = "jdtls-extensions/lombok/lombok.jar";
 /// Package directories whose JAR files JDT LS loads as extension bundles, in
 /// this order and then by file name: the Java Debug Server, then the Java
 /// Test extensions.
 pub const EXTENSION_BUNDLE_DIRECTORIES: &[&str] = &[
-    "language-server/java-debug",
-    "language-server/java-test/extensions",
+    "jdtls-extensions/java-debug",
+    "jdtls-extensions/java-test/extensions",
 ];
 /// Package path of the Java Test runner JAR the test flow adds to the class
 /// path of TestNG launches; JDT LS itself does not load it.
 pub const TEST_RUNNER: &str =
-    "language-server/java-test/runner/com.microsoft.java.test.runner-jar-with-dependencies.jar";
-/// Package directory of the Java runtime; `<arch>/bin/java` follows it.
-pub const RUNTIME_DIRECTORY: &str = "runtime";
+    "jdtls-extensions/java-test/runner/com.microsoft.java.test.runner-jar-with-dependencies.jar";
 /// Every package path the backend resolves at launch or test time, so the
 /// package scripts can be held to the same list.
 pub const PACKAGE_LAYOUT: &[&str] = &[
-    LAUNCHER_DIRECTORY,
-    CONFIGURATION_DIRECTORY,
     LOMBOK_AGENT,
     EXTENSION_BUNDLE_DIRECTORIES[0],
     EXTENSION_BUNDLE_DIRECTORIES[1],
     TEST_RUNNER,
-    RUNTIME_DIRECTORY,
 ];
 /// Directory under `workspaceStateDirectory` passed to JDT LS as `-data`.
 const DATA_DIRECTORY: &str = "data";
@@ -188,8 +210,10 @@ const SERVICE_READY: &str = "ServiceReady";
 /// The `resolveParams` of one start, checked.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LaunchRequest {
-    /// `platform.arch`: `arm64` or `x86_64`, the runtime and the Equinox
-    /// configuration to use.
+    /// `platform.os`: `macos`, `linux` or `windows`.
+    pub os: String,
+    /// `platform.arch`: `arm64` or `x86_64`. With the operating system it
+    /// picks the Equinox configuration of the installation.
     pub architecture: String,
     /// `stateDirectory`: the plugin's writable directory for this server.
     pub state_directory: PathBuf,
@@ -203,6 +227,12 @@ pub struct LaunchRequest {
     pub heap_max_mb: u64,
     /// `settings.logLevel`: the JDT LS log level.
     pub log_level: String,
+    /// `settings.languageServerHome`: the JDT LS folder the user chose;
+    /// `None` finds one ([`crate::jdtls::locate`]).
+    pub server_home: Option<PathBuf>,
+    /// `tools["jdtls-runtime"].version`, when the host resolved the JDK that
+    /// runs JDT LS and read its version.
+    pub server_runtime_version: Option<String>,
     /// `tools.java`, the installation the host resolved for the plugin's
     /// `java` tool, as the server's default runtime: Run starts the project
     /// with that JDK, so the server must compile for it. Empty when the host
@@ -210,17 +240,18 @@ pub struct LaunchRequest {
     pub java_runtimes: Vec<JdtJavaRuntime>,
 }
 
-/// The package files of a JDT LS launch, absolute.
+/// The files of a JDT LS launch, absolute.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LaunchFiles {
-    /// The Equinox launcher JAR passed after `-jar`.
+    /// The Equinox launcher JAR of the user's installation, passed after
+    /// `-jar`.
     pub launcher_jar: PathBuf,
-    /// The Lombok agent passed as `-javaagent`.
+    /// The packaged Lombok agent passed as `-javaagent`.
     pub lombok_agent: PathBuf,
-    /// The read-only Equinox configuration of the architecture; the launch
-    /// uses a writable copy of it.
-    pub packaged_configuration: PathBuf,
-    /// The extension bundle JARs, in load order.
+    /// The read-only Equinox configuration of the installation for this
+    /// platform; the launch uses a writable copy of it.
+    pub server_configuration: PathBuf,
+    /// The packaged extension bundle JARs, in load order.
     pub extension_bundles: Vec<PathBuf>,
 }
 
@@ -237,6 +268,12 @@ pub fn parse_launch_params(params: &Value) -> Result<LaunchRequest, PluginError>
         .and_then(Value::as_str)
         .filter(|arch| ARCHITECTURES.contains(arch))
         .ok_or_else(|| invalid_params("The launch names no supported architecture."))?;
+    let os = params
+        .get("platform")
+        .and_then(|platform| platform.get("os"))
+        .and_then(Value::as_str)
+        .filter(|os| !os.is_empty())
+        .ok_or_else(|| invalid_params("The launch names no operating system."))?;
     let settings = params.get("settings").cloned().unwrap_or_else(|| json!({}));
     let heap_max_mb = match settings.get("heapMaxMB") {
         None | Some(Value::Null) => DEFAULT_HEAP_MAX_MB,
@@ -252,7 +289,20 @@ pub fn parse_launch_params(params: &Value) -> Result<LaunchRequest, PluginError>
             .filter(|level| LOG_LEVELS.contains(level))
             .ok_or_else(|| invalid_params("The log level setting is not supported."))?,
     };
+    let server_home = match settings.get(SERVER_HOME_SETTING) {
+        None | Some(Value::Null) => None,
+        Some(value) => match value.as_str() {
+            Some("") => None,
+            Some(folder) if Path::new(folder).is_absolute() => Some(PathBuf::from(folder)),
+            _ => {
+                return Err(invalid_params(
+                    "The language server folder setting is not a folder.",
+                ))
+            }
+        },
+    };
     Ok(LaunchRequest {
+        os: os.to_string(),
         architecture: architecture.to_string(),
         state_directory: directory(params, "stateDirectory")?,
         workspace_state_directory: directory(params, "workspaceStateDirectory")?,
@@ -260,8 +310,41 @@ pub fn parse_launch_params(params: &Value) -> Result<LaunchRequest, PluginError>
         temporary_directory: directory(params, "temporaryDirectory")?,
         heap_max_mb,
         log_level: log_level.to_string(),
+        server_home,
+        server_runtime_version: host_tool_version(params, SERVER_RUNTIME_TOOL),
         java_runtimes: jdt_java_runtimes(&host_java_tool(params)),
     })
+}
+
+/// The `version` of the `tool` installation in the optional `tools` of the
+/// request. The contract promises no field, so a missing one is no error.
+fn host_tool_version(params: &Value, tool: &str) -> Option<String> {
+    params
+        .get("tools")?
+        .get(tool)?
+        .get("version")?
+        .as_str()
+        .map(str::trim)
+        .filter(|version| !version.is_empty())
+        .map(str::to_string)
+}
+
+/// Refuses a JDT LS runtime the host reported as older than
+/// [`MINIMUM_SERVER_JAVA_VERSION`]. A runtime without a readable version is
+/// left to the host and to JDT LS, which reports what it cannot run on.
+pub fn check_server_runtime(request: &LaunchRequest) -> Result<(), PluginError> {
+    let feature = request
+        .server_runtime_version
+        .as_deref()
+        .and_then(|version| version.split(['.', '_', '+', '-']).next())
+        .and_then(|feature| feature.parse::<u64>().ok());
+    match feature {
+        Some(feature) if feature < MINIMUM_SERVER_JAVA_VERSION => Err(PluginError::new(
+            LAUNCH_RUNTIME_TOO_OLD,
+            RUNTIME_TOO_OLD_MESSAGE,
+        )),
+        _ => Ok(()),
+    }
 }
 
 /// The `java` installation the host resolved, from the optional `tools`
@@ -333,32 +416,12 @@ fn package_root_from_executable(executable: &Path) -> Option<PathBuf> {
         .map(Path::to_path_buf)
 }
 
-/// The package path of the Java runtime of `architecture`, as the answer's
-/// `executable.path` names it.
-pub fn runtime_executable(architecture: &str) -> String {
-    let executable = if cfg!(windows) { "java.exe" } else { "java" };
-    format!("{RUNTIME_DIRECTORY}/{architecture}/bin/{executable}")
-}
-
-/// Finds the JDT LS files of `architecture` in the package at `package_root`.
+/// Finds the packaged extensions in the package at `package_root` and
+/// takes the JDT LS files from `server`.
 pub fn locate_launch_files(
     package_root: &Path,
-    architecture: &str,
+    server: &ServerInstallation,
 ) -> Result<LaunchFiles, PluginError> {
-    if !package_root
-        .join(runtime_executable(architecture))
-        .is_file()
-    {
-        return Err(missing_resource("the Java runtime"));
-    }
-    let launcher_jar = launcher_in(&package_root.join(LAUNCHER_DIRECTORY))
-        .ok_or_else(|| missing_resource("the JDT LS launcher"))?;
-    let packaged_configuration = package_root
-        .join(CONFIGURATION_DIRECTORY)
-        .join(architecture);
-    if !packaged_configuration.is_dir() {
-        return Err(missing_resource("the JDT LS configuration"));
-    }
     let lombok_agent = package_root.join(LOMBOK_AGENT);
     if !lombok_agent.is_file() {
         return Err(missing_resource("the Lombok agent"));
@@ -368,34 +431,11 @@ pub fn locate_launch_files(
         .flat_map(|directory| bundles_in(&package_root.join(directory)))
         .collect();
     Ok(LaunchFiles {
-        launcher_jar,
+        launcher_jar: server.launcher_jar.clone(),
         lombok_agent,
-        packaged_configuration,
+        server_configuration: server.configuration.clone(),
         extension_bundles,
     })
-}
-
-/// The one Equinox launcher JAR in `directory`. None or several mean the
-/// package is damaged.
-fn launcher_in(directory: &Path) -> Option<PathBuf> {
-    let mut launchers: Vec<PathBuf> = fs::read_dir(directory)
-        .ok()?
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| {
-            path.file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| {
-                    name.starts_with(LAUNCHER_PREFIX) && name.ends_with(LAUNCHER_SUFFIX)
-                })
-                && path.is_file()
-        })
-        .collect();
-    if launchers.len() == 1 {
-        launchers.pop()
-    } else {
-        None
-    }
 }
 
 /// The `-data` directory of the workspace.
@@ -461,7 +501,8 @@ pub fn service_ready_gate() -> Value {
     })
 }
 
-/// Resolves the launch for `request` from the package at `package_root`.
+/// Resolves the launch for `request` of the JDT LS installation `server`
+/// with the extensions of the package at `package_root`.
 ///
 /// `fragments` are the settings other plugins contributed for the
 /// workspace, as the settings session last collected them. The function
@@ -470,16 +511,18 @@ pub fn service_ready_gate() -> Value {
 /// `report` and does not fail the launch.
 pub fn resolve(
     request: &LaunchRequest,
+    server: &ServerInstallation,
     package_root: &Path,
     fragments: &[Value],
     trigger_files: &[String],
     now_unix_seconds: u64,
     report: &dyn Fn(&str, u64),
 ) -> Result<Value, PluginError> {
-    let files = locate_launch_files(package_root, &request.architecture)?;
+    check_server_runtime(request)?;
+    let files = locate_launch_files(package_root, server)?;
     let area = prepare_jdt_configuration_area(
         &request.state_directory,
-        &files.packaged_configuration,
+        &files.server_configuration,
         now_unix_seconds,
     )
     .map_err(|error| PluginError::new(LAUNCH_CONFIGURATION_FAILED, error.message))?;
@@ -510,9 +553,10 @@ pub fn resolve(
     .map(|path| Value::String(path.to_string_lossy().into_owned()))
     .collect();
     Ok(json!({
+        // The host resolves the tool from the user's choice and discovery.
         "executable": {
-            "kind": "packaged",
-            "path": runtime_executable(&request.architecture),
+            "kind": "tool",
+            "tool": SERVER_RUNTIME_TOOL,
         },
         "arguments": jdtls_arguments(request, &files, &area.directory),
         // JDT LS needs no variable beyond the ones the host passes.
@@ -620,6 +664,13 @@ pub fn resolve_launch_function(
 ) -> Result<Value, FunctionError> {
     context.check_cancelled()?;
     let request = parse_launch_params(&params)?;
+    check_server_runtime(&request)?;
+    let server = jdtls::locate(
+        request.server_home.as_deref(),
+        &SearchEnvironment::current(),
+        &request.os,
+        &request.architecture,
+    )?;
     let package_root = package_root()?;
     let diagnostics = context.diagnostics();
     let operation = context.function_id().to_owned();
@@ -649,6 +700,7 @@ pub fn resolve_launch_function(
     context.check_cancelled()?;
     let mut answer = resolve(
         &request,
+        &server,
         &package_root,
         &fragments,
         &trigger_files,
@@ -682,19 +734,14 @@ mod tests {
         assert_eq!(root, Path::new(r"C:\plugins\Java 支持"));
     }
 
-    #[test]
-    #[cfg(windows)]
-    fn windows_runtime_uses_the_packaged_pe_launcher() {
-        assert_eq!(runtime_executable("x86_64"), "runtime/x86_64/bin/java.exe");
-    }
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::Mutex;
 
-    const LAUNCHER: &str =
-        "language-server/plugins/org.eclipse.equinox.launcher_1.8.0.v20260804-1928.jar";
+    const LAUNCHER: &str = "plugins/org.eclipse.equinox.launcher_1.8.0.v20260804-1928.jar";
 
-    /// A package laid out like the assembled one, and the host's four
-    /// directories, in a fresh directory that is removed on drop.
+    /// A package laid out like the assembled one, a JDT LS installation like
+    /// the user's, and the host's four directories, in a fresh directory that
+    /// is removed on drop.
     struct Fixture {
         root: PathBuf,
     }
@@ -710,30 +757,30 @@ mod tests {
             let _ = fs::remove_dir_all(&root);
             let package = root.join("package");
             for directory in [
-                "runtime/arm64/bin",
-                "language-server/plugins",
-                "language-server/configuration/arm64",
-                "language-server/lombok",
-                "language-server/java-debug",
-                "language-server/java-test/extensions",
+                "jdtls-extensions/lombok",
+                "jdtls-extensions/java-debug",
+                "jdtls-extensions/java-test/extensions",
             ] {
                 fs::create_dir_all(package.join(directory)).unwrap();
             }
-            let runtime = runtime_executable("arm64");
             for file in [
-                runtime.as_str(),
-                LAUNCHER,
-                "language-server/plugins/org.eclipse.jdt.ls.core_1.50.0.jar",
-                "language-server/lombok/lombok.jar",
-                "language-server/java-debug/com.microsoft.java.debug.plugin-0.53.0.jar",
-                "language-server/java-test/extensions/b.jar",
-                "language-server/java-test/extensions/a.jar",
-                "language-server/java-test/extensions/notes.txt",
+                "jdtls-extensions/lombok/lombok.jar",
+                "jdtls-extensions/java-debug/com.microsoft.java.debug.plugin-0.53.0.jar",
+                "jdtls-extensions/java-test/extensions/b.jar",
+                "jdtls-extensions/java-test/extensions/a.jar",
+                "jdtls-extensions/java-test/extensions/notes.txt",
             ] {
                 fs::write(package.join(file), b"").unwrap();
             }
+            let server = root.join("jdtls");
+            for directory in ["plugins", "config_mac_arm"] {
+                fs::create_dir_all(server.join(directory)).unwrap();
+            }
+            for file in [LAUNCHER, "plugins/org.eclipse.jdt.ls.core_1.50.0.jar"] {
+                fs::write(server.join(file), b"").unwrap();
+            }
             fs::write(
-                package.join("language-server/configuration/arm64/config.ini"),
+                server.join("config_mac_arm/config.ini"),
                 b"osgi.bundles=example\n",
             )
             .unwrap();
@@ -745,6 +792,10 @@ mod tests {
 
         fn package(&self) -> PathBuf {
             self.root.join("package")
+        }
+
+        fn server(&self) -> ServerInstallation {
+            jdtls::inspect(&self.root.join("jdtls"), "config_mac_arm").unwrap()
         }
 
         fn params(&self) -> Value {
@@ -776,6 +827,7 @@ mod tests {
             let report = |code: &str, _count: u64| reports.lock().unwrap().push(code.to_string());
             resolve(
                 &fixture.request(),
+                &fixture.server(),
                 &fixture.package(),
                 fragments,
                 &[],
@@ -800,7 +852,10 @@ mod tests {
     fn the_params_are_read_with_the_declared_defaults() {
         let fixture = Fixture::new();
         let request = fixture.request();
+        assert_eq!(request.os, "macos");
         assert_eq!(request.architecture, "arm64");
+        assert_eq!(request.server_home, None);
+        assert_eq!(request.server_runtime_version, None);
         assert_eq!(request.heap_max_mb, 4096);
         assert_eq!(request.log_level, "INFO");
         assert_eq!(request.state_directory, fixture.root.join("state"));
@@ -810,6 +865,16 @@ mod tests {
         let request = parse_launch_params(&params).unwrap();
         assert_eq!(request.heap_max_mb, DEFAULT_HEAP_MAX_MB);
         assert_eq!(request.log_level, DEFAULT_LOG_LEVEL);
+
+        // An empty folder setting means "find JDT LS"; a folder is taken as is.
+        params["settings"] = json!({"languageServerHome": ""});
+        assert_eq!(parse_launch_params(&params).unwrap().server_home, None);
+        let folder = fixture.root.join("jdtls");
+        params["settings"] = json!({"languageServerHome": folder});
+        assert_eq!(
+            parse_launch_params(&params).unwrap().server_home,
+            Some(folder)
+        );
     }
 
     #[test]
@@ -818,6 +883,8 @@ mod tests {
         let edits: Vec<(&str, Value)> = vec![
             ("/serverID", json!("kotlin")),
             ("/platform/arch", json!("sparc")),
+            ("/platform/os", json!("")),
+            ("/platform/os", Value::Null),
             ("/stateDirectory", json!("relative/state")),
             ("/workspaceStateDirectory", Value::Null),
             ("/settings/heapMaxMB", json!(1024)),
@@ -830,6 +897,12 @@ mod tests {
             let error = parse_launch_params(&params).unwrap_err();
             assert_eq!(error.code(), LAUNCH_INVALID_PARAMS, "{pointer}");
         }
+        for folder in [json!("relative/jdtls"), json!(7)] {
+            let mut params = fixture.params();
+            params["settings"]["languageServerHome"] = folder;
+            let error = parse_launch_params(&params).unwrap_err();
+            assert_eq!(error.code(), LAUNCH_INVALID_PARAMS);
+        }
         assert_eq!(
             parse_launch_params(&json!({})).unwrap_err().code(),
             LAUNCH_INVALID_PARAMS
@@ -837,18 +910,18 @@ mod tests {
     }
 
     #[test]
-    fn the_answer_runs_the_packaged_runtime_with_the_full_command_line() {
+    fn the_answer_runs_the_users_jdt_ls_on_the_runtime_tool() {
         let fixture = Fixture::new();
         let (answer, reports) = resolve_fixture(&fixture, &[]);
         assert!(reports.is_empty());
         assert_eq!(
             answer["executable"],
-            json!({"kind": "packaged", "path": runtime_executable("arm64")})
+            json!({"kind": "tool", "tool": "jdtls-runtime"})
         );
         let arguments = strings(&answer["arguments"]);
         let package = fixture.package();
-        let launcher = package.join(LAUNCHER).to_string_lossy().into_owned();
-        let lombok = package.join("language-server/lombok/lombok.jar");
+        let launcher = fixture.server().launcher_jar;
+        let lombok = package.join("jdtls-extensions/lombok/lombok.jar");
         assert_eq!(
             arguments[0],
             format!("-javaagent:{}", lombok.to_string_lossy())
@@ -891,6 +964,7 @@ mod tests {
         assert!(configuration.starts_with(fixture.root.join("state")));
         assert!(configuration.join("config.ini").is_file());
         assert!(!configuration.starts_with(&package));
+        assert!(!configuration.starts_with(fixture.root.join("jdtls")));
         let data = fixture.root.join("workspace-state").join("data");
         assert_eq!(
             arguments[arguments.len() - 2..].to_vec(),
@@ -907,9 +981,9 @@ mod tests {
         let (answer, _) = resolve_fixture(&fixture, &[]);
         let package = fixture.package();
         let expected: Vec<PathBuf> = [
-            "language-server/java-debug/com.microsoft.java.debug.plugin-0.53.0.jar",
-            "language-server/java-test/extensions/a.jar",
-            "language-server/java-test/extensions/b.jar",
+            "jdtls-extensions/java-debug/com.microsoft.java.debug.plugin-0.53.0.jar",
+            "jdtls-extensions/java-test/extensions/a.jar",
+            "jdtls-extensions/java-test/extensions/b.jar",
         ]
         .iter()
         .map(|bundle| package.join(bundle))
@@ -1006,7 +1080,16 @@ mod tests {
             }]
         );
         let report = |_: &str, _: u64| {};
-        let answer = resolve(&request, &fixture.package(), &[], &[], 1_000_000, &report).unwrap();
+        let answer = resolve(
+            &request,
+            &fixture.server(),
+            &fixture.package(),
+            &[],
+            &[],
+            1_000_000,
+            &report,
+        )
+        .unwrap();
         assert_eq!(
             answer["initializationOptions"]["settings"]["java"]["configuration"]["runtimes"],
             expected
@@ -1034,35 +1117,60 @@ mod tests {
 
     #[test]
     fn a_damaged_package_names_the_missing_file() {
-        let runtime = runtime_executable("arm64");
-        for (remove, expected) in [
-            (runtime.as_str(), "the Java runtime"),
-            (LAUNCHER, "the JDT LS launcher"),
-            ("language-server/lombok/lombok.jar", "the Lombok agent"),
+        let fixture = Fixture::new();
+        fs::remove_file(fixture.package().join("jdtls-extensions/lombok/lombok.jar")).unwrap();
+        let error = locate_launch_files(&fixture.package(), &fixture.server()).unwrap_err();
+        assert_eq!(error.code(), LAUNCH_RESOURCE_MISSING);
+        assert_eq!(
+            error.message(),
+            missing_resource_message("the Lombok agent")
+        );
+    }
+
+    #[test]
+    fn a_runtime_older_than_java_21_is_refused_before_anything_is_written() {
+        let fixture = Fixture::new();
+        let mut params = fixture.params();
+        for (version, accepted) in [
+            ("17.0.19", false),
+            ("8.0.392", false),
+            ("21", true),
+            ("21.0.9", true),
+            ("26.0.2", true),
+            ("unknown", true),
         ] {
-            let fixture = Fixture::new();
-            fs::remove_file(fixture.package().join(remove)).unwrap();
-            let error = locate_launch_files(&fixture.package(), "arm64").unwrap_err();
-            assert_eq!(error.code(), LAUNCH_RESOURCE_MISSING, "{remove}");
-            assert_eq!(error.message(), missing_resource_message(expected));
+            params["tools"] = json!({
+                "jdtls-runtime": {"executable": "/jdk/bin/java", "home": "/jdk", "version": version}
+            });
+            let request = parse_launch_params(&params).unwrap();
+            assert_eq!(
+                check_server_runtime(&request).is_ok(),
+                accepted,
+                "{version}"
+            );
+            if !accepted {
+                let report = |_: &str, _: u64| {};
+                let error = resolve(
+                    &request,
+                    &fixture.server(),
+                    &fixture.package(),
+                    &[],
+                    &[],
+                    1_000_000,
+                    &report,
+                )
+                .unwrap_err();
+                assert_eq!(error.code(), LAUNCH_RUNTIME_TOO_OLD);
+                assert_eq!(error.message(), RUNTIME_TOO_OLD_MESSAGE);
+            }
         }
-
-        // The package has no runtime for this architecture.
-        let fixture = Fixture::new();
-        let error = locate_launch_files(&fixture.package(), "x86_64").unwrap_err();
-        assert_eq!(error.code(), LAUNCH_RESOURCE_MISSING);
-
-        // Two launchers leave the choice open.
-        let fixture = Fixture::new();
-        fs::write(
-            fixture
-                .package()
-                .join("language-server/plugins/org.eclipse.equinox.launcher_1.9.0.jar"),
-            b"",
-        )
-        .unwrap();
-        let error = locate_launch_files(&fixture.package(), "arm64").unwrap_err();
-        assert_eq!(error.code(), LAUNCH_RESOURCE_MISSING);
+        assert!(fs::read_dir(fixture.root.join("state"))
+            .unwrap()
+            .next()
+            .is_none());
+        // Without a version the host's own resolution decides.
+        params["tools"] = json!({});
+        assert!(check_server_runtime(&parse_launch_params(&params).unwrap()).is_ok());
     }
 
     #[test]
@@ -1143,6 +1251,7 @@ mod tests {
         let trigger = vec!["file:///w/src/demo/Main.java".to_string()];
         let answer = resolve(
             &fixture.request(),
+            &fixture.server(),
             &fixture.package(),
             &[],
             &trigger,

@@ -4,8 +4,10 @@
 
 | 清单 | 内容 | 使用者 |
 | --- | --- | --- |
-| `jdtls/manifest.json` | Eclipse JDT Language Server、Lombok、java-debug、vscode-java-test 的版本、下载地址和 SHA-256 | `scripts/prepare-jdtls.sh` |
-| `jdk/manifest.json` | 每个平台一份 Temurin JDK 21 的下载地址、SHA-256 和解压后的根目录名 | `scripts/prepare-jdk.sh` |
+| `jdtls/manifest.json` | 随包的 Lombok、java-debug、vscode-java-test 扩展，以及测试用 Eclipse JDT Language Server 的版本、下载地址和 SHA-256；`minimumJavaVersion` 是运行 JDT LS 的最低 Java 版本，与后端的 `MINIMUM_SERVER_JAVA_VERSION` 一致 | `scripts/prepare-jdtls.sh` |
+
+插件包不带 JDT LS 和 JDK：插件运行用户自己安装的 JDT LS 和 JDK 21+（`backend/src/jdtls.rs`）。清单里的 JDT LS
+只用于构建和测试：组装时据它的 `plugins/` 剔除 JDT LS 已自带的 Java Test 扩展包，集成测试把它当作用户的安装来启动。
 
 规则：
 
@@ -15,8 +17,8 @@
   HTTPS、每个校验和都是小写 SHA-256（`backend/tests/repository_pins.rs`）。
 - 插件包里的第三方许可证由组装脚本从上游包复制，`scripts/verify-package.sh` 检查它们存在；仓库根目录的
   `NOTICE` 列出全部组件和许可。
-- `jdk/manifest.json` 里的 Windows 条目留给 Windows 版插件包使用，目前的打包脚本只读取 macOS 条目。
 
-> English: `third_party/` pins every upstream input of the plugin package by version, HTTPS URL and SHA-256.
+> English: `third_party/` pins every upstream input of the plugin package, and the JDT LS release the tests run as
+> the user's installation, by version, HTTPS URL and SHA-256.
 > The prepare scripts download into the ignored `.artifacts/` directory and verify the checksum before use; no
 > upstream binaries are committed. `backend/tests/repository_pins.rs` checks the pins.

@@ -8,17 +8,16 @@ is downloaded at build time from pinned sources and verified by SHA-256 (see
 third_party/). Each component keeps its own license, and the license text is
 copied into the package next to the component:
 
-  Eclipse JDT Language Server   Eclipse Public License 2.0
-    https://download.eclipse.org/jdtls/
   Project Lombok                MIT License
     https://projectlombok.org/
   Microsoft java-debug          Eclipse Public License 1.0
     (vscode-java-debug)         https://github.com/microsoft/java-debug
   Microsoft vscode-java-test    MIT License
     (JUnit runner and plugin)   https://github.com/microsoft/vscode-java-test
-  Eclipse Temurin JDK           GNU General Public License v2 with the
-                                Classpath Exception
-    https://adoptium.net/
+
+The package does not include the Eclipse JDT Language Server or a Java
+runtime. The plugin runs the JDT LS installation and the JDK the user installs
+(https://download.eclipse.org/jdtls/, Eclipse Public License 2.0).
 
 The icons java.svg and java_dark.svg in
 io.github.lithe-idea.java-support/icons/ come from the JetBrains IntelliJ Platform

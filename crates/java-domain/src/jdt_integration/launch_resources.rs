@@ -2,9 +2,10 @@
 //!
 //! Ported from the Swift `MacJdtLaunchResources`. The package layout itself is
 //! fixed by `backend/src/launch.rs`, which resolves the launch for the host
-//! (`launch.kind: "backend"`); exactly the packaged files are handed over,
-//! nothing searches the host application or the machine for JDT LS, so
-//! removing the plugin removes Java language support with it.
+//! (`launch.kind: "backend"`). The package carries only the extensions the
+//! plugin adds to JDT LS (Lombok, Java Debug, Java Test); JDT LS itself is the
+//! user's installation, which `backend/src/jdtls.rs` finds. Nothing searches
+//! the host application for either.
 
 use std::fs;
 use std::path::{Path, PathBuf};

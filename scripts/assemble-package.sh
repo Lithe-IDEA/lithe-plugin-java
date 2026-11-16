@@ -2,16 +2,19 @@
 
 set -euo pipefail
 
-# Assembles the resources of the Java Support plugin package: the pinned
-# JDT LS distribution with its Lombok, Debug, and Test extensions, the JDK it
-# runs on, and the plugin backend (the Rust binary lithe-java-backend, built
-# here for the requested architecture and placed where plugin.json's
-# backend.launch.path names it). The third-party inputs are fetched and
-# checksum-verified by the shared prepare scripts; this script only arranges
-# the result in the layout the backend expects (backend/src/launch.rs), plus the icons and template
-# directories of the New Project entries (Java, Spring Boot). The assembled
-# package is read-only at runtime; projects are generated in the user's chosen
-# folder.
+# Assembles the resources of the Java Support plugin package: what the plugin
+# adds to the user's own JDT LS (the Lombok agent and the Java Debug and Java
+# Test extension bundles) and the plugin backend (the Rust binary
+# lithe-java-backend, built here for the requested architecture and placed
+# where plugin.json's backend.launch.path names it). JDT LS itself and the JDK
+# it runs on are not packaged: the backend finds the user's installation
+# (backend/src/jdtls.rs). The third-party inputs are fetched and
+# checksum-verified by scripts/prepare-jdtls.sh, which also prepares the
+# tested JDT LS release the extension set is checked against; this script
+# only arranges the extensions in the layout the backend expects
+# (backend/src/launch.rs), plus the icons and template directories of the New
+# Project entries (Java, Spring Boot). The assembled package is read-only at
+# runtime; projects are generated in the user's chosen folder.
 # Moved from Plugins/mac/Official/JavaSupport/assemble-package.sh in the Lithe
 # repository; see MIGRATION.md.
 
@@ -29,23 +32,14 @@ while [[ $# -gt 0 ]]; do
 done
 [[ -n "$OUTPUT_DIR" ]] || { print -u2 -- "--output is required"; exit 2; }
 case "$ARCH" in
-    arm64)
-        runtime_architectures=("$ARCH")
-        backend_targets=(aarch64-apple-darwin)
-        ;;
-    x86_64)
-        runtime_architectures=("$ARCH")
-        backend_targets=(x86_64-apple-darwin)
-        ;;
-    universal)
-        runtime_architectures=(arm64 x86_64)
-        backend_targets=(aarch64-apple-darwin x86_64-apple-darwin)
-        ;;
+    arm64) backend_targets=(aarch64-apple-darwin) ;;
+    x86_64) backend_targets=(x86_64-apple-darwin) ;;
+    universal) backend_targets=(aarch64-apple-darwin x86_64-apple-darwin) ;;
     *) print -u2 -- "Unsupported architecture: $ARCH"; exit 2 ;;
 esac
 
 # plugin.json says where the host starts the backend from. The package keeps
-# it in bin/, the one directory (besides runtime/) that may hold an executable.
+# it in bin/, the one directory that may hold an executable.
 backend_path=$(/usr/bin/plutil -extract backend.launch.path raw -o - "$PLUGIN_DIR/plugin.json")
 [[ "$backend_path" == bin/* && "$backend_path" != *..* ]] || {
     print -u2 -- "plugin.json backend.launch.path must name a file inside bin/, found: $backend_path"
@@ -53,46 +47,21 @@ backend_path=$(/usr/bin/plutil -extract backend.launch.path raw -o - "$PLUGIN_DI
 }
 
 jdtls_root=$(LITHE_ARCH="$ARCH" "$ROOT_DIR/scripts/prepare-jdtls.sh")
-language_server="$OUTPUT_DIR/language-server"
-rm -rf "$language_server" "$OUTPUT_DIR/runtime" "$OUTPUT_DIR/icons" "$OUTPUT_DIR/templates" "$OUTPUT_DIR/l10n" "$OUTPUT_DIR/bin"
+extensions="$OUTPUT_DIR/jdtls-extensions"
+rm -rf "$extensions" "$OUTPUT_DIR/icons" "$OUTPUT_DIR/templates" "$OUTPUT_DIR/l10n" "$OUTPUT_DIR/bin"
 cp -R "$PLUGIN_DIR/icons" "$OUTPUT_DIR/icons"
 cp -R "$PLUGIN_DIR/templates" "$OUTPUT_DIR/templates"
 cp -R "$PLUGIN_DIR/l10n" "$OUTPUT_DIR/l10n"
-mkdir -p "$language_server/configuration"
+mkdir -p "$extensions"
 
-# Only what a macOS launch reads is packaged. The wrapper scripts and the
-# configuration areas of other platforms are left out.
-for entry in plugins features lombok java-debug java-test manifest.json LICENSE-EPL-2.0.txt; do
+# Only the extensions are packaged, with their licenses and the pins they
+# were verified against. JDT LS itself (plugins, features, config_*) stays out.
+for entry in lombok java-debug java-test manifest.json; do
     [[ -e "$jdtls_root/$entry" ]] || {
-        print -u2 -- "JDT LS distribution is missing $entry: $jdtls_root"
+        print -u2 -- "Prepared JDT LS extensions are missing $entry: $jdtls_root"
         exit 1
     }
-    cp -R "$jdtls_root/$entry" "$language_server/$entry"
-done
-
-# Equinox reads one configuration per architecture. The packaged copy stays
-# read-only; the host gives each launch a writable area in its cache.
-for runtime_arch in "${runtime_architectures[@]}"; do
-    case "$runtime_arch" in
-        arm64) configuration_name="config_mac_arm" ;;
-        x86_64) configuration_name="config_mac" ;;
-    esac
-    [[ -f "$jdtls_root/$configuration_name/config.ini" ]] || {
-        print -u2 -- "JDT LS configuration is missing: $jdtls_root/$configuration_name/config.ini"
-        exit 1
-    }
-    mkdir -p "$language_server/configuration/$runtime_arch"
-    cp "$jdtls_root/$configuration_name/config.ini" "$language_server/configuration/$runtime_arch/config.ini"
-
-    if [[ "$ARCH" == "universal" ]]; then
-        override_variable="LITHE_JDK_${runtime_arch:u}_ROOT"
-        jdk_root=$(LITHE_JDK_ROOT="${(P)override_variable:-}" LITHE_JDK_TARGET_ARCH="$runtime_arch" \
-            "$ROOT_DIR/scripts/prepare-jdk.sh")
-    else
-        jdk_root=$(LITHE_JDK_TARGET_ARCH="$runtime_arch" "$ROOT_DIR/scripts/prepare-jdk.sh")
-    fi
-    mkdir -p "$OUTPUT_DIR/runtime"
-    cp -R "$jdk_root" "$OUTPUT_DIR/runtime/$runtime_arch"
+    cp -R "$jdtls_root/$entry" "$extensions/$entry"
 done
 
 # The plugin backend is one Mach-O binary: a single architecture is copied as
@@ -119,38 +88,23 @@ else
 fi
 chmod 755 "$OUTPUT_DIR/$backend_path"
 
-# The backend resolves the language server launch (plugin.json declares only
+# The backend resolves the language server launch (plugin.json declares
 # the function), so the layout it expects is fixed in backend/src/launch.rs
-# and checked here, where a JDT LS upgrade that renames or moves a file fails
-# instead of at the user's first Java file. backend/tests/repository_pins.rs
-# holds this list to the backend's.
-launchers=("$OUTPUT_DIR"/language-server/plugins/org.eclipse.equinox.launcher_*.jar(N))
-(( ${#launchers} == 1 )) || {
-    print -u2 -- "language-server/plugins must hold exactly one org.eclipse.equinox.launcher_*.jar, found ${#launchers}"
-    exit 1
-}
+# and checked here, where an extension upgrade that renames or moves a file
+# fails instead of at the user's first Java file.
+# backend/tests/repository_pins.rs holds this list to the backend's.
 for declared in \
-    language-server/lombok/lombok.jar \
-    language-server/java-test/runner/com.microsoft.java.test.runner-jar-with-dependencies.jar \
+    jdtls-extensions/lombok/lombok.jar \
+    jdtls-extensions/java-test/runner/com.microsoft.java.test.runner-jar-with-dependencies.jar \
     "$backend_path"; do
     [[ -f "$OUTPUT_DIR/$declared" ]] || {
-        print -u2 -- "The backend expects $declared, which the assembled package does not contain. Update scripts/prepare-jdtls.sh or backend/src/launch.rs for the pinned JDT LS version."
+        print -u2 -- "The backend expects $declared, which the assembled package does not contain. Update scripts/prepare-jdtls.sh or backend/src/launch.rs for the pinned extensions."
         exit 1
     }
 done
-for directory in language-server/java-debug language-server/java-test/extensions; do
+for directory in jdtls-extensions/java-debug jdtls-extensions/java-test/extensions; do
     [[ -n "$(find "$OUTPUT_DIR/$directory" -maxdepth 1 -name '*.jar' -print -quit 2>/dev/null)" ]] || {
         print -u2 -- "extension bundle directory $directory holds no bundles"
-        exit 1
-    }
-done
-for runtime_arch in "${runtime_architectures[@]}"; do
-    [[ -f "$OUTPUT_DIR/language-server/configuration/$runtime_arch/config.ini" ]] || {
-        print -u2 -- "missing language-server/configuration/$runtime_arch/config.ini"
-        exit 1
-    }
-    [[ -x "$OUTPUT_DIR/runtime/$runtime_arch/bin/java" ]] || {
-        print -u2 -- "missing runtime/$runtime_arch/bin/java"
         exit 1
     }
 done
@@ -163,6 +117,3 @@ fi
 
 # Notices are build inputs, copied alongside the binary from locked sources.
 node "$ROOT_DIR/scripts/package/collect-notices.mjs" "$OUTPUT_DIR" >&2
-
-# Compile the locked upstream decompiler fix only in package staging.
-node "$ROOT_DIR/scripts/package/patch-jdt-decompiler.mjs" "$OUTPUT_DIR" >&2
