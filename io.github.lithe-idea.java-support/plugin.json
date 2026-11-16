@@ -2,7 +2,7 @@
   "schemaVersion": 0,
   "id": "io.github.lithe-idea.java-support",
   "displayName": "Java Support",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "pluginAPIVersion": 0,
   "requires": {"backend": 0, "debugAdapters": 0, "languages": 0, "languageServers": 0, "pluginFunctions": 0, "settings": 0, "projectGenerators": 0, "toolDefinitions": 0, "sourceSettings": 0},
   "requiresTools": ["java"],
@@ -125,6 +125,96 @@
           "pattern": "Library/Java/JavaVirtualMachines/*.jdk",
           "platforms": [
             "macos"
+          ]
+        },
+        {
+          "root": {
+            "kind": "absolute",
+            "path": "C:\\Program Files\\Java"
+          },
+          "pattern": "*",
+          "platforms": [
+            "windows"
+          ]
+        },
+        {
+          "root": {
+            "kind": "absolute",
+            "path": "C:\\Program Files\\Eclipse Adoptium"
+          },
+          "pattern": "*",
+          "platforms": [
+            "windows"
+          ]
+        },
+        {
+          "root": {
+            "kind": "absolute",
+            "path": "C:\\Program Files\\Microsoft"
+          },
+          "pattern": "jdk-*",
+          "platforms": [
+            "windows"
+          ]
+        },
+        {
+          "root": {
+            "kind": "absolute",
+            "path": "C:\\Program Files\\Zulu"
+          },
+          "pattern": "*",
+          "platforms": [
+            "windows"
+          ]
+        },
+        {
+          "root": {
+            "kind": "absolute",
+            "path": "C:\\Program Files\\Amazon Corretto"
+          },
+          "pattern": "*",
+          "platforms": [
+            "windows"
+          ]
+        },
+        {
+          "root": {
+            "kind": "absolute",
+            "path": "C:\\Program Files\\BellSoft"
+          },
+          "pattern": "*",
+          "platforms": [
+            "windows"
+          ]
+        },
+        {
+          "root": {
+            "kind": "absolute",
+            "path": "/usr/lib/jvm"
+          },
+          "pattern": "*",
+          "platforms": [
+            "linux"
+          ]
+        },
+        {
+          "root": {
+            "kind": "home"
+          },
+          "pattern": ".jdks/*",
+          "platforms": [
+            "windows",
+            "linux"
+          ]
+        },
+        {
+          "root": {
+            "kind": "home"
+          },
+          "pattern": ".sdkman/candidates/java/*",
+          "platforms": [
+            "macos",
+            "linux"
           ]
         }
       ],
