@@ -16,7 +16,8 @@
 //! The manifest declares the `java` language server with
 //! `launch.kind: "backend"`, so the host asks [`launch`] for the JDT LS
 //! command line, initialization options and startup settings before each
-//! start. The launch reads the settings the [`settings_session`] knows for
+//! start. JDT LS is the user's own installation, which [`jdtls`] finds.
+//! The launch reads the settings the [`settings_session`] knows for
 //! the workspace, so a restart starts with the last pushed settings.
 //!
 //! # Cross-plugin settings (API-35)
@@ -48,6 +49,7 @@
 //! stderr, and a fact carries no path, source or tool output.
 
 pub mod class_content;
+pub mod jdtls;
 pub mod launch;
 pub mod plugin_functions;
 pub mod project_settings;

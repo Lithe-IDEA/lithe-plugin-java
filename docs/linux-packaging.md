@@ -1,8 +1,8 @@
 # Linux 构建与验证
 
-`node scripts/package/build-linux.mjs arm64|x64` 在对应 Linux runner 上编译 Rust 后端，校验其 ELF 架构，再从固定 SHA-256 的 Temurin JDK、JDT LS、Lombok、Java Debug 和 Java Test 输入组装包。ARM64 使用 `config_linux_arm`，x64 使用 `config_linux`。JDK 上游符号链接仅在构建时展开，插件 ZIP 不含链接。完整许可证与反编译补丁校验沿用已有流程。归档解压后再次检查清单、JDK/后端/VM 架构、执行权限和配置。
+`node scripts/package/build-linux.mjs arm64|x64` 在对应 Linux runner 上编译 Rust 后端，校验其 ELF 架构，再从固定 SHA-256 的 Lombok、Java Debug 和 Java Test 输入组装包。包里不含 JDT LS 和 JDK：插件运行用户自己安装的 JDT LS 和 JDK 21+，ARM64 读取安装里的 `config_linux_arm`，x64 读取 `config_linux`。插件 ZIP 不含链接。归档解压后再次检查清单、后端架构与执行权限，并确认包里没有 JDT LS 或 JDK。
 
-`node scripts/package/smoke-linux.mjs <zip>` 在原生 runner 上运行解压后的后端握手与 `java.resolveLaunch`，启动包内 Java 和 JDT LS，执行 initialize/shutdown，并对比整个安装目录的文件内容与权限。状态目录和 Equinox 配置副本在临时用户目录；结束时清理进程组和目录。
+`node scripts/package/smoke-linux.mjs <zip>` 在原生 runner 上运行解压后的后端握手与 `java.resolveLaunch`，把 `scripts/prepare-jdtls.sh` 准备的 JDT LS 1.61.0 当作用户的安装（CI 用 `actions/setup-java` 提供 JDK 21），执行 initialize/shutdown，并对比整个安装目录和 JDT LS 目录的文件内容与权限。状态目录和 Equinox 配置副本在临时用户目录；结束时清理进程组和目录。
 
 Linux 产物面向 GNU/glibc 环境，原生 CI 使用 Ubuntu 24.04；本包不面向 musl/Alpine。
 

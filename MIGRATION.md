@@ -1,5 +1,8 @@
 # 迁移说明：Java 逻辑从 Lithe 主仓库移到本仓库
 
+> 3.0.0 起插件包不再附带 JDT LS 和 JDK，改用用户自己的安装（`backend/src/jdtls.rs`）；`scripts/prepare-jdk.sh`、
+> `third_party/jdk/` 和 JDT 反编译补丁已删除。下文的打包与资源条目是迁移时的历史记录。
+
 本文是 Java Support 插件（`io.github.lithe-idea.java-support`）从 Lithe 主仓库拆分出来的移植账本，回答四个问题：
 
 1. 主仓库里的每个 Java 相关文件或符号，现在在本仓库的哪里，状态是什么。

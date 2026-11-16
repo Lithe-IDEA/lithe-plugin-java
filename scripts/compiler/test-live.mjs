@@ -1,4 +1,4 @@
-// Real packaged JDT + SDK backend, with bounded process ownership. This tests
+// The user's JDT LS + packaged SDK backend, with bounded process ownership. This tests
 // native sources reaching the engine rather than only checking RPC invocation.
 import assert from 'node:assert/strict';
 import {createReport} from '../report.mjs';
@@ -8,9 +8,11 @@ import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {pathToFileURL,fileURLToPath} from 'node:url';
 import {runTool} from './process.mjs';
+import {spawnSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {setTimeout as delay} from 'node:timers/promises';
 import {Client} from '../package/lsp-client.mjs';
+import {serverInputs,answeredExecutable} from '../package/jdtls-test-inputs.mjs';
 const pkg=resolve(process.argv[2]??'.artifacts/package/arm64/io.github.lithe-idea.java-support');
 const manifest=JSON.parse(readFileSync(join(pkg,'plugin.json')));
 const stage=realpathSync.native(mkdtempSync(join(tmpdir(),'lithe-java-native-')));
@@ -21,7 +23,11 @@ if(eclipse){mkdirSync(join(root,'src'));writeFileSync(join(root,'.project'),'<pr
 const context={contextID:'ctx-1',generation:1};let op=0;
 const samePath=(left,right)=>process.platform==='win32'?resolve(left).toLowerCase()===resolve(right).toLowerCase():resolve(left)===resolve(right);
 const snapshot=root=>{const items=[];const visit=(path,label)=>{const stat=lstatSync(path);assert.equal(stat.isSymbolicLink(),false);items.push([label,stat.mode,stat.isFile()?createHash('sha256').update(readFileSync(path)).digest('hex'):null]);if(stat.isDirectory())for(const name of readdirSync(path).sort())visit(join(path,name),`${label}/${name}`);};visit(root,'');return items;};
-const baseline=snapshot(pkg);
+const inputs=serverInputs();
+// LITHE_TEST_PROJECT_JAVA_HOME stands for the project JDK the host resolves for
+// the java tool; without it JDT compiles against the JDK that runs it.
+const projectJava=()=>{const home=process.env.LITHE_TEST_PROJECT_JAVA_HOME;if(!home)return {};const probe=spawnSync(join(home,'bin',process.platform==='win32'?'java.exe':'java'),['-version'],{encoding:'utf8',timeout:15000});const version=/version "(?:1\.)?(\d+(?:\.\d+)*)/.exec(probe.stderr)?.[1];assert.ok(version,`Cannot read the version of ${home}`);return {java:{executable:join(home,'bin','java'),home,version}};};
+const baseline=snapshot(pkg);const serverBaseline=snapshot(inputs.home);
 const folders=[{rootID:'root',name:'workspace',path:root,uri:pathToFileURL(root).href}];
 const execute=(command,args=[])=>server.request('workspace/executeCommand',{command,arguments:args});
 const report=createReport(eclipse?'native-jdt-eclipse':'native-jdt-unmanaged');
@@ -40,10 +46,10 @@ try{
  };
  backend=new Client(join(pkg,manifest.backend.launch.path),[],{hostRequests});
  await backend.request('initialize',{processId:process.pid,rootUri:pathToFileURL(root).href,capabilities:{experimental:{litheFunctions:{versions:[0]},litheLogging:{versions:[0]}}}});backend.notify('initialized',{});
- const params={serverID:'java',platform:{os:process.platform==='darwin'?'macos':process.platform,arch:process.env.LITHE_TEST_ARCH??(process.arch==='arm64'?'arm64':'x86_64')},settings:{logLevel:'WARNING'}};
+ const params={serverID:'java',platform:{os:{darwin:'macos',win32:'windows'}[process.platform]??process.platform,arch:process.env.LITHE_TEST_ARCH??(process.arch==='arm64'?'arm64':'x86_64')},settings:{logLevel:'WARNING',languageServerHome:inputs.home},tools:{...inputs.tools,...projectJava()}};
  for(const[key,name]of Object.entries({stateDirectory:'state',workspaceStateDirectory:'workspace-state',logDirectory:'logs',temporaryDirectory:'tmp'})){params[key]=join(stage,name);mkdirSync(params[key]);}
  const launch=await backend.request('lithe/function/invoke',{functionID:'java.resolveLaunch',operationID:`native-${++op}`,params,context});configuration=launch.workspaceConfiguration;
- server=new Client(join(pkg,launch.executable.path),launch.arguments,{env:{...process.env,...launch.environment},hostRequests:{'workspace/configuration':p=>p.items.map(item=>item.section?item.section.split('.').reduce((value,key)=>value?.[key],configuration)??null:configuration)}});
+ server=new Client(answeredExecutable(launch,inputs),launch.arguments,{env:{...process.env,...launch.environment},hostRequests:{'workspace/configuration':p=>p.items.map(item=>item.section?item.section.split('.').reduce((value,key)=>value?.[key],configuration)??null:configuration)}});
  await server.request('initialize',{processId:process.pid,rootUri:pathToFileURL(root).href,workspaceFolders:[{uri:pathToFileURL(root).href,name:'workspace'}],capabilities:{workspace:{configuration:true,workspaceFolders:true},textDocument:{publishDiagnostics:{}}},initializationOptions:launch.initializationOptions},120000);server.notify('initialized',{});
  backend.notify('lithe/host/languageServer/didChangeState',{context,serverID:'java',state:'running',generation:1});
  const invoke=(functionID,params)=>backend.request('lithe/function/invoke',{functionID,operationID:`native-${++op}`,params,context},90000);
@@ -60,6 +66,7 @@ try{
  });
  capture('zh',await invoke('compiler.settings',{context:{language:'zh-CN',builds:[]}}));capture('en',await invoke('compiler.settings',{context:{language:'en',builds:[]}}));
  assert.deepEqual(snapshot(pkg),baseline,'Native settings and server startup must never mutate the installed package');
+ assert.deepEqual(snapshot(inputs.home),serverBaseline,'Server startup must never write into the user\'s JDT LS installation');
  await server.request('shutdown',null);server.notify('exit',null);
 }finally{
  try{if(server)await server.close();}finally{try{if(backend)await backend.close();}finally{report.write();rmSync(stage,{recursive:true,force:true});}}

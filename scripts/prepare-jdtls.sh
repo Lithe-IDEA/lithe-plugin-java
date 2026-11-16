@@ -2,6 +2,12 @@
 
 set -euo pipefail
 
+# Prepares, from the pins in third_party/jdtls/manifest.json, the JDT LS
+# extensions the package ships (Lombok, Java Debug, Java Test) next to the
+# tested JDT LS release. The package carries only the extensions; the JDT LS
+# release is the one the tests run against and the one whose own bundles the
+# Java Test set is checked against, standing in for the user's installation.
+
 ROOT_DIR="${0:A:h:h}"
 MANIFEST="$ROOT_DIR/third_party/jdtls/manifest.json"
 OUTPUT_DIR="${LITHE_JDTLS_ROOT:-$ROOT_DIR/.artifacts/jdtls}"
@@ -36,8 +42,6 @@ java_debug_extension_version="$(manifest_value javaDebugExtensionVersion)"
 java_debug_server_version="$(manifest_value javaDebugServerVersion)"
 java_test_extension_version="$(manifest_value javaTestExtensionVersion)"
 java_test_plugin_version="$(manifest_value javaTestPluginVersion)"
-minimum_java_version="$(manifest_value minimumJavaVersion)"
-bundled_jdk_version="$(node "$ROOT_DIR/scripts/package/json-value.mjs" "$ROOT_DIR/third_party/jdk/manifest.json" version)"
 archive_path="${LITHE_JDTLS_ARCHIVE:-$CACHE_DIR/jdtls-$jdtls_version-$archive_sha256.tar.gz}"
 license_path="$CACHE_DIR/EPL-2.0-$license_sha256.txt"
 lombok_path="$CACHE_DIR/lombok-$lombok_version-$lombok_sha256.jar"
@@ -52,13 +56,6 @@ java_test_runner_name="com.microsoft.java.test.runner-jar-with-dependencies.jar"
 # Records the Java Test bundle set declared by the extension so validation
 # checks the exact upstream list instead of a hard-coded count.
 java_test_bundle_list="java-test/extensions.txt"
-
-# JDT LS refuses to start on a Java runtime older than it requires, and the
-# bundled JDK is the runtime Lithe launches it with.
-(( ${bundled_jdk_version%%.*} >= minimum_java_version )) || {
-    print -u2 -- "Bundled JDK $bundled_jdk_version is older than the Java $minimum_java_version that JDTLS $jdtls_version requires"
-    exit 1
-}
 
 file_sha256() {
     shasum -a 256 "$1" | awk '{print tolower($1)}'
