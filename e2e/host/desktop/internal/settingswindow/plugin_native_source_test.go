@@ -156,9 +156,24 @@ func TestPluginNativeSourceVisual(t *testing.T) {
 					}
 					d.click(title)
 					d.until("native source form", func() bool { return w.pluginSettings.sources != nil })
-					d.pump()
-					if err = session.Screenshot(filepath.Join(out, item.name+"-"+language.Code()+"-"+theme+".png")); err != nil {
-						t.Fatal(err)
+					shot := func(name string) {
+						d.pump()
+						if err = session.Screenshot(filepath.Join(out, name+"-"+language.Code()+"-"+theme+".png")); err != nil {
+							t.Fatal(err)
+						}
+					}
+					shot(item.name)
+					if item.name == "libraries-modules" {
+						// The Eclipse module's dependencies tab, then the Maven
+						// module JDT resolved, read-only.
+						dependencies := "Dependencies"
+						if language == i18n.Chinese {
+							dependencies = "依赖"
+						}
+						d.click(dependencies)
+						shot(item.name + "-dependencies")
+						d.click("service")
+						shot(item.name + "-maven")
 					}
 				})
 			}

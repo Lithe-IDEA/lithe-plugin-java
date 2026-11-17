@@ -1,5 +1,7 @@
 # Java Support for Lithe
 
+> **4.0.0 项目结构**：对标 IDEA“项目结构 → 模块”，在设置里逐个模块配置 Eclipse 工程的源文件夹、输出文件夹、JRE 和依赖（JAR、类文件夹、库、其他模块，可标导出与仅测试），保存时写回 `.classpath` 并保留其余内容；Maven/Gradle 模块只读显示解析出的类路径。需要支持 `sourceSettings` 1 的 Lithe 宿主，详见 [docs/module-structure.md](docs/module-structure.md)。
+>
 > **3.0.1 识别旧式与跨 IDE 工程**：没有 Maven/Gradle 的项目，插件只读识别 Eclipse WTP/MyEclipse 容器
 > （Web App Libraries、EAR Libraries、Server Runtime）、IntelliJ IDEA 的模块与库，以及传统 Web 的 `WEB-INF/lib`，
 > 在内存中补全类路径并自动找到 Tomcat 等 Servlet 容器，不修改项目文件，详见 [docs/project-models.md](docs/project-models.md)。

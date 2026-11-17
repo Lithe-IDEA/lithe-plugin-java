@@ -40,3 +40,14 @@
 
 2026-11-17：macOS arm64 本机自动化通过（三类工程编译成功，关闭识别后均失败；插件包、JDT LS 安装与项目文件不变）。Windows、Linux 结果由 CI 与后续实机验证补充。
 
+
+## 项目结构：模块、标签页与依赖（4.0.0）
+
+| 能力 | macOS | Windows | Linux | 证据 |
+| --- | --- | --- | --- | --- |
+| 模块侧栏：Eclipse 工程可编辑，Maven/Gradle 模块只读（JDT 解析的类路径），按文件夹嵌套 | implemented / verified | implemented / pending | implemented / pending | `backend/src/module_structure.rs`、`backend/src/project_settings.rs`；`scripts/compiler/test-module-structure.mjs` |
+| 源文件夹（测试标记）、输出文件夹、JRE 执行环境写回 `.classpath` | implemented / verified | implemented / pending | implemented / pending | 单元测试 `module_structure::tests`；`test-module-structure.mjs` 保存后 JDT 编译到新输出文件夹 |
+| 依赖：JAR/ZIP、类文件夹、库容器、模块依赖，导出与仅测试，保留源码附件、注释和未显示条目 | implemented / verified | implemented / pending | implemented / pending | 同上；`test-live.mjs` 的 Eclipse 模式经依赖列表添加外部 JAR 并编译运行 |
+| 项目结构页无头截图 | implemented / verified | — | — | `scripts/compiler/visual.mjs` 渲染真实投影（中英、明暗），截图见 `docs/assets/module-structure/` |
+
+2026-11-17：macOS arm64 本机用 JDT LS 1.61.0 自动化通过。需要宿主声明 `sourceSettings` 1（[1lck/Lithe-IDEA#2087](https://github.com/1lck/Lithe-IDEA/pull/2087)）；原生文件选择器、Windows 与 Linux 结果由实机验收和 CI 补充。
