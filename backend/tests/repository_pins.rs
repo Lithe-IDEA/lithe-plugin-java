@@ -213,9 +213,56 @@ fn the_users_jdt_ls_runs_on_the_declared_runtime_tool() {
         .iter()
         .find(|definition| definition["id"] == "java")
         .unwrap();
-    // The runtime finds JDKs where the project JDK is found.
-    assert_eq!(runtime["discovery"], java["discovery"]);
+    // The runtime finds JDKs where the project JDK is found, plus the JREs
+    // bundled inside VS Code and Cursor `redhat.java` extensions.
+    let java_discovery = java["discovery"].as_array().unwrap();
+    let runtime_discovery = runtime["discovery"].as_array().unwrap();
+    assert!(
+        runtime_discovery.len() <= 16,
+        "Core allows at most 16 discovery entries per tool"
+    );
+    assert_eq!(&runtime_discovery[..java_discovery.len()], java_discovery);
+    let extra_patterns: Vec<&str> = runtime_discovery[java_discovery.len()..]
+        .iter()
+        .map(|entry| text(entry, "pattern"))
+        .collect();
+    assert_eq!(
+        extra_patterns,
+        [
+            ".vscode/extensions/redhat.java-*/jre/*",
+            ".cursor/extensions/redhat.java-*/jre/*",
+        ]
+    );
     assert_eq!(runtime["executableLayouts"], java["executableLayouts"]);
+    let runtime_pattern = text(&runtime["version"], "pattern");
+    for rejected in [
+        r#"java version "1.8.0_301""#,
+        r#"openjdk version "11.0.20""#,
+        r#"openjdk version "17.0.10""#,
+        r#"openjdk version "20.0.2""#,
+    ] {
+        assert!(
+            !rejected.contains("version \"21") && {
+                // `jdtls-runtime` only matches Java 21+, so an older `java` on
+                // PATH cannot shadow a discovered JDK 21+.
+                let digits = rejected.split('"').nth(1).unwrap();
+                let major: u64 = digits
+                    .strip_prefix("1.")
+                    .unwrap_or(digits)
+                    .split('.')
+                    .next()
+                    .unwrap()
+                    .parse()
+                    .unwrap();
+                major < MINIMUM_SERVER_JAVA_VERSION
+            },
+            "{rejected}"
+        );
+    }
+    assert!(
+        runtime_pattern.contains("2[1-9]") && !runtime_pattern.contains("(?:1\\.)?"),
+        "jdtls-runtime version.pattern must require Java 21+: {runtime_pattern}"
+    );
     // It exports nothing, so JDT LS keeps the environment the host gives it.
     assert!(runtime.get("exports").is_none());
     assert!(runtime.get("pathPrepend").is_none());

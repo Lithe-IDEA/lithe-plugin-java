@@ -105,13 +105,24 @@ pub const LAUNCH_ERROR_CODES: &[&str] = &[
 pub const SERVER_RUNTIME_TOOL: &str = "jdtls-runtime";
 /// Oldest Java feature release JDT LS runs on.
 pub const MINIMUM_SERVER_JAVA_VERSION: u64 = 21;
-/// Message of [`LAUNCH_RUNTIME_TOO_OLD`].
+/// Message of [`LAUNCH_RUNTIME_TOO_OLD`] for [`MINIMUM_SERVER_JAVA_VERSION`].
 ///
 /// TODO(host-api: API-37 i18n): user-facing text must go through the host's
 /// i18n table.
 pub const RUNTIME_TOO_OLD_MESSAGE: &str = "The Eclipse JDT Language Server needs Java 21 or \
 later, but the JDK chosen for it is older. Choose a JDK 21 or later for \"JDK for JDT LS\" in \
 Settings > Build, Execution, Deployment > Toolchains.";
+
+/// Message of [`LAUNCH_RUNTIME_TOO_OLD`] for the Java feature release
+/// `minimum_java_version` the selected JDT LS installation requires.
+pub fn runtime_too_old_message(minimum_java_version: u64) -> String {
+    let minimum = minimum_java_version.max(MINIMUM_SERVER_JAVA_VERSION);
+    format!(
+        "The Eclipse JDT Language Server needs Java {minimum} or later, but the JDK chosen for \
+it is older. Choose a JDK {minimum} or later for \"JDK for JDT LS\" in Settings > Build, \
+Execution, Deployment > Toolchains."
+    )
+}
 
 /// Configuration areas of older JDT LS versions could not be removed. Only
 /// disk space is at stake, so the launch goes on.
@@ -349,19 +360,33 @@ fn host_tool_version(params: &Value, tool: &str) -> Option<String> {
         .map(str::to_string)
 }
 
+/// The Java feature release of `request.server_runtime_version`, when readable.
+pub fn server_runtime_feature(request: &LaunchRequest) -> Option<u64> {
+    request
+        .server_runtime_version
+        .as_deref()
+        .and_then(|version| version.split(['.', '_', '+', '-']).next())
+        .and_then(|feature| feature.parse::<u64>().ok())
+}
+
 /// Refuses a JDT LS runtime the host reported as older than
 /// [`MINIMUM_SERVER_JAVA_VERSION`]. A runtime without a readable version is
 /// left to the host and to JDT LS, which reports what it cannot run on.
 pub fn check_server_runtime(request: &LaunchRequest) -> Result<(), PluginError> {
-    let feature = request
-        .server_runtime_version
-        .as_deref()
-        .and_then(|version| version.split(['.', '_', '+', '-']).next())
-        .and_then(|feature| feature.parse::<u64>().ok());
-    match feature {
-        Some(feature) if feature < MINIMUM_SERVER_JAVA_VERSION => Err(PluginError::new(
+    check_server_runtime_for(request, MINIMUM_SERVER_JAVA_VERSION)
+}
+
+/// Refuses a JDT LS runtime the host reported as older than
+/// `minimum_java_version` (floored at [`MINIMUM_SERVER_JAVA_VERSION`]).
+pub fn check_server_runtime_for(
+    request: &LaunchRequest,
+    minimum_java_version: u64,
+) -> Result<(), PluginError> {
+    let minimum = minimum_java_version.max(MINIMUM_SERVER_JAVA_VERSION);
+    match server_runtime_feature(request) {
+        Some(feature) if feature < minimum => Err(PluginError::new(
             LAUNCH_RUNTIME_TOO_OLD,
-            RUNTIME_TOO_OLD_MESSAGE,
+            runtime_too_old_message(minimum),
         )),
         _ => Ok(()),
     }
@@ -538,7 +563,7 @@ pub fn resolve(
     now_unix_seconds: u64,
     report: &dyn Fn(&str, u64),
 ) -> Result<Value, PluginError> {
-    check_server_runtime(request)?;
+    check_server_runtime_for(request, server.minimum_java_version)?;
     let files = locate_launch_files(package_root, server)?;
     let area = prepare_jdt_configuration_area(
         &request.state_directory,
@@ -701,11 +726,12 @@ pub fn resolve_launch_function(
     context.check_cancelled()?;
     let request = parse_launch_params(&params)?;
     check_server_runtime(&request)?;
-    let server = jdtls::locate(
+    let server = jdtls::locate_for_runtime(
         request.server_home.as_deref(),
         &SearchEnvironment::current(),
         &request.os,
         &request.architecture,
+        server_runtime_feature(&request),
     )?;
     let package_root = package_root()?;
     let diagnostics = context.diagnostics();
@@ -1211,6 +1237,49 @@ mod tests {
         // Without a version the host's own resolution decides.
         params["tools"] = json!({});
         assert!(check_server_runtime(&parse_launch_params(&params).unwrap()).is_ok());
+
+        // A JDT LS installation whose core bundles require Java 25 (such as
+        // JDT LS 1.63+) refuses a Java 21 runtime with the exact required
+        // version before writing anything to `state`.
+        let mut server_25 = fixture.server();
+        server_25.minimum_java_version = 25;
+        params["tools"] = json!({
+            "jdtls-runtime": {"executable": "/jdk21/bin/java", "home": "/jdk21", "version": "21.0.9"}
+        });
+        let request_21 = parse_launch_params(&params).unwrap();
+        let report = |_: &str, _: u64| {};
+        let error = resolve(
+            &request_21,
+            &server_25,
+            &fixture.package(),
+            &[],
+            &[],
+            1_000_000,
+            &report,
+        )
+        .unwrap_err();
+        assert_eq!(error.code(), LAUNCH_RUNTIME_TOO_OLD);
+        assert_eq!(error.message(), runtime_too_old_message(25));
+        assert!(error.message().contains("Java 25 or later"));
+        assert!(fs::read_dir(fixture.root.join("state"))
+            .unwrap()
+            .next()
+            .is_none());
+
+        params["tools"] = json!({
+            "jdtls-runtime": {"executable": "/jdk25/bin/java", "home": "/jdk25", "version": "25.0.4.1"}
+        });
+        let request_25 = parse_launch_params(&params).unwrap();
+        assert!(resolve(
+            &request_25,
+            &server_25,
+            &fixture.package(),
+            &[],
+            &[],
+            1_000_000,
+            &report,
+        )
+        .is_ok());
     }
 
     #[test]

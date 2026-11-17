@@ -196,7 +196,7 @@ Spring/MyBatis 等既有能力不属于本轮 Maven 验收范围。
 
 插件包不带 JDT LS，也不带运行它的 JDK，和 Go 插件使用你自己的 `gopls` 一样。需要：
 
-1. **Eclipse JDT Language Server**。按以下顺序找，用第一个：
+1. **Eclipse JDT Language Server**。按以下顺序找，优先使用当前 `jdtls-runtime` 可满足其最低 Java 版本要求的安装；若都不满足则落到第一个并报出该安装所需的最低 Java 版本：
    1. 设置 → 语言与框架 → Java →「语言服务器目录」。选了目录就只用它，目录里没有 JDT LS 时直接报错，不会退回别的安装；
    2. 环境变量 `JDTLS_HOME`；
    3. `PATH` 上的 `jdtls` 启动脚本所属的安装（沿符号链接找到真实目录）；
@@ -207,9 +207,9 @@ Spring/MyBatis 等既有能力不属于本轮 Maven 验收范围。
    `config_<平台>/config.ini`。安装方式举例：macOS / Linux 用 `brew install jdtls`；也可以从
    [download.eclipse.org/jdtls](https://download.eclipse.org/jdtls/milestones/) 下载解压，再在设置里选目录。
    已测试 JDT LS 1.61.0（CI 固定，见 `third_party/jdtls/manifest.json`）和 Homebrew 1.60.0。
-2. **JDK 21 或更新版本**，用来运行 JDT LS。它是插件新增的「JDK for JDT LS」工具（`jdtls-runtime`），
-   在设置 → 构建、执行、部署 → 工具链里显示和选择；没选时依次用登录 shell 的 `java` 和找到的最高版本 JDK。
-   宿主报告的版本低于 21 时，启动直接报错并提示去工具链里选择。项目自己的 JDK 是原来的「JDK」工具（`java`），两者互不影响。
+2. **满足目标 JDT LS 要求的 JDK（至少 JDK 21；JDT LS 1.63+ 要求 JDK 25）**，用来运行 JDT LS。它是插件新增的「JDK for JDT LS」工具（`jdtls-runtime`），
+   在设置 → 构建、执行、部署 → 工具链里显示和选择；没选时依次用登录 shell 的 `java`（仅匹配 21 及更新版本，跳过 `PATH` 上的 Java 8/11/17）和找到的最高版本 JDK（含系统 JDK 目录与 VS Code / Cursor `redhat.java` 扩展自带的 `jre/`）。
+   后端会从目标 JDT LS 核心 bundle 的 `MANIFEST.MF`（`Bundle-RequiredExecutionEnvironment`）读取实际最低 Java 版本，低于该版本时启动直接报错并提示去工具链里选择。项目自己的 JDK 是原来的「JDK」工具（`java`），两者互不影响。
    JDT 只能为它支持的 Java 版本编译：没有为项目选 JDK 时，JDT 用运行它的 JDK 编译，这个 JDK 比 JDT LS 支持的最新 Java 还新时编译会报错。
 
 找不到 JDT LS 时，语言服务启动失败（`launch.server_missing`），错误信息说明如何安装或去哪里设置。
@@ -245,7 +245,7 @@ Spring/MyBatis 等既有能力不属于本轮 Maven 验收范围。
 | 其余函数成功（编辑器驱动或启动时的读取，如 `java.runMarkers`、`java.codeVision`、`spring.index`） | 不记录 | `suppress_success_diagnostics`（`backend/src/lib.rs`） | — |
 | 任一函数失败 | ERROR | SDK 自动 | 类别为 `pluginErrorCode`（如 `java.invalidRequest`；`languageImport.settingsChanged` 的 `relay.caller_missing`、`relay.context_missing`、`relay.invalid_params`）、耗时；不含消息与 `details` |
 | 领域命令失败类别 | ERROR | `plugin_error_code` | `java.invalidRequest`、`java.workspaceNotFound`、`java.permissionDenied`、`java.notSupported`、`java.runtimeMissing`、`java.processStartFailed`、`java.processFailed`、`java.parseFailed`、`java.cancelled`、`java.timedOut`、`java.connectionClosed`、`java.unknown`；SDK 识别的取消不记录 |
-| JDT 启动规划失败 | ERROR | SDK 自动 | `launch.invalid_params`、`launch.package_unavailable`、`launch.resource_missing`、`launch.configuration_failed`、`launch.server_missing`（找不到 JDT LS）、`launch.server_invalid`（设置的目录不是 JDT LS）、`launch.runtime_too_old`（运行 JDT LS 的 JDK 低于 21） |
+| JDT 启动规划失败 | ERROR | SDK 自动 | `launch.invalid_params`、`launch.package_unavailable`、`launch.resource_missing`、`launch.configuration_failed`、`launch.server_missing`（找不到 JDT LS）、`launch.server_invalid`（设置的目录不是 JDT LS）、`launch.runtime_too_old`（运行 JDT LS 的 JDK 低于目标 JDT LS 要求的最低版本，至少 21） |
 | JDT 配置清理或工作区读取降级 | WARN | SDK `degraded` | `launch.configuration_cleanup_failed`、`launch.workspace_folders_unavailable` |
 | 取消 | 不记录 | SDK | — |
 | 列出 `languageImport.settings` 提供方失败、单个提供方失败或超时、答复不可用、答复含越界键、提供方导出的函数版本不符 | WARN（`degraded`） | `backend/src/plugin_functions.rs` | 类别 `relay.providers_unavailable`、`relay.provider_failed`、`relay.provider_timed_out`、`relay.settings_rejected`、`relay.keys_rejected`、`relay.provider_version_mismatch`，计数；不含提供方 ID |
