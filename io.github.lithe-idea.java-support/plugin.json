@@ -322,7 +322,7 @@
         "arguments": [
           "-version"
         ],
-        "pattern": "version \\\"(?:1\\.)?(\\d+(?:\\.\\d+)*)"
+        "pattern": "version \\\"((?:2[1-9]|[3-9]\\d|\\d{3,})(?:\\.\\d+)*)"
       },
       "homeLayouts": [
         {
@@ -476,6 +476,18 @@
           "platforms": [
             "linux"
           ]
+        },
+        {
+          "root": {
+            "kind": "home"
+          },
+          "pattern": ".vscode/extensions/redhat.java-*/jre/*"
+        },
+        {
+          "root": {
+            "kind": "home"
+          },
+          "pattern": ".cursor/extensions/redhat.java-*/jre/*"
         }
       ],
       "commands": [
