@@ -67,6 +67,13 @@ jobs:
         with:
           path: .artifacts/jdtls-downloads
           key: third-party-${{ hashFiles('third_party/*/manifest.json') }}
+      # The package ships no JDK. This one compiles the plugin's own JDT LS
+      # extension bundle while packaging, and the integration tests run the
+      # tested JDT LS release on it, as a user's JDK 21+ would.
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
       - name: Build, verify and archive both architectures
         run: |
           set -euo pipefail
@@ -74,17 +81,12 @@ jobs:
             package=$(scripts/build-package.sh --arch "$arch")
             scripts/archive-package.sh --package "$package" --arch "$arch"
           done
-      # The package ships no JDK; the integration tests run the tested JDT LS
-      # release on this one, as a user's JDK 21+ would.
-      - uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: "21"
       - name: Verify native compiler settings and JARs with the user's JDT LS
         run: |
           package=".artifacts/package/$(uname -m)/io.github.lithe-idea.java-support"
           node scripts/compiler/test-live.mjs "$package"
           LITHE_JAVA_PROJECT_KIND=eclipse node scripts/compiler/test-live.mjs "$package"
+          node scripts/compiler/test-project-models.mjs "$package"
       - name: Upload native compiler projections
         uses: actions/upload-artifact@v4
         with:
@@ -139,6 +141,12 @@ jobs:
         run: node scripts/package/build-linux.mjs "${{ matrix.arch }}"
       - name: Start the packaged backend and the user's language server
         run: node scripts/package/smoke-linux.mjs dist/*-linux-${{ matrix.arch }}.zip
+      - name: Compile legacy and cross-IDE project models with the user's language server
+        run: |
+          package=$(mktemp -d)
+          unzip -q dist/*-linux-${{ matrix.arch }}.zip -d "$package"
+          node scripts/compiler/test-project-models.mjs "$package/io.github.lithe-idea.java-support"
+          rm -rf "$package"
       - uses: actions/upload-artifact@v4
         with:
           name: java-linux-${{ matrix.arch }}

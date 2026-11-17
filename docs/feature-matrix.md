@@ -27,3 +27,16 @@
 | 原生 JAR 引用与编译运行 | implemented / pending | implemented / pending | `scripts/compiler/` 编译外部 JAR 并运行引用它的程序；配置与包的只读边界见 native-settings.md |
 
 2026-11-15：本地 macOS 自动化已通过，不将脚本通过等同于所有交互场景验收。Windows 的实机结果另随 PR 补充。
+
+## 旧式与跨 IDE 工程模型（3.0.1）
+
+| 能力 | macOS | Windows | Linux | 证据 |
+| --- | --- | --- | --- | --- |
+| Eclipse WTP/MyEclipse 容器（Web App Libraries、EAR Libraries、Server Runtime、Java EE 库）与 `TOMCAT_HOME`/`CATALINA_HOME` 变量 | implemented / verified | implemented / pending | implemented / pending | `jdtls-extension/project-model`；macOS arm64 本机用固定的 JDT LS 1.61.0 跑 `scripts/compiler/test-project-models.mjs` 的 `eclipse-wtp` 场景 |
+| 传统 Web（`WEB-INF/lib`）、EAR 库目录与 `MANIFEST.MF` Class-Path | implemented / verified | implemented / pending | implemented / pending | `backend/src/project_model/web.rs` 单元测试；`legacy-web` 场景 |
+| IntelliJ IDEA 模块源码根、模块库、项目库（只读导入） | implemented / verified | implemented / pending | implemented / pending | `backend/src/project_model/idea.rs` 单元测试；`idea` 场景 |
+| Servlet 容器：设置、环境变量、常见位置自动查找 | implemented / verified | implemented / pending | implemented / pending | `backend/src/project_model/servlet.rs` 单元测试，含 Windows 安装位置 |
+| “Java 库”页的工程模型只读分组、源码文件夹与“保存识别结果” | implemented / verified | implemented / pending | implemented / pending | 后端投影与保存经 `test-project-models.mjs` 真实验证；`scripts/compiler/visual.mjs` 用宿主 Viva 无头窗口渲染三类工程的真实投影（中英、明暗），截图见 `docs/assets/project-models/` |
+
+2026-11-17：macOS arm64 本机自动化通过（三类工程编译成功，关闭识别后均失败；插件包、JDT LS 安装与项目文件不变）。Windows、Linux 结果由 CI 与后续实机验证补充。
+

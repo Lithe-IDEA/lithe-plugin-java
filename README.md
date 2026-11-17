@@ -1,5 +1,9 @@
 # Java Support for Lithe
 
+> **3.0.1 识别旧式与跨 IDE 工程**：没有 Maven/Gradle 的项目，插件只读识别 Eclipse WTP/MyEclipse 容器
+> （Web App Libraries、EAR Libraries、Server Runtime）、IntelliJ IDEA 的模块与库，以及传统 Web 的 `WEB-INF/lib`，
+> 在内存中补全类路径并自动找到 Tomcat 等 Servlet 容器，不修改项目文件，详见 [docs/project-models.md](docs/project-models.md)。
+>
 > **3.0.0 起使用你自己的 JDT LS**：插件包不再附带 Eclipse JDT Language Server 和运行它的 JDK（包从约 250 MB 降到约 11 MB），
 > 做法和 Go 插件使用你自己的 `gopls` 一样。需要先安装 JDT LS（例如 `brew install jdtls`）和 JDK 21 或更新版本，
 > 详见下文[语言服务器与 JDK](#语言服务器与-jdk)。

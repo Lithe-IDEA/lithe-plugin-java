@@ -14,16 +14,19 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use url::Url;
 
+use crate::project_model::{self, Environment, Explicit, ModelOptions, ProjectModel};
+
 const LIMIT: u64 = 2 * 1024 * 1024;
 const TARGET: &str = "org.eclipse.jdt.core.compiler.codegen.targetPlatform";
 const SOURCE: &str = "org.eclipse.jdt.core.compiler.source";
 const COMPLIANCE: &str = "org.eclipse.jdt.core.compiler.compliance";
 const RELEASE: &str = "org.eclipse.jdt.core.compiler.release";
 const NATURES: &str = "org.eclipse.jdt.ls.core.natureIds";
-const LIBRARIES: &str = "org.eclipse.jdt.ls.core.referencedLibraries";
+pub(crate) const LIBRARIES_FACT: &str = "org.eclipse.jdt.ls.core.referencedLibraries";
 const PREFS: &str = ".settings/org.eclipse.jdt.core.prefs";
 const SETTINGS: &str = ".vscode/settings.json";
 const LIBRARY_KEY: &str = "java.project.referencedLibraries";
+const SOURCE_PATHS_KEY: &str = "java.project.sourcePaths";
 
 /// Bounded native read bindings; no configuration documents or tool models are cached.
 #[derive(Default)]
@@ -205,7 +208,8 @@ impl ProjectSettings {
             RELEASE,
             "org.eclipse.jdt.core.compiler.debug.lineNumber",
             NATURES,
-            LIBRARIES
+            LIBRARIES_FACT,
+            crate::library_settings::SOURCE_PATHS_FACT
         ]);
         let mut facts = Vec::new();
         for entry in projects.as_array().ok_or_else(fail)? {
@@ -263,6 +267,35 @@ impl ProjectSettings {
                 global_effective[key] = facts[index].1[key].clone();
             }
         }
+        // The libraries page also projects the detected project model and
+        // what the project model bundle made of Eclipse containers. A JDT LS
+        // without the bundle (an older user installation) has no describe
+        // command; the page then shows only what the backend detected.
+        let model = if libraries {
+            let workspace = context.workspace_context().ok_or_else(fail)?;
+            let options = session.model_options(workspace.context_id());
+            let explicit = Explicit::from_document(&native_json(&read(&root.join(SETTINGS))?.0)?);
+            let model = project_model::detect(&root, &options, &Environment::current());
+            let described = command(
+                context,
+                crate::library_settings::DESCRIBE_COMMAND,
+                json!([]),
+            )
+            .ok();
+            Some((model, explicit, described))
+        } else {
+            None
+        };
+        let page =
+            model.as_ref().map(
+                |(model, explicit, described)| crate::library_settings::Page {
+                    zh,
+                    root: &root,
+                    model,
+                    explicit,
+                    described: described.as_ref(),
+                },
+            );
         let mut sources = Vec::new();
         let mut bindings = BTreeMap::new();
         let mut paths = BTreeSet::new();
@@ -297,14 +330,15 @@ impl ProjectSettings {
                 .replace('\\', "/");
             let id = format!("source{:x}", Sha256::digest(rel.as_bytes()));
             let (bytes, revision) = read(&source_path)?;
-            let mut fields = if libraries {
-                let value = if source_path.ends_with(".classpath") {
-                    json!(classpath_libraries(&bytes)?)
+            let mut fields = if let Some(page) = &page {
+                if source_path.ends_with(".classpath") {
+                    let effective = fact[LIBRARIES_FACT].clone();
+                    let mut field = field(zh, ("libraries", "Referenced JAR files", "引用的 JAR 文件", "fileList"),json!(classpath_libraries(&bytes)?),effective,json!([]),&local(zh,"Libraries of this Eclipse project, written to its .classpath. Containers such as Web App Libraries and Server Runtime stay in .classpath and are resolved by Lithe; see Project model.","此 Eclipse 项目的库，写入其 .classpath。Web App Libraries、Server Runtime 等容器保留在 .classpath 中，由 Lithe 解析，详见“工程模型”。"));
+                    field["effectiveSource"] = json!(page.classpath_label(&path));
+                    vec![field]
                 } else {
-                    library_input(&native_json(&bytes)?)
-                };
-                let effective = fact[LIBRARIES].clone();
-                vec![field(zh, ("libraries", "Referenced JAR files", "引用的 JAR 文件", "fileList"),value,effective,json!([]),&local(zh,"Eclipse projects use .classpath. Unmanaged Java uses java.project.referencedLibraries in .vscode/settings.json; lib/**/*.jar is the upstream default.","Eclipse 项目写入 .classpath；普通 Java 使用 .vscode/settings.json 的 java.project.referencedLibraries，上游默认引用 lib/**/*.jar。"))]
+                    page.settings_fields(&fact, library_input(&native_json(&bytes)?))
+                }
             } else {
                 compiler_fields(zh, &properties(&bytes)?, &fact, true)
             };
@@ -321,17 +355,71 @@ impl ProjectSettings {
             bindings.insert(id.clone(), source_path);
             sources.push(json!({"id":id,"group":if libraries{"libraries"}else{"modules"},"title":path.file_name().and_then(|n|n.to_str()).unwrap_or("Java"),"path":rel,"revision":revision,"writable":true,"fields":fields}));
         }
+        let mut groups = if libraries {
+            vec![
+                json!({"id":"libraries","title":local(zh,"Referenced libraries","引用的库"),"layout":"form"}),
+            ]
+        } else {
+            vec![
+                json!({"id":"project","title":local(zh,"Project defaults","项目默认设置"),"layout":"form"}),
+                json!({"id":"modules","title":local(zh,"Per-module bytecode","按模块设置字节码"),"rowTitle":local(zh,"Module","模块"),"layout":"table"}),
+            ]
+        };
+        if let Some(page) = &page {
+            let taken: Vec<PathBuf> = paths.iter().cloned().collect();
+            let mut model_sources: Vec<(PathBuf, Value)> = Vec::new();
+            let mut rows = page.model_sources(&taken);
+            rows.extend(page.eclipse_sources(&taken));
+            for (id, path, fields) in rows {
+                // An Eclipse project's container rows share its `.project`
+                // with the model rows; one source holds both.
+                if let Some(source) = model_sources.iter_mut().find(|(known, _)| known == &path) {
+                    let existing = source.1["fields"].as_array_mut().ok_or_else(fail)?;
+                    existing.extend(
+                        fields
+                            .into_iter()
+                            .take(32usize.saturating_sub(existing.len())),
+                    );
+                    continue;
+                }
+                if sources.len() + model_sources.len() >= 1024 || !paths.insert(path.clone()) {
+                    continue;
+                }
+                let rel = project_model::relative_inside(&root, &path).ok_or_else(fail)?;
+                let title = if id == "model" {
+                    local(zh, "Project model", "工程模型")
+                } else {
+                    path.parent()
+                        .and_then(|p| p.file_name())
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("Eclipse")
+                        .to_string()
+                };
+                let (_, revision) = read(&path)?;
+                let id = format!("model{:x}", Sha256::digest(rel.as_bytes()));
+                model_sources.push((path, json!({"id":id,"group":"model","title":title,"path":rel,"revision":revision,"writable":false,"fields":fields})));
+            }
+            sources.extend(model_sources.into_iter().map(|(_, source)| source));
+            if sources.iter().any(|source| source["group"] == "model") {
+                groups.push(json!({"id":"model","title":local(zh,"Project model","工程模型"),"layout":"form"}));
+            }
+        }
         let mut all = self.bindings.lock().map_err(|_| fail())?;
         if all.len() >= 32 && !all.contains_key(&root.to_string_lossy().to_string()) {
             return Err(fail());
         }
         all.insert(root.to_string_lossy().to_string(), bindings);
         Ok(
-            json!({"format":"litheSettingsSources","version":0,"title":if libraries{local(zh,"Java Libraries","Java 库")}else{local(zh,"Java Compiler","Java 编译器")},"groups":if libraries{json!([{"id":"libraries","title":local(zh,"Referenced libraries","引用的库"),"layout":"form"}])}else{json!([{"id":"project","title":local(zh,"Project defaults","项目默认设置"),"layout":"form"},{"id":"modules","title":local(zh,"Per-module bytecode","按模块设置字节码"),"rowTitle":local(zh,"Module","模块"),"layout":"table"}])},"sources":sources}),
+            json!({"format":"litheSettingsSources","version":0,"title":if libraries{local(zh,"Java Libraries","Java 库")}else{local(zh,"Java Compiler","Java 编译器")},"groups":groups,"sources":sources}),
         )
     }
     /// Prepares only the confirmed native source; publication belongs to the host.
-    pub fn edit(&self, params: Value, context: &Context) -> Result<Value, FunctionError> {
+    pub fn edit(
+        &self,
+        params: Value,
+        context: &Context,
+        session: &crate::settings_session::SettingsSession,
+    ) -> Result<Value, FunctionError> {
         let root = root(context)?;
         let id = params["sourceID"].as_str().ok_or_else(fail)?;
         let path = self
@@ -359,9 +447,14 @@ impl ProjectSettings {
         }
         let values = params["values"].as_object().ok_or_else(fail)?;
         let replacement = if path.ends_with(".classpath") {
-            edit_classpath(&bytes, values.get("libraries").ok_or_else(fail)?)?
+            match values.get("libraries") {
+                Some(libraries) => edit_classpath(&bytes, libraries)?,
+                None => bytes.clone(),
+            }
         } else if path.ends_with(SETTINGS) {
-            edit_json(&bytes, values.get("libraries").ok_or_else(fail)?)?
+            let workspace = context.workspace_context().ok_or_else(fail)?;
+            let options = session.model_options(workspace.context_id());
+            edit_settings(&root, &bytes, values, &options)?
         } else {
             edit_properties(&bytes, values)?
         };
@@ -394,19 +487,31 @@ impl ProjectSettings {
     }
 }
 
-/// Reads the actual upstream settings sources; used at startup and on every push.
-pub fn native_settings(root: &Path) -> Result<Value, FunctionError> {
+/// Reads the actual upstream settings sources and overlays the detected
+/// project model; used at startup and on every push. Returns the `java`
+/// sections to overlay and the model they came from.
+pub fn native_settings(
+    root: &Path,
+    options: &ModelOptions,
+) -> Result<(Value, ProjectModel), FunctionError> {
     let mut settings = json!({});
     if read(&root.join(PREFS))?.1 != "missing" {
         settings["settings"] =
             json!({"url":Url::from_file_path(root.join(PREFS)).map_err(|_|fail())?.to_string()});
     }
     let (bytes, _) = read(&root.join(SETTINGS))?;
-    let source = native_json(&bytes)?;
-    if let Some(libraries) = source.get(LIBRARY_KEY) {
-        settings["project"] = json!({"referencedLibraries":libraries});
+    let explicit = Explicit::from_document(&native_json(&bytes)?);
+    let model = project_model::detect(root, options, &Environment::current());
+    let overlay = project_model::overlay(&model, &explicit);
+    for section in ["project", "lithe"] {
+        if overlay
+            .get(section)
+            .is_some_and(|value| value != &json!({}))
+        {
+            settings[section] = overlay[section].clone();
+        }
     }
-    Ok(settings)
+    Ok((settings, model))
 }
 fn native_json(bytes: &[u8]) -> Result<Value, FunctionError> {
     if bytes.is_empty() {
@@ -428,15 +533,64 @@ fn library_input(settings: &Value) -> Value {
         None => Value::Null,
     }
 }
-fn edit_json(bytes: &[u8], libraries: &Value) -> Result<Vec<u8>, FunctionError> {
+/// Applies the confirmed fields of the `.vscode/settings.json` source in
+/// order: libraries, source folders, then saving or removing the detected
+/// entries against the file as the first two left it.
+fn edit_settings(
+    root: &Path,
+    bytes: &[u8],
+    values: &serde_json::Map<String, Value>,
+    options: &ModelOptions,
+) -> Result<Vec<u8>, FunctionError> {
+    use crate::library_settings::{LIBRARIES_FIELD, SOURCE_PATHS_FIELD, STORE_DETECTED_FIELD};
+    let mut document = bytes.to_vec();
+    if let Some(libraries) = values.get(LIBRARIES_FIELD) {
+        document = edit_json(&document, LIBRARY_KEY, libraries)?;
+    }
+    if let Some(paths) = values.get(SOURCE_PATHS_FIELD) {
+        document = edit_json(&document, SOURCE_PATHS_KEY, paths)?;
+    }
+    if let Some(store) = values.get(STORE_DETECTED_FIELD) {
+        let store = match store {
+            Value::Bool(store) => *store,
+            Value::Null => false,
+            _ => return Err(fail()),
+        };
+        let explicit = Explicit::from_document(&native_json(&document)?);
+        let model = project_model::detect(root, options, &Environment::current());
+        let page = crate::library_settings::Page {
+            zh: false,
+            root,
+            model: &model,
+            explicit: &explicit,
+            described: None,
+        };
+        let (libraries, source_paths) = crate::library_settings::stored_entries(&page, store);
+        if let Some(libraries) = libraries {
+            document = edit_json(&document, LIBRARY_KEY, &libraries)?;
+        }
+        if let Some(source_paths) = source_paths {
+            document = edit_json(
+                &document,
+                SOURCE_PATHS_KEY,
+                &source_paths.unwrap_or(Value::Null),
+            )?;
+        }
+    }
+    Ok(document)
+}
+/// Sets or (with null) removes the string list `key`; a rich
+/// `referencedLibraries` object keeps its excludes and sources and only
+/// its `include` changes.
+fn edit_json(bytes: &[u8], key: &str, libraries: &Value) -> Result<Vec<u8>, FunctionError> {
     native_json(bytes)?;
     let text = std::str::from_utf8(bytes).map_err(|_| fail())?;
     let root = CstRootNode::parse(text, &Default::default()).map_err(|_| fail())?;
     let object = root.object_value_or_create().ok_or_else(fail)?;
-    let rich = object.get(LIBRARY_KEY).and_then(|prop| prop.object_value());
-    let (target, key) = rich
-        .map(|rich| (rich, "include"))
-        .unwrap_or((object, LIBRARY_KEY));
+    let rich = (key == LIBRARY_KEY)
+        .then(|| object.get(LIBRARY_KEY).and_then(|prop| prop.object_value()))
+        .flatten();
+    let (target, key) = rich.map(|rich| (rich, "include")).unwrap_or((object, key));
     if libraries.is_null() {
         if let Some(prop) = target.get(key) {
             prop.remove();
@@ -693,7 +847,7 @@ mod tests {
             "sources": {"old.jar": "old-sources.jar"}
           }, "privateToken": "untouched"
         }"#;
-        let updated = edit_json(source, &json!(["new.jar"])).unwrap();
+        let updated = edit_json(source, LIBRARY_KEY, &json!(["new.jar"])).unwrap();
         let parsed = native_json(&updated).unwrap();
         assert_eq!(parsed[LIBRARY_KEY]["include"], json!(["new.jar"]));
         assert_eq!(parsed[LIBRARY_KEY]["exclude"], json!(["secret/**/*.jar"]));
@@ -701,7 +855,7 @@ mod tests {
         assert!(String::from_utf8(updated.clone())
             .unwrap()
             .contains("private comment"));
-        let reset = native_json(&edit_json(&updated, &Value::Null).unwrap()).unwrap();
+        let reset = native_json(&edit_json(&updated, LIBRARY_KEY, &Value::Null).unwrap()).unwrap();
         assert!(reset[LIBRARY_KEY].get("include").is_none());
         assert_eq!(
             reset[LIBRARY_KEY]["exclude"],
@@ -733,7 +887,12 @@ mod tests {
     #[test]
     fn jsonc_library_edits_preserve_comments_unknown_settings_and_spaces() {
         let source=b"{ // keep comment\n \"privateToken\": \"private-value\",\n \"java.project.referencedLibraries\": [\"old.jar\"],\n}";
-        let updated = edit_json(source, &json!(["C:\\Program Files\\Java\\external.jar"])).unwrap();
+        let updated = edit_json(
+            source,
+            LIBRARY_KEY,
+            &json!(["C:\\Program Files\\Java\\external.jar"]),
+        )
+        .unwrap();
         assert!(String::from_utf8_lossy(&updated).contains("// keep comment"));
         let value = native_json(&updated).unwrap();
         assert_eq!(
@@ -741,7 +900,7 @@ mod tests {
             json!(["C:\\Program Files\\Java\\external.jar"])
         );
         assert_eq!(value["privateToken"], "private-value");
-        let reset = edit_json(&updated, &Value::Null).unwrap();
+        let reset = edit_json(&updated, LIBRARY_KEY, &Value::Null).unwrap();
         assert!(native_json(&reset).unwrap().get(LIBRARY_KEY).is_none());
     }
     #[test]
@@ -777,8 +936,12 @@ mod tests {
         )
         .unwrap();
         let original = json!({"java":{"configuration":{"runtimes":[{"name":"JavaSE-17","path":"/selected/jdk"}]},"import":{"maven":{"enabled":true}}}});
-        let updated =
-            crate::settings_session::with_native_settings(original.clone(), root).unwrap();
+        let updated = crate::settings_session::with_native_settings(
+            original.clone(),
+            root,
+            &ModelOptions::default(),
+        )
+        .unwrap();
         assert_eq!(
             updated["java"]["configuration"],
             original["java"]["configuration"]

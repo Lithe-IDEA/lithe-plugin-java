@@ -18,10 +18,20 @@
         "WARNING": "警告",
         "SEVERE": "仅错误"
       }
+    },
+    "projectModelDetection": {
+      "title": "自动识别工程模型",
+      "description": "对没有 Maven 或 Gradle 的文件夹，读取其他 IDE 留下的工程结构：Eclipse WTP 容器（Web App Libraries、EAR Libraries、Server Runtime）、IntelliJ IDEA 的模块和库，以及传统 Web 项目的 WEB-INF/lib。Lithe 在内存中把它们声明的库加入类路径，不修改项目文件。修改在 Java 语言服务器重启后生效。"
+    },
+    "servletContainerHome": {
+      "title": "Servlet 容器文件夹",
+      "description": "为 Web 项目提供 javax.servlet 等服务器 API 的 Tomcat 或 Jetty 安装文件夹，对应 Eclipse 的 Server Runtime 和 IDEA 的应用服务器库。留空时依次使用 CATALINA_HOME、TOMCAT_HOME 和常见位置安装的 Tomcat，并优先选择项目指定的版本。",
+      "placeholder": "自动查找"
     }
   },
   "sections": {
-    "Language server": "语言服务器"
+    "Language server": "语言服务器",
+    "Project model": "工程模型"
   },
   "settingActions": {
     "compiler": {

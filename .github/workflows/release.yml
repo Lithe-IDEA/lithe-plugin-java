@@ -98,6 +98,12 @@ jobs:
             echo "::error::Tag $GITHUB_REF_NAME does not match plugin.json version $version"
             exit 1
           fi
+      # Packaging compiles the plugin's own JDT LS extension bundle, which
+      # needs javac 21 or later (scripts/package/project-model-bundle.mjs).
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
       - name: Build and verify both architectures
         run: |
           set -euo pipefail
