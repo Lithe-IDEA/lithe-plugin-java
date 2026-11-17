@@ -87,3 +87,6 @@ Eclipse 容器和类路径变量只能在 JDT LS 进程内解析，插件为此�
   （Eclipse WTP + Server Runtime + `TOMCAT_HOME`、只有 `WEB-INF/lib` 的传统 Web、非标准源码根和模块/项目库的 IDEA 项目），
   核对设置页内容、项目文件（JDT 自己在 `.project` 中添加的资源过滤除外）、插件包和 JDT LS 安装目录均未被修改；
   传统 Web 场景还会通过设置页保存识别结果，再从文件重新编译。关闭识别后三类工程都会编译失败，可作反向对照。
+  测试同时把各场景的设置页投影写到 `.artifacts/compiler/visual-libraries-<场景>-<语言>.json`。
+- `node scripts/compiler/visual.mjs <Lithe 宿主检出>`：在宿主的 Viva 无头窗口中渲染编译器页、Java 设置页和三个场景的“Java 库”页（中英、明暗），
+  截图写到 `.artifacts/compiler/visual/`；`docs/assets/project-models/` 保存了其中几张。

@@ -19,6 +19,7 @@ import {fileURLToPath,pathToFileURL} from 'node:url';
 import {Client} from '../package/lsp-client.mjs';
 import {answeredExecutable,serverInputs} from '../package/jdtls-test-inputs.mjs';
 import {createReport} from '../report.mjs';
+import {capture} from './capture.mjs';
 import {runTool} from './process.mjs';
 
 const pkg=resolve(process.argv[2]??'.artifacts/package/arm64/io.github.lithe-idea.java-support');
@@ -152,6 +153,9 @@ async function scenario(name,report){
    if(fixture.library)assert.ok(value('detected').some(line=>line.startsWith(fixture.library)),JSON.stringify(value('detected')));
    if(name==='eclipse-wtp')assert.ok(value('containers')?.some(line=>line.startsWith('Web App Libraries')),JSON.stringify(model.fields));
    assert.deepEqual(projectFiles(),projectBaseline,'Detection and the libraries page must not write project files');
+   // The public projection, rendered by the native host in scripts/compiler/visual.mjs.
+   capture(`libraries-${name}-zh`,page);
+   capture(`libraries-${name}-en`,await invoke('libraries.settings',{context:{language:'en',builds:[]}}));
   });
   if(name==='legacy-web')await step('saving the detected entries writes them and JDT builds from the file',async()=>{
    const page=await invoke('libraries.settings',{context:{language:'en',builds:[]}});

@@ -327,14 +327,18 @@ impl Page<'_> {
                     if zh {
                         format!("{libraries} 个 JAR，{projects} 个项目")
                     } else {
-                        format!("{libraries} JARs, {projects} projects")
+                        format!(
+                            "{}, {}",
+                            count(libraries, "JAR"),
+                            count(projects, "project")
+                        )
                     }
                 }
                 "resolved" => {
                     if zh {
                         format!("{libraries} 个 JAR")
                     } else {
-                        format!("{libraries} JARs")
+                        count(libraries, "JAR")
                     }
                 }
                 "empty" if kind == "serverRuntime" || kind == "javaEE" => {
@@ -463,8 +467,10 @@ impl Page<'_> {
                     )
                 } else {
                     format!(
-                        "{} — {origin} ({}, {} JARs)",
-                        item.pattern, item.label, item.count
+                        "{} — {origin} ({}, {})",
+                        item.pattern,
+                        item.label,
+                        count(item.count as u64, "JAR")
                     )
                 }
             })
@@ -473,15 +479,15 @@ impl Page<'_> {
             if lines.len() < MAX_LINES {
                 lines.push(if zh {
                     format!(
-                        "{} — Servlet 容器（{} 个 JAR）",
-                        runtime.home.join("lib").display(),
+                        "Servlet 容器 — {}（{} 个 JAR）",
+                        runtime.name,
                         runtime.libraries.len()
                     )
                 } else {
                     format!(
-                        "{} — Servlet container ({} JARs)",
-                        runtime.home.join("lib").display(),
-                        runtime.libraries.len()
+                        "Servlet container — {} ({})",
+                        runtime.name,
+                        count(runtime.libraries.len() as u64, "JAR")
                     )
                 });
             }
@@ -492,16 +498,17 @@ impl Page<'_> {
     fn servlet_text(&self) -> String {
         let zh = self.zh;
         match &self.model.servlet.runtime {
+            // Name and origin first, the folder last: a long folder is
+            // what the field cuts off.
             Some(runtime) => {
-                let value = format!("{}{}{}", runtime.name, if zh { "，" } else { ", " }, runtime.home.display());
-                match runtime.source {
-                    ServletSource::Setting => format!("{value}{}", if zh { "（Java 设置）" } else { " (Java settings)" }),
-                    ServletSource::Environment(variable) => {
-                        if zh { format!("自动（{value}，来自 {variable}）") } else { format!("Automatic ({value}, from {variable})") }
-                    }
-                    ServletSource::Installed => {
-                        if zh { format!("自动（{value}）") } else { format!("Automatic ({value})") }
-                    }
+                let (name, home) = (&runtime.name, runtime.home.display());
+                match (&runtime.source, zh) {
+                    (ServletSource::Setting, true) => format!("{name}（Java 设置）— {home}"),
+                    (ServletSource::Setting, false) => format!("{name} (Java settings) — {home}"),
+                    (ServletSource::Environment(variable), true) => format!("自动：{name}（来自 {variable}）— {home}"),
+                    (ServletSource::Environment(variable), false) => format!("Automatic: {name} (from {variable}) — {home}"),
+                    (ServletSource::Installed, true) => format!("自动：{name} — {home}"),
+                    (ServletSource::Installed, false) => format!("Automatic: {name} — {home}"),
                 }
             }
             None if self.model.servlet.setting_invalid => text(
@@ -558,6 +565,15 @@ impl Page<'_> {
                 format!("{} — {reason}", item.name)
             })
             .collect()
+    }
+}
+
+/// `n` English things, singular for one.
+fn count(n: u64, thing: &str) -> String {
+    if n == 1 {
+        format!("1 {thing}")
+    } else {
+        format!("{n} {thing}s")
     }
 }
 
@@ -762,7 +778,7 @@ mod tests {
         );
         assert_eq!(
             fields[3]["value"],
-            "自动（Apache Tomcat 9.0.98，/opt/tomcat）"
+            "自动：Apache Tomcat 9.0.98 — /opt/tomcat"
         );
         assert_eq!(
             fields[4]["value"],
