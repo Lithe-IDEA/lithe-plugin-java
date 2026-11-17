@@ -1,4 +1,4 @@
-# 旧式与跨 IDE 工程模型（3.1.0）
+# 旧式与跨 IDE 工程模型（3.0.1）
 
 没有 Maven/Gradle 构建文件的 Java 项目，常常带着其他 IDE 留下的工程结构：Eclipse WTP 的类路径容器、
 MyEclipse 的 J2EE 库、IntelliJ IDEA 的 `.idea` 与 `.iml`，或者只有 `WEB-INF/lib` 的传统 Web 目录。
