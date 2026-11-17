@@ -23,8 +23,6 @@ pub const SOURCE_PATHS_FACT: &str = "org.eclipse.jdt.ls.core.sourcePaths";
 pub const DESCRIBE_COMMAND: &str = "lithe.java.projectModel.describe";
 /// Most lines of one read-only list; the host shows at most 256.
 const MAX_LINES: usize = 256;
-/// The contract's bound of an effective-source label.
-const MAX_LABEL_BYTES: usize = 1024;
 /// The contract's bound of one list item.
 const MAX_ITEM_BYTES: usize = 4096;
 
@@ -147,22 +145,6 @@ impl Page<'_> {
         fields
     }
 
-    /// The effective-source label of an Eclipse project's `.classpath`.
-    pub fn classpath_label(&self, project: &Path) -> String {
-        let zh = self.zh;
-        let mut label = text(
-            zh,
-            "Eclipse JDT project settings",
-            "Eclipse JDT 项目生效配置",
-        );
-        let lines = self.container_lines(project, true);
-        if !lines.is_empty() {
-            label.push_str(if zh { "；容器：" } else { "; containers: " });
-            label.push_str(&lines.join(if zh { "，" } else { ", " }));
-        }
-        truncate(label, MAX_LABEL_BYTES)
-    }
-
     /// Read-only sources of the model. `taken` holds the paths of the
     /// writable sources, which a read-only row must not reuse.
     pub fn model_sources(&self, taken: &[PathBuf]) -> Vec<(String, PathBuf, Vec<Value>)> {
@@ -256,7 +238,7 @@ impl Page<'_> {
                 continue;
             }
             let path = location.join(".project");
-            let lines = self.container_lines(&location, false);
+            let lines = self.container_lines(&location);
             if lines.is_empty()
                 || taken.contains(&path)
                 || sources.iter().any(|(_, known, _)| known == &path)
@@ -290,8 +272,8 @@ impl Page<'_> {
     }
 
     /// One line per container, variable and missing library of the project
-    /// at `location`. `brief` keeps only the containers this plugin resolves.
-    fn container_lines(&self, location: &Path, brief: bool) -> Vec<String> {
+    /// at `location`.
+    fn container_lines(&self, location: &Path) -> Vec<String> {
         let zh = self.zh;
         let Some(project) = self.described_projects().into_iter().find(|project| {
             project["location"].as_str().is_some_and(|value| {
@@ -305,10 +287,6 @@ impl Page<'_> {
         for entry in project["entries"].as_array().into_iter().flatten() {
             let kind = entry["containerKind"].as_str().unwrap_or("other");
             let status = entry["status"].as_str().unwrap_or("unbound");
-            let ours = entry["kind"] == "container" && kind != "other";
-            if brief && !ours {
-                continue;
-            }
             if entry["kind"] == "container" && kind == "other" && status != "unbound" {
                 continue;
             }
@@ -359,28 +337,7 @@ impl Page<'_> {
                 }
                 _ => text(zh, "cannot be resolved", "无法解析"),
             };
-            lines.push(
-                format!(
-                    "{name}{}{state}",
-                    if brief {
-                        if zh {
-                            "（"
-                        } else {
-                            " ("
-                        }
-                    } else {
-                        " — "
-                    }
-                ) + if brief {
-                    if zh {
-                        "）"
-                    } else {
-                        ")"
-                    }
-                } else {
-                    ""
-                },
-            );
+            lines.push(format!("{name} — {state}"));
             if lines.len() >= MAX_LINES {
                 break;
             }
@@ -813,10 +770,6 @@ mod tests {
             explicit: &explicit,
             described: Some(&described),
         };
-        assert_eq!(
-            page.classpath_label(&root.join("app")),
-            "Eclipse JDT project settings; containers: Web App Libraries (37 JARs), Server Runtime [Tomcat] (no servlet container found)"
-        );
         let rows = page.eclipse_sources(&[]);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].1, root.join("app/.project"));

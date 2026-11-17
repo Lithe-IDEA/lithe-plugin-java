@@ -52,6 +52,7 @@ pub mod class_content;
 pub mod jdtls;
 pub mod launch;
 pub mod library_settings;
+pub mod module_structure;
 pub mod plugin_functions;
 pub mod project_model;
 pub mod project_settings;
