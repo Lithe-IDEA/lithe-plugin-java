@@ -539,7 +539,8 @@ pub(crate) mod tests {
     fn tomcat(tree: &Tree) -> PathBuf {
         tree.write("servers/apache-tomcat-9.0.98/lib/servlet-api.jar", "");
         tree.write("servers/apache-tomcat-9.0.98/lib/jsp-api.jar", "");
-        tree.root.join("servers/apache-tomcat-9.0.98")
+        // Joined by component: the backend reports native separators.
+        tree.root.join("servers").join("apache-tomcat-9.0.98")
     }
 
     #[test]
@@ -562,8 +563,8 @@ pub(crate) mod tests {
             json!([
                 "lib/**",
                 "project/WebContent/WEB-INF/lib/*.jar",
-                home.join("lib/jsp-api.jar").to_str().unwrap(),
-                home.join("lib/servlet-api.jar").to_str().unwrap(),
+                home.join("lib").join("jsp-api.jar").to_str().unwrap(),
+                home.join("lib").join("servlet-api.jar").to_str().unwrap(),
             ])
         );
         assert!(value["project"].get("sourcePaths").is_none());
