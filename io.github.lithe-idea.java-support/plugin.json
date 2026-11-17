@@ -2,7 +2,7 @@
   "schemaVersion": 0,
   "id": "io.github.lithe-idea.java-support",
   "displayName": "Java Support",
-  "version": "3.0.0",
+  "version": "3.1.0",
   "pluginAPIVersion": 0,
   "requires": {"backend": 0, "debugAdapters": 0, "languages": 0, "languageServers": 0, "pluginFunctions": 0, "settings": 0, "projectGenerators": 0, "toolDefinitions": 0, "sourceSettings": 0},
   "requiresTools": ["java", "jdtls-runtime"],
@@ -567,6 +567,25 @@
       ],
       "page": {"languageID": "java"},
       "section": "Language server"
+    },
+    {
+      "id": "projectModelDetection",
+      "type": "boolean",
+      "title": "Detect project models",
+      "description": "For folders without Maven or Gradle, read the project layout other IDEs leave behind: Eclipse WTP containers (Web App Libraries, EAR Libraries, Server Runtime), IntelliJ IDEA modules and libraries, and WEB-INF/lib of legacy web projects. Lithe adds what they declare to the classpath in memory and never changes the project files. Changes apply when the Java language server restarts.",
+      "default": true,
+      "page": {"languageID": "java"},
+      "section": "Project model"
+    },
+    {
+      "id": "servletContainerHome",
+      "type": "directory",
+      "title": "Servlet container folder",
+      "description": "Tomcat or Jetty installation that provides javax.servlet and the other server APIs to web projects, as Eclipse's Server Runtime and IDEA's application server libraries do. Leave empty to use CATALINA_HOME or TOMCAT_HOME, then a Tomcat installed in a standard folder, preferring the version the project names.",
+      "default": "",
+      "placeholder": "Automatic",
+      "page": {"languageID": "java"},
+      "section": "Project model"
     }
   ],
   "languageServers": [

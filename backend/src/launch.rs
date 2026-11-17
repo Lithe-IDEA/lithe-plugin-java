@@ -52,6 +52,7 @@ use crate::jdtls::{
     self, SearchEnvironment, ServerInstallation, LAUNCH_SERVER_INVALID, LAUNCH_SERVER_MISSING,
     SERVER_HOME_SETTING,
 };
+use crate::project_model::{ModelOptions, ProjectModel};
 use crate::run::file_uri;
 use crate::settings_session::{java_configuration, jdt_settings, SettingsSession, SERVER_ID};
 use lithe_java_domain::jdt_integration::launch_resources::{bundles_in, missing_resource_message};
@@ -121,10 +122,22 @@ pub const LAUNCH_CONFIGURATION_CLEANUP_FAILED: &str = "launch.configuration_clea
 /// launch names no `triggerFiles` and JDT LS falls back to the first opened
 /// file to lay out a workspace without a build file.
 pub const LAUNCH_WORKSPACE_FOLDERS_UNAVAILABLE: &str = "launch.workspace_folders_unavailable";
+/// The project needs servlet container libraries (a web module, a Server
+/// Runtime container) and none was found, so `javax.servlet` stays
+/// unresolved until the user configures one.
+pub const LAUNCH_SERVLET_CONTAINER_MISSING: &str = "launch.servlet_container_missing";
+/// Libraries the project model declares could not be added; the count is
+/// how many. The Java libraries settings page lists them.
+pub const LAUNCH_PROJECT_MODEL_UNRESOLVED: &str = "launch.project_model_unresolved";
+/// The project model scan stopped at its budget; deeper layouts were not read.
+pub const LAUNCH_PROJECT_MODEL_TRUNCATED: &str = "launch.project_model_truncated";
 /// Every degraded-diagnostic category `java.resolveLaunch` reports.
 pub const LAUNCH_CATEGORIES: &[&str] = &[
     LAUNCH_CONFIGURATION_CLEANUP_FAILED,
     LAUNCH_WORKSPACE_FOLDERS_UNAVAILABLE,
+    LAUNCH_SERVLET_CONTAINER_MISSING,
+    LAUNCH_PROJECT_MODEL_UNRESOLVED,
+    LAUNCH_PROJECT_MODEL_TRUNCATED,
 ];
 
 /// Most `.java` files named as `triggerFiles`. JDT LS uses the first one
@@ -180,11 +193,13 @@ pub const EXTENSIONS_DIRECTORY: &str = "jdtls-extensions";
 /// Package path of the Lombok agent JDT LS runs with.
 pub const LOMBOK_AGENT: &str = "jdtls-extensions/lombok/lombok.jar";
 /// Package directories whose JAR files JDT LS loads as extension bundles, in
-/// this order and then by file name: the Java Debug Server, then the Java
-/// Test extensions.
+/// this order and then by file name: the Java Debug Server, the Java Test
+/// extensions, then the plugin's own project model bundle, built from
+/// `jdtls-extension/project-model` by `scripts/package/project-model-bundle.mjs`.
 pub const EXTENSION_BUNDLE_DIRECTORIES: &[&str] = &[
     "jdtls-extensions/java-debug",
     "jdtls-extensions/java-test/extensions",
+    "jdtls-extensions/project-model",
 ];
 /// Package path of the Java Test runner JAR the test flow adds to the class
 /// path of TestNG launches; JDT LS itself does not load it.
@@ -196,6 +211,7 @@ pub const PACKAGE_LAYOUT: &[&str] = &[
     LOMBOK_AGENT,
     EXTENSION_BUNDLE_DIRECTORIES[0],
     EXTENSION_BUNDLE_DIRECTORIES[1],
+    EXTENSION_BUNDLE_DIRECTORIES[2],
     TEST_RUNNER,
 ];
 /// Directory under `workspaceStateDirectory` passed to JDT LS as `-data`.
@@ -238,6 +254,8 @@ pub struct LaunchRequest {
     /// with that JDK, so the server must compile for it. Empty when the host
     /// found none, which leaves the server on the runtimes it already knows.
     pub java_runtimes: Vec<JdtJavaRuntime>,
+    /// `settings.projectModelDetection` and `settings.servletContainerHome`.
+    pub model_options: ModelOptions,
 }
 
 /// The files of a JDT LS launch, absolute.
@@ -301,6 +319,7 @@ pub fn parse_launch_params(params: &Value) -> Result<LaunchRequest, PluginError>
             }
         },
     };
+    let model_options = crate::project_model::parse_options(&settings).map_err(invalid_params)?;
     Ok(LaunchRequest {
         os: os.to_string(),
         architecture: architecture.to_string(),
@@ -313,6 +332,7 @@ pub fn parse_launch_params(params: &Value) -> Result<LaunchRequest, PluginError>
         server_home,
         server_runtime_version: host_tool_version(params, SERVER_RUNTIME_TOOL),
         java_runtimes: jdt_java_runtimes(&host_java_tool(params)),
+        model_options,
     })
 }
 
@@ -651,6 +671,22 @@ fn now_unix_seconds() -> u64 {
         .map_or(0, |elapsed| elapsed.as_secs())
 }
 
+/// Reports what detection could not do for the project; the launch stands.
+pub fn report_model(model: &ProjectModel, report: &dyn Fn(&str, u64)) {
+    if model.needs_servlet && model.servlet.runtime.is_none() {
+        report(LAUNCH_SERVLET_CONTAINER_MISSING, 1);
+    }
+    if !model.unresolved.is_empty() {
+        report(
+            LAUNCH_PROJECT_MODEL_UNRESOLVED,
+            model.unresolved.len() as u64,
+        );
+    }
+    if model.truncated {
+        report(LAUNCH_PROJECT_MODEL_TRUNCATED, 1);
+    }
+}
+
 /// Runs a call of `java.resolveLaunch`.
 ///
 /// The workspace comes from the call's `context`. The settings are the ones
@@ -681,8 +717,10 @@ pub fn resolve_launch_function(
     };
     let (fragments, folders) = match context.workspace_context() {
         Some(workspace) => {
-            // The pushes after this start repeat the runtimes it configures.
+            // The pushes after this start repeat the runtimes and the
+            // project model settings it configures.
             session.set_java_runtimes(workspace, request.java_runtimes.clone());
+            session.set_model_options(workspace, request.model_options.clone());
             let folders = match workspace_folders(context.host(), workspace) {
                 Ok(folders) => folders,
                 Err(_) => {
@@ -708,10 +746,12 @@ pub fn resolve_launch_function(
         &report,
     )?;
     if let Some(folder) = folders.first() {
-        let configuration = crate::settings_session::with_native_settings(
+        let (configuration, model) = crate::settings_session::with_native_model(
             answer["workspaceConfiguration"].clone(),
             folder,
+            &request.model_options,
         )?;
+        report_model(&model, &report);
         answer["workspaceConfiguration"] = configuration.clone();
         answer["initializationOptions"]["settings"] = configuration;
     }

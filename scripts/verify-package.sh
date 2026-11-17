@@ -89,7 +89,7 @@ for declared in \
     jdtls-extensions/java-test/runner/com.microsoft.java.test.runner-jar-with-dependencies.jar; do
     [[ -f "$PACKAGE/$declared" ]] || fail "the backend expects $declared, which the package does not contain"
 done
-for directory in jdtls-extensions/java-debug jdtls-extensions/java-test/extensions; do
+for directory in jdtls-extensions/java-debug jdtls-extensions/java-test/extensions jdtls-extensions/project-model; do
     [[ -n "$(find "$PACKAGE/$directory" -maxdepth 1 -name '*.jar' -print -quit 2>/dev/null)" ]] ||
         fail "extension bundle directory $directory holds no bundles"
 done

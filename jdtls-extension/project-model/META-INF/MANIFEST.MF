@@ -1,0 +1,13 @@
+Manifest-Version: 1.0
+Bundle-ManifestVersion: 2
+Bundle-Name: Lithe Java Project Model
+Bundle-SymbolicName: io.github.lithe_idea.java.projectmodel;singleton:=true
+Bundle-Version: 1.0.0
+Bundle-Vendor: Lithe Community
+Bundle-RequiredExecutionEnvironment: JavaSE-17
+Bundle-Activator: io.github.lithe_idea.java.projectmodel.Activator
+Require-Bundle: org.eclipse.core.runtime,
+ org.eclipse.core.resources,
+ org.eclipse.jdt.core,
+ org.eclipse.jdt.ls.core
+Automatic-Module-Name: io.github.lithe_idea.java.projectmodel

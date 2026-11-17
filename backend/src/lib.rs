@@ -51,7 +51,9 @@
 pub mod class_content;
 pub mod jdtls;
 pub mod launch;
+pub mod library_settings;
 pub mod plugin_functions;
+pub mod project_model;
 pub mod project_settings;
 pub mod run;
 pub mod settings_session;
@@ -253,7 +255,7 @@ pub fn backend() -> Result<Backend, SdkError> {
         backend.suppress_success_diagnostics(function)?;
     }
     backend.function("compiler.prepareSettings", move |params, context| {
-        projects.edit(params, context)
+        projects.edit(params, context, &session)
     })?;
     Ok(backend)
 }
