@@ -47,6 +47,8 @@ JRE 下拉框可选“工作区默认 JRE”或 JavaSE-1.8/11/17/21/25 执行环
 
 带有 `.classpath` 的 Eclipse 工程如果同时存在 `.settings/org.eclipse.wst.common.project.facet.core.xml` 中的 `jst.web`，项目结构页会额外显示「Web Facets」分组。可在独立来源中选择 Dynamic Web Module 版本，再点击保存。下拉框只列出与同一文件中 `jst.java` 版本兼容的版本（例如 Java 8 最高到 5.0，6.0 需要 Java 11，6.1 需要 Java 17），与 Eclipse 自己的 Facet 约束一致。保存前宿主检查原始版本，写回时仅编辑此 XML 文件中的现有 `jst.web` 版本，保留其他 Facet、注释、属性顺序和 Eclipse 的 `/>` 写法，版本控制里只看到这一处改动。
 
+![Web Facet 来源（中文，浅色）](assets/module-structure/web-facet-zh-Hans-light.png)
+
 文件中有重复的 `jst.web`、DOCTYPE 或其他无法安全编辑的内容时，这个模块不显示 Web Facet 来源，模块本身和项目结构页其他部分照常显示，后端对本次读取上报一次 `webFacetUnreadable` 降级。
 
 这不是 Web Facet 的完整编辑器：不会自动创建缺失的 Facet，不改 WTP `.component` 的 Web 根和部署装配，也不写 IDEA `.iml`；后者仍为只读工程模型。

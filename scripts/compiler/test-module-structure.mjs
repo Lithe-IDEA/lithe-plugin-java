@@ -122,10 +122,14 @@ try{
   assert.equal(serviceModule.path,'service/pom.xml');
   const resolved=field(serviceModule,'dependencies').value;
   assert.ok(resolved.some(entry=>entry.kind==='classes'&&slashes(entry.value).endsWith('target/classes')),JSON.stringify(resolved));
+  // Core refuses the whole page (plugin.settings.invalidSourceEditor) for one
+  // group, source or field ID outside its identifier alphabet.
+  const coreID=/^[a-z0-9-]{1,128}$/;
+  for(const item of [...before.groups,...before.sources,...before.sources.flatMap(source=>source.fields)])assert.match(item.id,coreID,`Core identifier: ${item.id}`);
   assert.ok(before.groups.some(group=>group.id==='facets'),JSON.stringify(before.groups));
   const appFacet=facet(before,'app');assert.ok(appFacet,JSON.stringify(before.sources.map(source=>[source.group,source.title])));
   assert.equal(appFacet.path,'app/'+FACETS);
-  const web=field(appFacet,'webFacetVersion');
+  const web=field(appFacet,'web-facet-version');
   assert.equal(web.value,'3.1');
   const offered=web.options.map(option=>option.value);
   assert.ok(offered.includes('4.0')&&offered.includes('5.0'),JSON.stringify(offered));
@@ -159,15 +163,15 @@ try{
  await report.step('saving the Web Facet changes only the jst.web version',async()=>{
   const appFacet=facet(before,'app');
   const stageFile=join(stage,'facet-stage.xml');writeFileSync(stageFile,'');
-  await assert.rejects(invoke('compiler.prepareSettings',{operation:'editSource',sourceID:appFacet.id,revision:appFacet.revision,outputFile:stageFile,values:{webFacetVersion:'6.0'}}),'Web 6.0 needs Java 11 and must be refused');
-  const edit=await invoke('compiler.prepareSettings',{operation:'editSource',sourceID:appFacet.id,revision:appFacet.revision,outputFile:stageFile,values:{webFacetVersion:'4.0'}});
+  await assert.rejects(invoke('compiler.prepareSettings',{operation:'editSource',sourceID:appFacet.id,revision:appFacet.revision,outputFile:stageFile,values:{'web-facet-version':'6.0'}}),'Web 6.0 needs Java 11 and must be refused');
+  const edit=await invoke('compiler.prepareSettings',{operation:'editSource',sourceID:appFacet.id,revision:appFacet.revision,outputFile:stageFile,values:{'web-facet-version':'4.0'}});
   assert.equal(edit.changed,true);
   const text=readFileSync(stageFile,'utf8');
   for(const kept of['<!-- keep this facet comment -->','<fixed facet="jst.java"','facet="jst.java" version="1.8"','facet="jst.web" version="4.0"'])assert.ok(text.includes(kept),`${kept}\n${text}`);
   assert.equal(readFileSync(join(app,FACETS),'utf8'),facets,'Preparing an edit must not touch the facet file');
   renameSync(stageFile,join(app,FACETS));
   const after=await invoke('libraries.settings',{operation:'readAfterSave',context:{language:'en',builds:[]}});
-  assert.equal(field(facet(after,'app'),'webFacetVersion').value,'4.0');
+  assert.equal(field(facet(after,'app'),'web-facet-version').value,'4.0');
  });
  await report.step('JDT compiles the module against the saved classpath',async()=>{
   const errors=()=>JSON.stringify([...problems].filter(([,messages])=>messages.length));

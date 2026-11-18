@@ -6,7 +6,7 @@ use serde_json::{json, Map};
 use xmltree::{Element, XMLNode};
 
 pub const FILE: &str = ".settings/org.eclipse.wst.common.project.facet.core.xml";
-const FIELD: &str = "webFacetVersion";
+const FIELD: &str = "web-facet-version";
 /// Dynamic Web Module versions WTP offers, with the lowest `jst.java` level
 /// each one accepts (1.x levels are written as x). A version is offered only
 /// when the project's installed `jst.java` facet satisfies it, so a save never
@@ -186,7 +186,7 @@ mod tests {
         let fields = fields(true, DOCUMENT).unwrap().unwrap();
         assert_eq!(fields[0]["value"], "3.1");
         assert_eq!(fields[0]["id"], FIELD);
-        let change = json!({"webFacetVersion": "4.0"});
+        let change = json!({"web-facet-version": "4.0"});
         let modified = edit(DOCUMENT, change.as_object().unwrap()).unwrap();
         let output = String::from_utf8(modified).unwrap();
         assert!(output.contains("jst.web"));
@@ -200,7 +200,7 @@ mod tests {
 
     #[test]
     fn unchanged_versions_preserve_bytes_exactly() {
-        let change = json!({"webFacetVersion": "3.1"});
+        let change = json!({"web-facet-version": "3.1"});
         assert_eq!(
             edit(DOCUMENT, change.as_object().unwrap()).unwrap(),
             DOCUMENT
@@ -210,8 +210,8 @@ mod tests {
     #[test]
     fn rejects_unexpected_edits_and_conflicting_web_facets() {
         for value in [
-            json!({"webFacetVersion": "7.5"}),
-            json!({"webFacetVersion": null}),
+            json!({"web-facet-version": "7.5"}),
+            json!({"web-facet-version": null}),
             json!({"other": "4.0"}),
         ] {
             assert!(edit(DOCUMENT, value.as_object().unwrap()).is_err());
@@ -240,12 +240,12 @@ mod tests {
         assert!(offered.contains(&"5.0"));
         assert!(!offered.contains(&"6.0"));
         assert!(!offered.contains(&"6.1"));
-        let too_new = json!({"webFacetVersion": "6.0"});
+        let too_new = json!({"web-facet-version": "6.0"});
         assert!(edit(java8, too_new.as_object().unwrap()).is_err());
-        let allowed = json!({"webFacetVersion": "5.0"});
+        let allowed = json!({"web-facet-version": "5.0"});
         assert!(edit(java8, allowed.as_object().unwrap()).is_ok());
 
-        let java17 = json!({"webFacetVersion": "6.1"});
+        let java17 = json!({"web-facet-version": "6.1"});
         assert!(edit(DOCUMENT, java17.as_object().unwrap()).is_ok());
     }
 
@@ -256,7 +256,7 @@ mod tests {
         let fields = fields(false, unknown).unwrap().unwrap();
         let offered = fields[0]["options"].as_array().unwrap();
         assert!(offered.iter().any(|option| option["value"] == "9.9"));
-        let same = json!({"webFacetVersion": "9.9"});
+        let same = json!({"web-facet-version": "9.9"});
         assert_eq!(edit(unknown, same.as_object().unwrap()).unwrap(), unknown);
     }
 
