@@ -56,7 +56,7 @@ JDT LS、JDK 和已安装插件在运行期只读。Equinox 配置副本、工�
 
 ## 权限、诊断和版本门槛
 
-清单增加 `requires.managedRuntimes: 0` 和 `runtimes.install`，由支持此能力的配套 Lithe / Core 执行。后端继续使用已有固定 Rust SDK，因为该 hook 采用现有函数 JSON 协议。独立的 `contract.lock.json` 固定支持该能力的 Core `2dbc17782a054acccabe5f1be7dc70a87605f367` 及 manifest/native-ui/l10n schema 摘要；已有 CI / Release 调用的 `verify-sdk-lock.sh --download` 会在隔离 Python 环境中用固定 jsonschema 4.26.0 验证，不依赖本地 Core 检出。旧宿主不具备新声明的实现，不能把新包当作已兼容发布。
+清单增加 `requires.managedRuntimes: 0` 和 `runtimes.install`，由支持此能力的配套 Lithe / Core 执行。后端继续使用已有固定 Rust SDK，因为该 hook 采用现有函数 JSON 协议。独立的 `contract.lock.json` 固定支持该能力的 Core `7f1fc4becd0b4b415aa463abd0ea5e2810b3e964` 及 manifest/native-ui/l10n schema 摘要；已有 CI / Release 调用的 `verify-sdk-lock.sh --download` 会在隔离 Python 环境中用固定 jsonschema 4.26.0 验证，不依赖本地 Core 检出。旧宿主不具备新声明的实现，不能把新包当作已兼容发布。
 
 正常缺失和成功读取不记录 ERROR / INFO。SDK 为失败记录稳定类别 `runtime.invalid_params`、`runtime.server_incompatible`、`runtime.jdk_invalid`、`runtime.not_prepared`、`runtime.profile_invalid`，不输出路径或工具输出；取消保持取消语义。宿主提供 `language` 时，`zh` 前缀采用中文，其他语言回退英文。
 

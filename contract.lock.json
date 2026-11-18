@@ -1,6 +1,6 @@
 {
   "repository": "https://github.com/Lithe-IDEA/Lithe-core-rust",
-  "commit": "2dbc17782a054acccabe5f1be7dc70a87605f367",
+  "commit": "7f1fc4becd0b4b415aa463abd0ea5e2810b3e964",
   "schemas": [
     {
       "path": "plugin-manifest.schema.json",
