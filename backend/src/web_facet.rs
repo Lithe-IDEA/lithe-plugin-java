@@ -18,7 +18,10 @@ fn failed() -> FunctionError {
 }
 
 fn parsed(bytes: &[u8]) -> Result<Element, FunctionError> {
-    if bytes.windows(9).any(|window| window.eq_ignore_ascii_case(b"<!DOCTYPE")) {
+    if bytes
+        .windows(9)
+        .any(|window| window.eq_ignore_ascii_case(b"<!DOCTYPE"))
+    {
         return Err(failed());
     }
     let document = Element::parse(bytes).map_err(|_| failed())?;
@@ -100,7 +103,9 @@ pub fn edit(bytes: &[u8], values: &Map<String, Value>) -> Result<Vec<u8>, Functi
             if element.name == "installed"
                 && element.attributes.get("facet").map(String::as_str) == Some("jst.web")
             {
-                element.attributes.insert("version".to_owned(), chosen.to_owned());
+                element
+                    .attributes
+                    .insert("version".to_owned(), chosen.to_owned());
                 changed = true;
                 break;
             }
@@ -142,12 +147,19 @@ mod tests {
     #[test]
     fn unchanged_versions_preserve_bytes_exactly() {
         let change = json!({"webFacetVersion": "3.1"});
-        assert_eq!(edit(DOCUMENT, change.as_object().unwrap()).unwrap(), DOCUMENT);
+        assert_eq!(
+            edit(DOCUMENT, change.as_object().unwrap()).unwrap(),
+            DOCUMENT
+        );
     }
 
     #[test]
     fn rejects_unexpected_edits_and_conflicting_web_facets() {
-        for value in [json!({"webFacetVersion": "7.5"}), json!({"webFacetVersion": null}), json!({"other": "4.0"})] {
+        for value in [
+            json!({"webFacetVersion": "7.5"}),
+            json!({"webFacetVersion": null}),
+            json!({"other": "4.0"}),
+        ] {
             assert!(edit(DOCUMENT, value.as_object().unwrap()).is_err());
         }
         let duplicate = br#"<faceted-project>
@@ -159,13 +171,15 @@ mod tests {
 
     #[test]
     fn non_web_facets_are_not_editable() {
-        let plain = br#"<faceted-project><installed facet="jst.java" version="17"/></faceted-project>"#;
+        let plain =
+            br#"<faceted-project><installed facet="jst.java" version="17"/></faceted-project>"#;
         assert!(fields(false, plain).unwrap().is_none());
     }
 
     #[test]
     fn refuses_doctype_and_external_entities() {
-        let dangerous = br#"<!DOCTYPE faceted-project [<!ENTITY external SYSTEM "file:///etc/passwd">]>
+        let dangerous =
+            br#"<!DOCTYPE faceted-project [<!ENTITY external SYSTEM "file:///etc/passwd">]>
 <faceted-project><installed facet="jst.web" version="4.0"/></faceted-project>"#;
         assert!(fields(false, dangerous).is_err());
     }

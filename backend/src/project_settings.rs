@@ -368,12 +368,18 @@ impl ProjectSettings {
         };
         let mut groups = if libraries {
             let mut groups = Vec::new();
-            if module_sources.iter().any(|source| source["group"] == "modules") {
+            if module_sources
+                .iter()
+                .any(|source| source["group"] == "modules")
+            {
                 groups.push(
                     json!({"id":"modules","title":local(zh,"Modules","模块"),"layout":"sidebar"}),
                 );
             }
-            if module_sources.iter().any(|source| source["group"] == "facets") {
+            if module_sources
+                .iter()
+                .any(|source| source["group"] == "facets")
+            {
                 groups.push(json!({"id":"facets","title":local(zh,"Web Facets","Web Facet"),"layout":"sidebar"}));
             }
             if module_sources.is_empty()
@@ -490,7 +496,8 @@ impl ProjectSettings {
                 if fs::symlink_metadata(&facet_file).is_ok_and(|info| info.is_file()) {
                     let (bytes, revision) = read(&facet_file)?;
                     if let Some(fields) = crate::web_facet::fields(zh, &bytes)? {
-                        let rel = project_model::relative_inside(root, &facet_file).ok_or_else(fail)?;
+                        let rel =
+                            project_model::relative_inside(root, &facet_file).ok_or_else(fail)?;
                         let facet_id = format!("facet{:x}", Sha256::digest(rel.as_bytes()));
                         if paths.insert(facet_file.clone()) {
                             bindings.insert(facet_id.clone(), facet_file);
