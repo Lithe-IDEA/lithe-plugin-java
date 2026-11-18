@@ -10,6 +10,16 @@
 
 2026-11-16：Windows 与 Linux 的原生结果以 CI 和后续实机验证为准，本机结果不能推断。
 
+## 环境检测与下载引导
+
+| 能力 | macOS | Windows | Linux | 证据 |
+| --- | --- | --- | --- | --- |
+| JDT LS 缺失/显式目录无效时显示官方来源、平台配置目录和独立运行 JDK 配置步骤；不静默覆盖 | implemented / pending | implemented / pending | implemented / pending | `backend/src/jdtls.rs`：六种 OS/架构组合的提示测试、Windows 缺失回归、显式配置不回退测试；原生 UI 待验证 |
+| 按所选 JDT LS 的最低 Java 版本拒绝过旧运行 JDK，提供可信 JDK 下载与本地选择指引 | implemented / pending | implemented / pending | implemented / pending | `backend/src/launch.rs`：21/25 运行版本检查及写入前拒绝测试；不变更项目 `java` 工具 |
+| 自动下载、校验、解压并安装 JDT LS/JDK | not implemented | not implemented | not implemented | API-38 托管下载尚缺；此次仅提供引导，不执行下载内容 |
+
+跨平台参数测试不等于 Windows/macOS 原生验收；本次后端英文消息本地化仍受 API-37 限制。验证命令、结果及 UI 限制见本次 PR。
+
 ## Linux 安装包
 
 | 能力 | Linux ARM64 | Linux x64 | 验证入口 |

@@ -2,7 +2,7 @@
   "settings": {
     "languageServerHome": {
       "title": "语言服务器目录",
-      "description": "Eclipse JDT Language Server 的目录，即包含 plugins 和 config 目录的那一层。留空时自动查找：JDTLS_HOME、PATH 上的 jdtls，以及 Homebrew、mason.nvim、Scoop 或 VS Code Java 扩展安装的 JDT LS。",
+      "description": "选择解压后的 Eclipse JDT Language Server 目录，其中必须有唯一的 plugins/org.eclipse.equinox.launcher_*.jar 和当前平台的 config.ini（Windows：config_win；macOS：config_mac 或 config_mac_arm；Linux：config_linux 或 config_linux_arm）。官方下载：https://download.eclipse.org/jdtls/milestones/，解压前核对官方校验值。留空时依次查找 JDTLS_HOME、PATH 上的 jdtls、包管理器安装和 VS Code Java 扩展；不会自动替换显式选择的目录。另在设置 → 构建、执行、部署 → 工具链中选择「JDK for JDT LS」：至少 Java 21，JDT LS 1.63+ 需要 Java 25。JDK 下载：https://adoptium.net/temurin/releases/。保留项目 JDK 和全局 PATH；配置后重启 Java 语言服务器。",
       "placeholder": "自动查找"
     },
     "heapMaxMB": {

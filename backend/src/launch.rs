@@ -105,22 +105,19 @@ pub const LAUNCH_ERROR_CODES: &[&str] = &[
 pub const SERVER_RUNTIME_TOOL: &str = "jdtls-runtime";
 /// Oldest Java feature release JDT LS runs on.
 pub const MINIMUM_SERVER_JAVA_VERSION: u64 = 21;
-/// Message of [`LAUNCH_RUNTIME_TOO_OLD`] for [`MINIMUM_SERVER_JAVA_VERSION`].
-///
-/// TODO(host-api: API-37 i18n): user-facing text must go through the host's
-/// i18n table.
-pub const RUNTIME_TOO_OLD_MESSAGE: &str = "The Eclipse JDT Language Server needs Java 21 or \
-later, but the JDK chosen for it is older. Choose a JDK 21 or later for \"JDK for JDT LS\" in \
-Settings > Build, Execution, Deployment > Toolchains.";
-
 /// Message of [`LAUNCH_RUNTIME_TOO_OLD`] for the Java feature release
 /// `minimum_java_version` the selected JDT LS installation requires.
+/// TODO(host-api: API-37 i18n): localize backend messages when the host supports it.
 pub fn runtime_too_old_message(minimum_java_version: u64) -> String {
     let minimum = minimum_java_version.max(MINIMUM_SERVER_JAVA_VERSION);
+    let download = jdtls::JDK_DOWNLOAD_URL;
     format!(
         "The Eclipse JDT Language Server needs Java {minimum} or later, but the JDK chosen for \
 it is older. Choose a JDK {minimum} or later for \"JDK for JDT LS\" in Settings > Build, \
-Execution, Deployment > Toolchains."
+Execution, Deployment > Toolchains. If none is installed, download a JDK for your operating \
+system and architecture from {download}, verify its published checksum, and extract it into \
+a user-owned folder. Select that JDK for JDT LS only; keep the project's \"JDK\" selection \
+and global PATH unchanged. Restart the Java language server after configuring."
     )
 }
 
@@ -725,7 +722,6 @@ pub fn resolve_launch_function(
 ) -> Result<Value, FunctionError> {
     context.check_cancelled()?;
     let request = parse_launch_params(&params)?;
-    check_server_runtime(&request)?;
     let server = jdtls::locate_for_runtime(
         request.server_home.as_deref(),
         &SearchEnvironment::current(),
@@ -733,6 +729,9 @@ pub fn resolve_launch_function(
         &request.architecture,
         server_runtime_feature(&request),
     )?;
+    // Check the selected server's actual requirement before touching package
+    // resources or collecting project settings (e.g. report 25, not the floor 21).
+    check_server_runtime_for(&request, server.minimum_java_version)?;
     let package_root = package_root()?;
     let diagnostics = context.diagnostics();
     let operation = context.function_id().to_owned();
@@ -1227,7 +1226,7 @@ mod tests {
                 )
                 .unwrap_err();
                 assert_eq!(error.code(), LAUNCH_RUNTIME_TOO_OLD);
-                assert_eq!(error.message(), RUNTIME_TOO_OLD_MESSAGE);
+                assert_eq!(error.message(), runtime_too_old_message(21));
             }
         }
         assert!(fs::read_dir(fixture.root.join("state"))

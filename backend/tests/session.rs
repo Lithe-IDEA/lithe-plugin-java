@@ -183,6 +183,81 @@ fn only_fact<'a>(logs: &'a [Value], kind: &str) -> &'a Value {
 }
 
 #[test]
+fn launch_reports_the_selected_servers_java_requirement_before_package_checks() {
+    use std::fs;
+    use std::path::PathBuf;
+
+    struct Fixture(PathBuf);
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+    let fixture = Fixture(
+        std::env::temp_dir().join(format!("lithe-java-setup-session-{}", std::process::id())),
+    );
+    fs::create_dir_all(fixture.0.join("plugins")).unwrap();
+    fs::create_dir_all(fixture.0.join("config_win")).unwrap();
+    fs::write(
+        fixture.0.join("plugins/org.eclipse.equinox.launcher_1.jar"),
+        b"",
+    )
+    .unwrap();
+    fs::write(
+        fixture.0.join("config_win/config.ini"),
+        b"osgi.bundles=example\n",
+    )
+    .unwrap();
+    let file = fs::File::create(fixture.0.join("plugins/org.eclipse.jdt.ls.core_1.jar")).unwrap();
+    let mut zip = zip::ZipWriter::new(file);
+    zip.start_file(
+        "META-INF/MANIFEST.MF",
+        zip::write::SimpleFileOptions::default(),
+    )
+    .unwrap();
+    zip.write_all(b"Bundle-RequiredExecutionEnvironment: JavaSE-25\n")
+        .unwrap();
+    zip.finish().unwrap();
+
+    let mut host = Host::start();
+    assert!(host.initialize().get("error").is_none());
+    let mut params = json!({
+        "serverID": "java", "platform": {"os": "windows", "arch": "x86_64"},
+        "stateDirectory": fixture.0.join("state"),
+        "workspaceStateDirectory": fixture.0.join("workspace-state"),
+        "logDirectory": fixture.0.join("log"), "temporaryDirectory": fixture.0.join("tmp"),
+        "settings": {"languageServerHome": fixture.0},
+        "tools": {
+            "jdtls-runtime": {"version": "17.0.19"},
+            "java": {"version": "8.0.392", "home": fixture.0.join("project-jdk")}
+        }
+    });
+    let (reply, logs) = host.invoke_with_logs(1, "java.resolveLaunch", params.clone());
+    assert_eq!(reply["error"]["data"]["code"], "launch.runtime_too_old");
+    let message = reply["error"]["message"].as_str().unwrap();
+    assert!(message.contains("Java 25 or later"), "{message}");
+    assert!(message.contains("https://adoptium.net/temurin/releases/"));
+    assert_eq!(
+        only_fact(&logs, "operationFailed")["code"],
+        "launch.runtime_too_old"
+    );
+    assert!(!fixture.0.join("state").exists());
+
+    params["settings"]["languageServerHome"] = json!(fixture.0.join("missing"));
+    let (reply, logs) = host.invoke_with_logs(2, "java.resolveLaunch", params);
+    assert_eq!(reply["error"]["data"]["code"], "launch.server_invalid");
+    let message = reply["error"]["message"].as_str().unwrap();
+    assert!(message.contains("explicit choice has been kept"));
+    assert!(message.contains("config_win/config.ini"));
+    assert!(!message.contains("brew"));
+    assert_eq!(
+        only_fact(&logs, "operationFailed")["code"],
+        "launch.server_invalid"
+    );
+    assert_eq!(host.close(), 1);
+}
+
+#[test]
 fn the_backend_reports_restricted_facts_and_suppresses_reads() {
     let mut host = Host::start();
     let initialized = host.initialize();

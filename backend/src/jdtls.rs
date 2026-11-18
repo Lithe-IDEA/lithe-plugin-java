@@ -88,16 +88,46 @@ const EDITOR_EXTENSION_ENTRY_BUDGET: usize = 4096;
 /// TODO(host-api: API-37 i18n): user-facing text must go through the host's
 /// i18n table.
 pub const SERVER_MISSING_MESSAGE: &str = "Java Support needs the Eclipse JDT Language Server, \
-which was not found on this computer. Install it (for example with `brew install jdtls`), \
-or choose its folder in Settings > Languages & Frameworks > Java > Language server folder.";
+which was not found on this computer.";
 /// Message of [`LAUNCH_SERVER_INVALID`].
 ///
 /// TODO(host-api: API-37 i18n): user-facing text must go through the host's
 /// i18n table.
 pub const SERVER_INVALID_MESSAGE: &str = "The language server folder chosen in the Java \
-settings does not contain the Eclipse JDT Language Server for this platform. Choose the \
-folder that contains plugins and the config folders, or clear the setting to find JDT LS \
-automatically.";
+settings does not contain a usable Eclipse JDT Language Server for this platform. \
+Your explicit choice has been kept; no other installation was selected. \
+Choose a valid folder, or clear the setting to enable automatic discovery.";
+
+/// Official distribution pages. These are guidance only: launch never downloads
+/// or executes an installer, changes PATH, or changes either toolchain selection.
+pub const SERVER_DOWNLOAD_URL: &str = "https://download.eclipse.org/jdtls/milestones/";
+pub const JDK_DOWNLOAD_URL: &str = "https://adoptium.net/temurin/releases/";
+
+/// Recovery instructions use the requested platform, not the backend build host,
+/// so Windows never receives a Homebrew command or a macOS configuration folder.
+/// TODO(host-api: API-37 i18n): localize backend messages when the host supports it.
+pub fn server_setup_message(reason: &str, os: &str, arch: &str) -> String {
+    let Some(configuration) = configuration_name(os, arch) else {
+        return format!(
+            "{reason} This operating system or architecture is not supported by Java Support."
+        );
+    };
+    let package_manager = if os == "macos" {
+        " On macOS with Homebrew installed, you can also use `brew install jdtls`."
+    } else {
+        ""
+    };
+    format!(
+        "{reason} Download JDT LS from {SERVER_DOWNLOAD_URL}, verify the published checksum, \
+then extract the archive into a user-owned folder.{package_manager} In Settings > Languages & \
+Frameworks > Java > Language server folder, select the extracted folder containing exactly one \
+plugins/org.eclipse.equinox.launcher_*.jar and {configuration}/config.ini (not the archive or bin folder). \
+JDT LS also needs a separate runtime JDK: at least Java 21, or Java 25 for JDT LS 1.63+. \
+Download a JDK for your operating system and architecture from {JDK_DOWNLOAD_URL} and select it \
+as \"JDK for JDT LS\" in Settings > Build, Execution, Deployment > Toolchains. \
+Keep the project's \"JDK\" selection and global PATH unchanged. Restart the Java language server after configuring."
+    )
+}
 
 /// The JDT LS files a launch uses, absolute.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -302,11 +332,19 @@ pub fn locate_for_runtime(
     arch: &str,
     runtime_java_version: Option<u64>,
 ) -> Result<ServerInstallation, PluginError> {
-    let configuration = configuration_name(os, arch)
-        .ok_or_else(|| PluginError::new(LAUNCH_SERVER_MISSING, SERVER_MISSING_MESSAGE))?;
+    let configuration = configuration_name(os, arch).ok_or_else(|| {
+        PluginError::new(
+            LAUNCH_SERVER_MISSING,
+            server_setup_message(SERVER_MISSING_MESSAGE, os, arch),
+        )
+    })?;
     if let Some(folder) = configured {
-        return inspect(folder, configuration)
-            .ok_or_else(|| PluginError::new(LAUNCH_SERVER_INVALID, SERVER_INVALID_MESSAGE));
+        return inspect(folder, configuration).ok_or_else(|| {
+            PluginError::new(
+                LAUNCH_SERVER_INVALID,
+                server_setup_message(SERVER_INVALID_MESSAGE, os, arch),
+            )
+        });
     }
     let mut first = None;
     for folder in candidates(environment, os) {
@@ -320,7 +358,12 @@ pub fn locate_for_runtime(
             first = Some(installation);
         }
     }
-    first.ok_or_else(|| PluginError::new(LAUNCH_SERVER_MISSING, SERVER_MISSING_MESSAGE))
+    first.ok_or_else(|| {
+        PluginError::new(
+            LAUNCH_SERVER_MISSING,
+            server_setup_message(SERVER_MISSING_MESSAGE, os, arch),
+        )
+    })
 }
 
 /// The folders [`locate`] tries without a configured one, in order. A folder
@@ -529,7 +572,10 @@ mod tests {
         // An unusable choice fails instead of falling back to another installation.
         let error = locate(Some(&temp.0.join("empty")), &search, "linux", "x86_64").unwrap_err();
         assert_eq!(error.code(), LAUNCH_SERVER_INVALID);
-        assert_eq!(error.message(), SERVER_INVALID_MESSAGE);
+        assert_eq!(
+            error.message(),
+            server_setup_message(SERVER_INVALID_MESSAGE, "linux", "x86_64")
+        );
         // Without a choice the discovered installation is used.
         assert_eq!(
             locate(None, &search, "linux", "x86_64").unwrap().home,
@@ -538,11 +584,59 @@ mod tests {
     }
 
     #[test]
+    fn setup_guidance_matches_each_supported_platform() {
+        for (os, arch, config) in [
+            ("windows", "x86_64", "config_win"),
+            ("windows", "arm64", "config_win"),
+            ("macos", "x86_64", "config_mac"),
+            ("macos", "arm64", "config_mac_arm"),
+            ("linux", "x86_64", "config_linux"),
+            ("linux", "arm64", "config_linux_arm"),
+        ] {
+            for reason in [SERVER_MISSING_MESSAGE, SERVER_INVALID_MESSAGE] {
+                let message = server_setup_message(reason, os, arch);
+                assert!(
+                    message.contains(&format!("{config}/config.ini")),
+                    "{os}/{arch}"
+                );
+                assert_eq!(message.contains("brew install"), os == "macos");
+                assert!(message.contains(SERVER_DOWNLOAD_URL));
+                assert!(message.contains(JDK_DOWNLOAD_URL));
+                assert!(message.contains("checksum"));
+                assert!(message.contains("global PATH unchanged"));
+            }
+        }
+        let unsupported = server_setup_message(SERVER_MISSING_MESSAGE, "plan9", "x86_64");
+        assert!(unsupported.contains("not supported"));
+        assert!(!unsupported.contains("Download"));
+    }
+
+    #[test]
+    fn missing_windows_server_has_official_download_and_local_selection_guidance() {
+        let temp = TempDir::new();
+        let error = locate(None, &environment(&temp.0), "windows", "x86_64").unwrap_err();
+        assert_eq!(error.code(), LAUNCH_SERVER_MISSING);
+        assert!(!error.message().contains("brew"));
+        assert!(error
+            .message()
+            .contains("https://download.eclipse.org/jdtls/milestones/"));
+        assert!(error
+            .message()
+            .contains("plugins/org.eclipse.equinox.launcher_*.jar"));
+        assert!(error.message().contains("config_win/config.ini"));
+        assert!(error.message().contains("Language server folder"));
+        assert!(error.message().contains("JDK for JDT LS"));
+    }
+
+    #[test]
     fn nothing_found_is_one_error_that_names_no_path() {
         let temp = TempDir::new();
         let error = locate(None, &environment(&temp.0), "windows", "x86_64").unwrap_err();
         assert_eq!(error.code(), LAUNCH_SERVER_MISSING);
-        assert_eq!(error.message(), SERVER_MISSING_MESSAGE);
+        assert_eq!(
+            error.message(),
+            server_setup_message(SERVER_MISSING_MESSAGE, "windows", "x86_64")
+        );
         assert!(!error.message().contains(temp.0.to_string_lossy().as_ref()));
         let error = locate(None, &environment(&temp.0), "plan9", "x86_64").unwrap_err();
         assert_eq!(error.code(), LAUNCH_SERVER_MISSING);

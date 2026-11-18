@@ -545,7 +545,7 @@
       "id": "languageServerHome",
       "type": "directory",
       "title": "Language server folder",
-      "description": "Folder of the Eclipse JDT Language Server, the one that contains plugins and the config folders. Leave empty to find JDT LS installed with Homebrew, mason.nvim, Scoop or the VS Code Java extension, or through JDTLS_HOME or jdtls on PATH.",
+      "description": "Select the extracted Eclipse JDT Language Server folder containing one plugins/org.eclipse.equinox.launcher_*.jar and the platform config.ini (Windows: config_win; macOS: config_mac or config_mac_arm; Linux: config_linux or config_linux_arm). Download: https://download.eclipse.org/jdtls/milestones/ — verify the published checksum before extracting. Leave empty to discover JDTLS_HOME, jdtls on PATH, package-manager installations or VS Code Java extensions. An explicit folder is never replaced automatically. Separately choose JDK for JDT LS in Settings > Build, Execution, Deployment > Toolchains: Java 21 minimum, Java 25 for JDT LS 1.63+. JDK downloads: https://adoptium.net/temurin/releases/. Keep the project JDK and global PATH unchanged; restart the Java language server after configuring.",
       "default": "",
       "placeholder": "Automatic",
       "page": {

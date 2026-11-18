@@ -7,7 +7,7 @@
 > 在内存中补全类路径并自动找到 Tomcat 等 Servlet 容器，不修改项目文件，详见 [docs/project-models.md](docs/project-models.md)。
 >
 > **3.0.0 起使用你自己的 JDT LS**：插件包不再附带 Eclipse JDT Language Server 和运行它的 JDK（包从约 250 MB 降到约 11 MB），
-> 做法和 Go 插件使用你自己的 `gopls` 一样。需要先安装 JDT LS（例如 `brew install jdtls`）和 JDK 21 或更新版本，
+> 做法和 Go 插件使用你自己的 `gopls` 一样。需要先安装 JDT LS 和满足其要求的运行 JDK（至少 21，JDT LS 1.63+ 需要 25），
 > 详见下文[语言服务器与 JDK](#语言服务器与-jdk)。
 
 > **Viva 预览版 Java 支持（1.2.0）**：清单已迁到当前契约 0，后端使用 Core
@@ -204,16 +204,28 @@ Spring/MyBatis 等既有能力不属于本轮 Maven 验收范围。
    5. VS Code 及其衍生编辑器里 Java 扩展（`redhat.java`）自带的 `server/`，取最新版本。
 
    目录（或其中的 `libexec/`）里要有唯一一个 `plugins/org.eclipse.equinox.launcher_*.jar` 和当前平台的
-   `config_<平台>/config.ini`。安装方式举例：macOS / Linux 用 `brew install jdtls`；也可以从
-   [download.eclipse.org/jdtls](https://download.eclipse.org/jdtls/milestones/) 下载解压，再在设置里选目录。
+   `config_<平台>/config.ini`。从 [Eclipse 官方下载目录](https://download.eclipse.org/jdtls/milestones/) 选择版本，
+   下载归档并核对该版本发布的校验值，解压到自己的可写目录，再在设置里选择解压后的根目录（不是压缩包或 `bin`）。
+   macOS 已安装 Homebrew 时也可用 `brew install jdtls`；Windows 和 Linux 不再收到这条 macOS 指引。
+
+   | 系统 / 架构 | 必须存在的配置文件 |
+   | --- | --- |
+   | Windows x64 / ARM64 | `config_win/config.ini` |
+   | macOS x64 / ARM64 | `config_mac/config.ini` / `config_mac_arm/config.ini` |
+   | Linux x64 / ARM64 | `config_linux/config.ini` / `config_linux_arm/config.ini` |
+
    已测试 JDT LS 1.61.0（CI 固定，见 `third_party/jdtls/manifest.json`）和 Homebrew 1.60.0。
 2. **满足目标 JDT LS 要求的 JDK（至少 JDK 21；JDT LS 1.63+ 要求 JDK 25）**，用来运行 JDT LS。它是插件新增的「JDK for JDT LS」工具（`jdtls-runtime`），
    在设置 → 构建、执行、部署 → 工具链里显示和选择；没选时依次用登录 shell 的 `java`（仅匹配 21 及更新版本，跳过 `PATH` 上的 Java 8/11/17）和找到的最高版本 JDK（含系统 JDK 目录与 VS Code / Cursor `redhat.java` 扩展自带的 `jre/`）。
    后端会从目标 JDT LS 核心 bundle 的 `MANIFEST.MF`（`Bundle-RequiredExecutionEnvironment`）读取实际最低 Java 版本，低于该版本时启动直接报错并提示去工具链里选择。项目自己的 JDK 是原来的「JDK」工具（`java`），两者互不影响。
    JDT 只能为它支持的 Java 版本编译：没有为项目选 JDK 时，JDT 用运行它的 JDK 编译，这个 JDK 比 JDT LS 支持的最新 Java 还新时编译会报错。
 
-找不到 JDT LS 时，语言服务启动失败（`launch.server_missing`），错误信息说明如何安装或去哪里设置。
-宿主当前的 `commandInstallers` 只能安装 `systemCommand` 启动的命令，JDT LS 由插件后端启动，所以还不能像 Go 插件那样在插件详情里一键安装。
+找不到 JDT LS 时返回 `launch.server_missing`，显式目录无效时返回 `launch.server_invalid`；两种错误均提供对应系统的目录结构、官方下载地址和本地选择入口。显式目录无效时不会静默改用其他安装，也不会清空配置。运行 JDK 过旧时返回 `launch.runtime_too_old`，按所选 JDT LS 的实际 bundle 要求提示版本，而不是先固定报 Java 21。
+
+未安装运行 JDK 时，从 [Eclipse Temurin 官方页面](https://adoptium.net/temurin/releases/) 选择满足要求、匹配系统和 CPU 架构的 **JDK** 归档，核对发布的校验值后解压。在「JDK for JDT LS」工具链中选择其根目录（含 `bin/java.exe` 或 `bin/java`；macOS `.jdk` 内为 `Contents/Home`）。保留项目「JDK」选择和全局 PATH，配置后重启 Java 语言服务器。下载或校验失败时不要选择或执行该归档中的程序；重新从官方来源获取。
+
+这是**下载与本地配置引导，不是自动安装器**：现有目录选择器负责用户确认，错误中的 URL 是文本地址，不保证宿主渲染为可点击链接。清单设置说明同步提供中英文引导；后端错误文案仍受 API-37 本地化接口缺口限制，以英文返回。没有运行版本事实时继续交由宿主工具链解析处理，不把“未知”误报为“已兼容”。
+宿主已有插件状态目录，但 API-38 托管网络/下载尚未实现；当前 `commandInstallers` 只能安装 `systemCommand` 启动的命令，JDT LS 使用后端启动。本次不增加未校验下载、静默安装、全局 PATH 修改、项目 JDK 修改或宿主 Java 特判。
 
 ## 工作方式
 
