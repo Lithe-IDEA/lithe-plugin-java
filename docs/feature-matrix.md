@@ -52,9 +52,9 @@
 
 2026-11-17：macOS arm64 本机用 JDT LS 1.61.0 自动化通过。需要宿主声明 `sourceSettings` 1（[1lck/Lithe-IDEA#2087](https://github.com/1lck/Lithe-IDEA/pull/2087)）；原生文件选择器、Windows 与 Linux 结果由实机验收和 CI 补充。
 
-## JSP / EL 基础语法（4.1.0）
+## JSP / EL 语法着色
 
 | 能力 | macOS | Windows | Linux | 证据 |
 | --- | --- | --- | --- | --- |
-| JSP/JSPF/Tag/Tagf 识别、TextMate 语法着色（JSP 指令、脚本片段、JSTL/HTML、EL）、注释与括号设置 | implemented / pending | implemented / pending | implemented / pending | `io.github.lithe-idea.java-support/grammars/jsp.tmLanguage.json`、`scripts/package/jsp-grammar.test.mjs`；基于语法声明与打包入口的 Node 单测，原生编辑器实际着色仍待验收 |
+| JSP/JSPF/Tag/Tagf 识别；在宿主 HTML 语法之上注入 JSP 指令、脚本片段、注释、EL 和标签库标签着色；注释与括号设置 | implemented / verified | implemented / verified | implemented / verified | `grammars/jsp.tmLanguage.json`；`scripts/grammar/host-jsp.mjs` 用宿主 TextMate 分词器（宿主 commit 见 `grammar-host.json`）逐项检查 24 处着色，2026-11-18 macOS arm64 本机与 CI Linux 通过。分词器与平台无关；原生编辑器窗口内的实际显示待实机验收 |
 | JSP/EL 语义补全、诊断、页面断点 | not-implemented | not-implemented | not-implemented | JDT LS 仅为 Java 服务，未来需 JSP 专属语言服务 |
