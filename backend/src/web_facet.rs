@@ -130,7 +130,7 @@ mod tests {
         let fields = fields(true, DOCUMENT).unwrap().unwrap();
         assert_eq!(fields[0]["value"], "3.1");
         assert_eq!(fields[0]["id"], FIELD);
-        let change = json!({FIELD: "4.0"});
+        let change = json!({"webFacetVersion": "4.0"});
         let modified = edit(DOCUMENT, change.as_object().unwrap()).unwrap();
         let output = String::from_utf8(modified).unwrap();
         assert!(output.contains("jst.web"));
@@ -141,13 +141,13 @@ mod tests {
 
     #[test]
     fn unchanged_versions_preserve_bytes_exactly() {
-        let change = json!({FIELD: "3.1"});
+        let change = json!({"webFacetVersion": "3.1"});
         assert_eq!(edit(DOCUMENT, change.as_object().unwrap()).unwrap(), DOCUMENT);
     }
 
     #[test]
     fn rejects_unexpected_edits_and_conflicting_web_facets() {
-        for value in [json!({FIELD: "7.5"}), json!({FIELD: null}), json!({"other": "4.0"})] {
+        for value in [json!({"webFacetVersion": "7.5"}), json!({"webFacetVersion": null}), json!({"other": "4.0"})] {
             assert!(edit(DOCUMENT, value.as_object().unwrap()).is_err());
         }
         let duplicate = br#"<faceted-project>
