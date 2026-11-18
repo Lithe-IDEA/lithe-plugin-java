@@ -56,5 +56,5 @@
 
 | 能力 | macOS | Windows | Linux | 证据 |
 | --- | --- | --- | --- | --- |
-| Java 项目结构中的 Web Facet 独立原生来源、版本读写与修改前 revision 校验 | implemented / pending | implemented / pending | implemented / pending | `backend/src/web_facet.rs` 单元测试、`project_settings.rs` 分组和来源路由；Rust CI 尚需运行；原生编辑器/文件选择器验收待补 |
+| Java 项目结构中的 Web Facet 独立原生来源、按 jst.java 限定可选版本、版本读写与修改前 revision 校验；无法安全编辑的 Facet 文件只跳过该来源并上报一次降级 | implemented / verified | implemented / pending | implemented / pending | `backend/src/web_facet.rs` 单元测试；`scripts/compiler/test-module-structure.mjs` 用真实 JDT LS 1.61 覆盖读取、不合规文件、版本限制和保存。2026-11-18 macOS arm64 本机通过；Linux 由 CI 的同一脚本覆盖；Windows 与原生窗口点按待实机验收 |
 | 编辑 WTP .component、IDEA .iml Web Facet、WTP 服务器配置 | not-implemented | not-implemented | not-implemented | 单文件安全修改，不覆盖其他 IDE 模型 |

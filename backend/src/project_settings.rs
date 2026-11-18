@@ -478,6 +478,7 @@ impl ProjectSettings {
         // enclosing module comes before the modules inside it.
         let mut rows: Vec<(PathBuf, PathBuf, Value)> = Vec::new();
         let mut facet_sources = Vec::new();
+        let mut unreadable_facets: u64 = 0;
         for (project, file, revision, classpath, name) in classpaths {
             let rel = project_model::relative_inside(root, &file).ok_or_else(fail)?;
             let choices = modules::Choices {
@@ -491,18 +492,27 @@ impl ProjectSettings {
             }
             // Web Facet is stored in another native XML source. Keep it
             // separate from .classpath so each save replaces exactly one file.
+            // A facet file this page cannot edit safely costs only its own
+            // source: the module still shows, and the page reports one
+            // degradation for all such files.
             if facet_sources.len() < 256 {
                 let facet_file = project.join(crate::web_facet::FILE);
                 if fs::symlink_metadata(&facet_file).is_ok_and(|info| info.is_file()) {
-                    let (bytes, revision) = read(&facet_file)?;
-                    if let Some(fields) = crate::web_facet::fields(zh, &bytes)? {
-                        let rel =
-                            project_model::relative_inside(root, &facet_file).ok_or_else(fail)?;
-                        let facet_id = format!("facet{:x}", Sha256::digest(rel.as_bytes()));
-                        if paths.insert(facet_file.clone()) {
-                            bindings.insert(facet_id.clone(), facet_file);
-                            facet_sources.push(json!({"id":facet_id,"group":"facets","title":name.clone(),"path":rel,"revision":revision,"writable":true,"fields":fields}));
+                    let facet = read(&facet_file).and_then(|(bytes, revision)| {
+                        Ok(crate::web_facet::fields(zh, &bytes)?.map(|fields| (revision, fields)))
+                    });
+                    match facet {
+                        Ok(Some((revision, fields))) => {
+                            let rel = project_model::relative_inside(root, &facet_file)
+                                .ok_or_else(fail)?;
+                            let facet_id = format!("facet{:x}", Sha256::digest(rel.as_bytes()));
+                            if paths.insert(facet_file.clone()) {
+                                bindings.insert(facet_id.clone(), facet_file);
+                                facet_sources.push(json!({"id":facet_id,"group":"facets","title":name.clone(),"path":rel,"revision":revision,"writable":true,"fields":fields}));
+                            }
                         }
+                        Ok(None) => {}
+                        Err(_) => unreadable_facets += 1,
                     }
                 }
             }
@@ -582,6 +592,15 @@ impl ProjectSettings {
             sources.push(source);
         }
         sources.extend(facet_sources);
+        if unreadable_facets > 0 {
+            // An error from `degraded` only means the arguments were invalid,
+            // so the page itself stands.
+            let _ = context.diagnostics().degraded(
+                context.function_id(),
+                "webFacetUnreadable",
+                Some(unreadable_facets),
+            );
+        }
         Ok(sources)
     }
     /// Prepares only the confirmed native source; publication belongs to the host.
@@ -799,8 +818,11 @@ pub(crate) fn write_classpath(
             xmltree::XMLNode::Element(_) => doc
                 .write_with_config(
                     &mut out,
+                    // Eclipse writes `<entry .../>`; matching it keeps a
+                    // save from rewriting every self-closing line.
                     xmltree::EmitterConfig::new()
                         .perform_indent(true)
+                        .pad_self_closing(false)
                         .write_document_declaration(false),
                 )
                 .map_err(|_| fail())?,

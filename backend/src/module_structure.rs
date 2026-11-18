@@ -586,7 +586,7 @@ pub fn edit(
                 if flag(&entry, EXPORTED)? {
                     element.attributes.insert(EXPORTED.into(), "true".into());
                 } else {
-                    element.attributes.remove(EXPORTED);
+                    element.attributes.shift_remove(EXPORTED);
                 }
                 set_nested(&mut element, TEST, flag(&entry, TEST)?.then_some("true"));
                 next.push(element);

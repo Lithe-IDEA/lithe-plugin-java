@@ -5,6 +5,10 @@
 // folders, output folder and dependencies (another module, exported, and a
 // JAR outside the workspace) to its .classpath, keeping what the page does
 // not show. JDT must then compile the module against the new classpath.
+// The app module is also an Eclipse WTP Dynamic Web Module: the page offers
+// its jst.web version limited by its jst.java facet and saves only that
+// attribute; common carries a facet file the page cannot edit safely, which
+// costs only its Web Facet source, never the page.
 // Reading the page writes nothing, and the package and the JDT LS
 // installation stay unchanged.
 // Usage: node scripts/compiler/test-module-structure.mjs <package>
@@ -61,6 +65,10 @@ try{
  write(join(app,'.classpath'),original);
  write(join(app,'src/demo/App.java'),'package demo; public class App { public static void main(String[] args) { System.out.print(com.common.Greeter.greet() + com.acme.Util.value() + demo.extra.Extra.NAME); } }');
  write(join(app,'extra/demo/extra/Extra.java'),'package demo.extra; public class Extra { public static final String NAME = "extra"; }');
+ const FACETS='.settings/org.eclipse.wst.common.project.facet.core.xml';
+ const facets=`<?xml version="1.0" encoding="UTF-8"?>\n<faceted-project>\n  <!-- keep this facet comment -->\n  <fixed facet="jst.java"/>\n  <installed facet="jst.java" version="1.8"/>\n  <installed facet="jst.web" version="3.1"/>\n</faceted-project>\n`;
+ write(join(app,FACETS),facets);
+ write(join(common,FACETS),'<faceted-project><installed facet="jst.web" version="3.0"/><installed facet="jst.web" version="4.0"/></faceted-project>');
  write(join(service,'pom.xml'),'<project xmlns="http://maven.apache.org/POM/4.0.0"><modelVersion>4.0.0</modelVersion><groupId>test.lithe</groupId><artifactId>service</artifactId><version>1</version><properties><maven.compiler.source>17</maven.compiler.source><maven.compiler.target>17</maven.compiler.target></properties></project>');
  write(join(service,'src/main/java/demo/Service.java'),'package demo; public class Service { }');
 
@@ -87,6 +95,7 @@ try{
  const page=language=>invoke('libraries.settings',{context:{language,builds:[]}});
  const module=(snapshot,title)=>snapshot.sources.find(source=>source.group==='modules'&&source.title===title);
  const field=(source,id)=>source.fields.find(item=>item.id===id);
+ const facet=(snapshot,title)=>snapshot.sources.find(source=>source.group==='facets'&&source.title===title);
 
  await report.step('JDT imports the two Eclipse projects and the Maven module',async()=>{
   await until(()=>execute('java.project.getAll'),projects=>[common,app,service].every(project=>projects.some(uri=>samePath(fileURLToPath(uri),project))),'JDT project import',240000);
@@ -113,6 +122,16 @@ try{
   assert.equal(serviceModule.path,'service/pom.xml');
   const resolved=field(serviceModule,'dependencies').value;
   assert.ok(resolved.some(entry=>entry.kind==='classes'&&slashes(entry.value).endsWith('target/classes')),JSON.stringify(resolved));
+  assert.ok(before.groups.some(group=>group.id==='facets'),JSON.stringify(before.groups));
+  const appFacet=facet(before,'app');assert.ok(appFacet,JSON.stringify(before.sources.map(source=>[source.group,source.title])));
+  assert.equal(appFacet.path,'app/'+FACETS);
+  const web=field(appFacet,'webFacetVersion');
+  assert.equal(web.value,'3.1');
+  const offered=web.options.map(option=>option.value);
+  assert.ok(offered.includes('4.0')&&offered.includes('5.0'),JSON.stringify(offered));
+  assert.ok(!offered.includes('6.0')&&!offered.includes('6.1'),'Java 8 projects must not be offered Web 6.x: '+JSON.stringify(offered));
+  assert.equal(facet(before,'common'),undefined,'An unsafe facet file gets no editable source');
+  assert.ok(module(before,'common'),'An unsafe facet file must not hide its module');
   assert.deepEqual(projectFiles(),baseline,'Reading the structure page must not write project files');
   // The public projection, rendered by the native host in scripts/compiler/visual.mjs.
   capture('libraries-modules-zh',before);
@@ -136,6 +155,19 @@ try{
   assert.deepEqual(field(saved,'roots').value.map(entry=>entry.value),['src','extra']);
   assert.equal(field(saved,'output').value,'build/classes');
   assert.deepEqual(field(saved,'dependencies').value.map(entry=>[entry.kind,entry.title,entry.attributes?.exported??false]),[['module','common',true],['archive','old.jar',false],['archive','acme-util.jar',false]]);
+ });
+ await report.step('saving the Web Facet changes only the jst.web version',async()=>{
+  const appFacet=facet(before,'app');
+  const stageFile=join(stage,'facet-stage.xml');writeFileSync(stageFile,'');
+  await assert.rejects(invoke('compiler.prepareSettings',{operation:'editSource',sourceID:appFacet.id,revision:appFacet.revision,outputFile:stageFile,values:{webFacetVersion:'6.0'}}),'Web 6.0 needs Java 11 and must be refused');
+  const edit=await invoke('compiler.prepareSettings',{operation:'editSource',sourceID:appFacet.id,revision:appFacet.revision,outputFile:stageFile,values:{webFacetVersion:'4.0'}});
+  assert.equal(edit.changed,true);
+  const text=readFileSync(stageFile,'utf8');
+  for(const kept of['<!-- keep this facet comment -->','<fixed facet="jst.java"','facet="jst.java" version="1.8"','facet="jst.web" version="4.0"'])assert.ok(text.includes(kept),`${kept}\n${text}`);
+  assert.equal(readFileSync(join(app,FACETS),'utf8'),facets,'Preparing an edit must not touch the facet file');
+  renameSync(stageFile,join(app,FACETS));
+  const after=await invoke('libraries.settings',{operation:'readAfterSave',context:{language:'en',builds:[]}});
+  assert.equal(field(facet(after,'app'),'webFacetVersion').value,'4.0');
  });
  await report.step('JDT compiles the module against the saved classpath',async()=>{
   const errors=()=>JSON.stringify([...problems].filter(([,messages])=>messages.length));

@@ -7,7 +7,45 @@ use xmltree::{Element, XMLNode};
 
 pub const FILE: &str = ".settings/org.eclipse.wst.common.project.facet.core.xml";
 const FIELD: &str = "webFacetVersion";
-const SUPPORTED: &[&str] = &["2.5", "3.0", "3.1", "4.0", "5.0", "6.0"];
+/// Dynamic Web Module versions WTP offers, with the lowest `jst.java` level
+/// each one accepts (1.x levels are written as x). A version is offered only
+/// when the project's installed `jst.java` facet satisfies it, so a save never
+/// produces a combination Eclipse itself rejects.
+const SUPPORTED: &[(&str, u32)] = &[
+    ("2.2", 3),
+    ("2.3", 3),
+    ("2.4", 3),
+    ("2.5", 5),
+    ("3.0", 6),
+    ("3.1", 7),
+    ("4.0", 8),
+    ("5.0", 8),
+    ("6.0", 11),
+    ("6.1", 17),
+];
+
+fn minimum_java(version: &str) -> Option<u32> {
+    SUPPORTED
+        .iter()
+        .find(|(known, _)| *known == version)
+        .map(|(_, java)| *java)
+}
+
+/// The Java level of a `jst.java` facet version: "1.8" is 8, "17" is 17.
+fn java_level(version: &str) -> Option<u32> {
+    let level = version.strip_prefix("1.").unwrap_or(version);
+    level.parse().ok()
+}
+
+/// Whether a project whose `jst.java` facet is `java` may use `web`.
+/// A project without a readable `jst.java` facet is not constrained here.
+fn compatible(web: &str, java: Option<u32>) -> bool {
+    match (minimum_java(web), java) {
+        (None, _) => false,
+        (Some(_), None) => true,
+        (Some(minimum), Some(level)) => level >= minimum,
+    }
+}
 
 fn failed() -> FunctionError {
     PluginError::new(
@@ -32,10 +70,21 @@ fn parsed(bytes: &[u8]) -> Result<Element, FunctionError> {
 }
 
 fn web_version(document: &Element) -> Result<Option<String>, FunctionError> {
+    installed_version(document, "jst.web")
+}
+
+fn java_version(document: &Element) -> Result<Option<u32>, FunctionError> {
+    Ok(installed_version(document, "jst.java")?
+        .as_deref()
+        .and_then(java_level))
+}
+
+/// The version of the one installed `facet`; more than one is invalid.
+fn installed_version(document: &Element, facet: &str) -> Result<Option<String>, FunctionError> {
     let mut version = None;
     for element in document.children.iter().filter_map(XMLNode::as_element) {
         if element.name != "installed"
-            || element.attributes.get("facet").map(String::as_str) != Some("jst.web")
+            || element.attributes.get("facet").map(String::as_str) != Some(facet)
         {
             continue;
         }
@@ -58,11 +107,13 @@ pub fn fields(zh: bool, bytes: &[u8]) -> Result<Option<Vec<Value>>, FunctionErro
     let Some(version) = web_version(&document)? else {
         return Ok(None);
     };
+    let java = java_version(&document)?;
     let mut options: Vec<Value> = SUPPORTED
         .iter()
-        .map(|value| json!({"value": value, "title": value}))
+        .filter(|(value, _)| *value == version || compatible(value, java))
+        .map(|(value, _)| json!({"value": value, "title": value}))
         .collect();
-    if !SUPPORTED.contains(&version.as_str()) {
+    if minimum_java(&version).is_none() {
         options.push(json!({"value": version, "title": version}));
     }
     Ok(Some(vec![json!({
@@ -75,9 +126,9 @@ pub fn fields(zh: bool, bytes: &[u8]) -> Result<Option<Vec<Value>>, FunctionErro
         "effectiveSource": if zh { "Eclipse WTP 工程文件" } else { "Eclipse WTP project file" },
         "options": options,
         "description": if zh {
-            "仅修改现有 Eclipse jst.web Facet 的版本。不会重写 .classpath、Web 根或其他 Facet。"
+            "仅修改现有 Eclipse jst.web Facet 的版本，只列出与本模块 Java Facet（jst.java）兼容的版本。不会修改 web.xml、.classpath、Web 根或其他 Facet；升级到 5.0 及以上时，代码和 web.xml 需要自行迁移到 jakarta 命名空间。"
         } else {
-            "Changes only the version of an existing Eclipse jst.web facet. Classpaths, Web roots and other facets are not edited."
+            "Changes only the version of an existing Eclipse jst.web facet, offering the versions the module's Java facet (jst.java) supports. web.xml, classpaths, Web roots and other facets are not edited; moving to 5.0 or later also needs the code and web.xml moved to the jakarta namespace."
         }
     })]))
 }
@@ -94,7 +145,7 @@ pub fn edit(bytes: &[u8], values: &Map<String, Value>) -> Result<Vec<u8>, Functi
     if chosen == original {
         return Ok(bytes.to_vec());
     }
-    if !SUPPORTED.contains(&chosen) {
+    if !compatible(chosen, java_version(&document)?) {
         return Err(failed());
     }
     let mut changed = false;
@@ -139,7 +190,10 @@ mod tests {
         let modified = edit(DOCUMENT, change.as_object().unwrap()).unwrap();
         let output = String::from_utf8(modified).unwrap();
         assert!(output.contains("jst.web"));
-        assert!(output.contains("version=\"4.0\""));
+        // Attribute order and Eclipse's self-closing style are kept, so a
+        // save changes only the version in a diff.
+        assert!(output.contains("<installed facet=\"jst.web\" version=\"4.0\"/>"));
+        assert!(output.contains("<installed facet=\"jst.java\" version=\"17\"/>"));
         assert!(output.contains("jst.java"));
         assert!(output.contains("<!-- preserve -->"));
     }
@@ -167,6 +221,43 @@ mod tests {
           <installed facet="jst.web" version="4.0"/>
         </faceted-project>"#;
         assert!(fields(false, duplicate).is_err());
+    }
+
+    #[test]
+    fn offers_and_accepts_only_versions_the_java_facet_supports() {
+        let java8 = br#"<faceted-project>
+  <installed facet="jst.web" version="3.1"/>
+  <installed facet="jst.java" version="1.8"/>
+</faceted-project>"#;
+        let fields = fields(false, java8).unwrap().unwrap();
+        let offered: Vec<&str> = fields[0]["options"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|option| option["value"].as_str().unwrap())
+            .collect();
+        assert!(offered.contains(&"4.0"));
+        assert!(offered.contains(&"5.0"));
+        assert!(!offered.contains(&"6.0"));
+        assert!(!offered.contains(&"6.1"));
+        let too_new = json!({"webFacetVersion": "6.0"});
+        assert!(edit(java8, too_new.as_object().unwrap()).is_err());
+        let allowed = json!({"webFacetVersion": "5.0"});
+        assert!(edit(java8, allowed.as_object().unwrap()).is_ok());
+
+        let java17 = json!({"webFacetVersion": "6.1"});
+        assert!(edit(DOCUMENT, java17.as_object().unwrap()).is_ok());
+    }
+
+    #[test]
+    fn an_unknown_current_version_stays_selectable() {
+        let unknown =
+            br#"<faceted-project><installed facet="jst.web" version="9.9"/></faceted-project>"#;
+        let fields = fields(false, unknown).unwrap().unwrap();
+        let offered = fields[0]["options"].as_array().unwrap();
+        assert!(offered.iter().any(|option| option["value"] == "9.9"));
+        let same = json!({"webFacetVersion": "9.9"});
+        assert_eq!(edit(unknown, same.as_object().unwrap()).unwrap(), unknown);
     }
 
     #[test]
