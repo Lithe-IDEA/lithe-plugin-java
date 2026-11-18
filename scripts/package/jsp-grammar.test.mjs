@@ -36,10 +36,11 @@ test('Recognizes classic JSP, directives, tags and EL without matching escaped E
   expect('jsp-expression','<%= user.getName() %>');
   expect('jsp-scriptlet','<% int n = 0; %>');
   assert.doesNotMatch('<%-- comment --%>',new RegExp(r['jsp-scriptlet'].begin));
-  expect('tag','<c:forEach items="\\u0024{items}">');
-  expect('el','\\u0024{bean.value}');
+  const dollar=String.fromCharCode(36);
+  expect('tag','<c:forEach items="'+dollar+'{items}">');
+  expect('el',dollar+'{bean.value}');
   expect('el','#{bean.value}');
-  assert.doesNotMatch('\\\\\\u0024{literal}',new RegExp(r.el.begin));
+  assert.doesNotMatch(String.fromCharCode(92)+dollar+'{literal}',new RegExp(r.el.begin));
 });
 test('Every platform packager includes the JSP grammar in the installable package',()=>{
   for(const path of ['scripts/assemble-package.sh','scripts/package/build-linux.mjs','scripts/package/build-windows.mjs','scripts/verify-package.sh'])
