@@ -20,6 +20,7 @@ import (
 	"github.com/1lck/Lithe-IDEA/desktop/internal/pluginhost"
 	"github.com/1lck/Lithe-IDEA/desktop/internal/pluginservice"
 	"github.com/1lck/Lithe-IDEA/desktop/internal/pluginsettings"
+	"github.com/vivaui/viva/gfx"
 	"github.com/vivaui/viva/headless"
 )
 
@@ -174,6 +175,20 @@ func TestPluginNativeSourceVisual(t *testing.T) {
 						shot(item.name + "-dependencies")
 						d.click("service")
 						shot(item.name + "-maven")
+						// The Web Facet source of app: the lower of the two
+						// sidebar entries titled app, under the Web Facet group.
+						var facet gfx.Hit
+						found := false
+						for _, hit := range d.driver.Snapshot().Hits {
+							if hit.Label == "app" && !hit.IsLabel && !hit.Backdrop && !hit.ID.IsZero() && (!found || hit.Bounds.Y > facet.Bounds.Y) {
+								facet, found = hit, true
+							}
+						}
+						if !found {
+							t.Fatal("no Web Facet source titled app")
+						}
+						d.clickHit(facet)
+						shot(item.name + "-web-facet")
 					}
 				})
 			}

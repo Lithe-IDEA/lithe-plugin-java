@@ -368,10 +368,19 @@ impl ProjectSettings {
         };
         let mut groups = if libraries {
             let mut groups = Vec::new();
-            if !module_sources.is_empty() {
+            if module_sources
+                .iter()
+                .any(|source| source["group"] == "modules")
+            {
                 groups.push(
                     json!({"id":"modules","title":local(zh,"Modules","模块"),"layout":"sidebar"}),
                 );
+            }
+            if module_sources
+                .iter()
+                .any(|source| source["group"] == "facets")
+            {
+                groups.push(json!({"id":"facets","title":local(zh,"Web Facets","Web Facet"),"layout":"sidebar"}));
             }
             if module_sources.is_empty()
                 || sources.iter().any(|source| source["group"] == "libraries")
@@ -468,6 +477,8 @@ impl ProjectSettings {
         // (folder, source file, source) in folder order, so that an
         // enclosing module comes before the modules inside it.
         let mut rows: Vec<(PathBuf, PathBuf, Value)> = Vec::new();
+        let mut facet_sources = Vec::new();
+        let mut unreadable_facets: u64 = 0;
         for (project, file, revision, classpath, name) in classpaths {
             let rel = project_model::relative_inside(root, &file).ok_or_else(fail)?;
             let choices = modules::Choices {
@@ -478,6 +489,32 @@ impl ProjectSettings {
             let id = format!("source{:x}", Sha256::digest(rel.as_bytes()));
             if classpath.editable {
                 bindings.insert(id.clone(), file.clone());
+            }
+            // Web Facet is stored in another native XML source. Keep it
+            // separate from .classpath so each save replaces exactly one file.
+            // A facet file this page cannot edit safely costs only its own
+            // source: the module still shows, and the page reports one
+            // degradation for all such files.
+            if facet_sources.len() < 256 {
+                let facet_file = project.join(crate::web_facet::FILE);
+                if fs::symlink_metadata(&facet_file).is_ok_and(|info| info.is_file()) {
+                    let facet = read(&facet_file).and_then(|(bytes, revision)| {
+                        Ok(crate::web_facet::fields(zh, &bytes)?.map(|fields| (revision, fields)))
+                    });
+                    match facet {
+                        Ok(Some((revision, fields))) => {
+                            let rel = project_model::relative_inside(root, &facet_file)
+                                .ok_or_else(fail)?;
+                            let facet_id = format!("facet{:x}", Sha256::digest(rel.as_bytes()));
+                            if paths.insert(facet_file.clone()) {
+                                bindings.insert(facet_id.clone(), facet_file);
+                                facet_sources.push(json!({"id":facet_id,"group":"facets","title":name.clone(),"path":rel,"revision":revision,"writable":true,"fields":fields}));
+                            }
+                        }
+                        Ok(None) => {}
+                        Err(_) => unreadable_facets += 1,
+                    }
+                }
             }
             rows.push((project, file, json!({"id":id,"group":"modules","title":name,"path":rel,"revision":revision,"writable":classpath.editable,"fields":fields})));
         }
@@ -554,6 +591,16 @@ impl ProjectSettings {
             }
             sources.push(source);
         }
+        sources.extend(facet_sources);
+        if unreadable_facets > 0 {
+            // An error from `degraded` only means the arguments were invalid,
+            // so the page itself stands.
+            let _ = context.diagnostics().degraded(
+                context.function_id(),
+                "webFacetUnreadable",
+                Some(unreadable_facets),
+            );
+        }
         Ok(sources)
     }
     /// Prepares only the confirmed native source; publication belongs to the host.
@@ -591,6 +638,8 @@ impl ProjectSettings {
         let values = params["values"].as_object().ok_or_else(fail)?;
         let replacement = if path.ends_with(".classpath") {
             crate::module_structure::edit(&bytes, parent, values)?
+        } else if path.ends_with(crate::web_facet::FILE) {
+            crate::web_facet::edit(&bytes, values)?
         } else if path.ends_with(SETTINGS) {
             let workspace = context.workspace_context().ok_or_else(fail)?;
             let options = session.model_options(workspace.context_id());
@@ -769,8 +818,11 @@ pub(crate) fn write_classpath(
             xmltree::XMLNode::Element(_) => doc
                 .write_with_config(
                     &mut out,
+                    // Eclipse writes `<entry .../>`; matching it keeps a
+                    // save from rewriting every self-closing line.
                     xmltree::EmitterConfig::new()
                         .perform_indent(true)
+                        .pad_self_closing(false)
                         .write_document_declaration(false),
                 )
                 .map_err(|_| fail())?,
