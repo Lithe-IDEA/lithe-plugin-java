@@ -1,0 +1,628 @@
+{
+  "version": "1.61.0",
+  "archiveSHA256": "338e7e73d61836651ba2453919a0d34fa763eb4e7c03342092309bffb8934c64",
+  "files": [
+    {
+      "path": "plugins/ch.qos.logback.classic_1.5.32.jar",
+      "size": 286451,
+      "sha256": "2d4cf592db78be2de4d6140434c2fec170dcb16a09e8c8b7b207dbf5e31b848a"
+    },
+    {
+      "path": "plugins/ch.qos.logback.core_1.5.32.jar",
+      "size": 644407,
+      "sha256": "6a904d5778d0e361a9692f9cbe68b1b0620ae0f3eda2ec2ed09102755bf036c4"
+    },
+    {
+      "path": "plugins/com.google.gson_2.14.0.jar",
+      "size": 313604,
+      "sha256": "2cbd119bf1961c28788310963dc80ba65f58cdeec1dd139c8bdb1240faa2c36f"
+    },
+    {
+      "path": "plugins/com.google.guava.failureaccess_1.0.3.jar",
+      "size": 10763,
+      "sha256": "cbfc3906b19b8f55dd7cfd6dfe0aa4532e834250d7f080bd8d211a3e246b59cb"
+    },
+    {
+      "path": "plugins/com.google.guava_33.6.0.jre.jar",
+      "size": 3064793,
+      "sha256": "dc573e1fca4fd5454f4a5fd3d7da2df03002876a4175bafc14a95980dd7713b3"
+    },
+    {
+      "path": "plugins/com.sun.jna.platform_5.19.1.jar",
+      "size": 1416385,
+      "sha256": "3b3864f5b449e9c3c24b16861524b622b086563f44e0cd8384c8efc5a6052f82"
+    },
+    {
+      "path": "plugins/com.sun.jna_5.19.1.v20260612-1000.jar",
+      "size": 1965688,
+      "sha256": "467b2990d4f406e7d41f7a989f89df257767ca11d566f844560e2ab8d09f6433"
+    },
+    {
+      "path": "plugins/jakarta.annotation-api_1.3.5.jar",
+      "size": 25058,
+      "sha256": "85fb03fc054cdf4efca8efd9b6712bbb418e1ab98241c4539c8585bbc23e1b8a"
+    },
+    {
+      "path": "plugins/jakarta.inject.jakarta.inject-api_1.0.5.jar",
+      "size": 10860,
+      "sha256": "a852b0971c589491e24334bd77e92760c048d2c102fc4c68e582e1cd53130f84"
+    },
+    {
+      "path": "plugins/jakarta.servlet-api_6.1.0.jar",
+      "size": 398424,
+      "sha256": "8a31f465f3593bf2351531a5c952014eb839da96a605b5825b93dd54714c48c4"
+    },
+    {
+      "path": "plugins/org.apache.ant_1.10.17.v20260410-1000.jar",
+      "size": 3441936,
+      "sha256": "c5c8e0d7665c9ffc9409ecb35d579d3901a6327aada2a3675c4b6486bf3c4fbf"
+    },
+    {
+      "path": "plugins/org.apache.aries.spifly.dynamic.bundle_1.3.7.jar",
+      "size": 153960,
+      "sha256": "50446b18eaaa135d1927e283639a63e452c94111c28c2a54419b1b3fa0339afc"
+    },
+    {
+      "path": "plugins/org.apache.commons.cli_1.11.0.jar",
+      "size": 110167,
+      "sha256": "8f7f8605d68e15bf32db61ec94eac6fdafc51b1bdbe1e0e0802b57d23f387792"
+    },
+    {
+      "path": "plugins/org.apache.commons.commons-codec_1.20.0.jar",
+      "size": 401021,
+      "sha256": "6af66595f9f6a7bb58ce66518d6888d40b547c366d2262f06676eee19528ff66"
+    },
+    {
+      "path": "plugins/org.apache.commons.lang3_3.20.0.jar",
+      "size": 713862,
+      "sha256": "69e5c9fa35da7a51a5fd2099dfe56a2d8d32cf233e2f6d770e796146440263f4"
+    },
+    {
+      "path": "plugins/org.apache.felix.scr_2.2.18.jar",
+      "size": 409468,
+      "sha256": "c5bd887c8fd5ec4cd563249e7552bb1a1a1ca57e05a1f1ef8425a7b7b7bd2fbe"
+    },
+    {
+      "path": "plugins/org.commonmark.ext-gfm-tables_0.30.0.jar",
+      "size": 24485,
+      "sha256": "5e28b48e66f7697bee4dfeb4c8f8f08a84a2827d91b53bbd9bd5445e82d14bda"
+    },
+    {
+      "path": "plugins/org.commonmark_0.30.0.jar",
+      "size": 220139,
+      "sha256": "090f0a758ac2f4f51aa86dff9dff0fdf7403666d0efd29f59886dc8e8b1eac53"
+    },
+    {
+      "path": "plugins/org.eclipse.ant.core_3.7.1000.v20260602-0655.jar",
+      "size": 105937,
+      "sha256": "136e7995f6b190f8d093f0ace382b9fd492bd04716f8c060d78fbf9c5e182394"
+    },
+    {
+      "path": "plugins/org.eclipse.buildship.compat_3.1.12.v20260901-1217-s.jar",
+      "size": 19617,
+      "sha256": "a270a26382a346640c77eb3cf29a7fbb25fe5337268bac43022e7b38b023086e"
+    },
+    {
+      "path": "plugins/org.eclipse.buildship.core_3.1.12.v20260901-1217-s.jar",
+      "size": 577034,
+      "sha256": "b2894c6b3e7d9778d8bf08c27391cc0448da62123de4769b0787072d1d1ab1aa"
+    },
+    {
+      "path": "plugins/org.eclipse.compare.core_3.8.900.v20260731-0809.jar",
+      "size": 72886,
+      "sha256": "e75b07863128a076989d15e815d63a49cab772a338f1f0444d007bef3fa94601"
+    },
+    {
+      "path": "plugins/org.eclipse.core.commands_3.13.0.v20260605-1749.jar",
+      "size": 121051,
+      "sha256": "fe916979793d364fcd0a71c15c3fa803d60a8566cff8c64b0eef04918b5b6a65"
+    },
+    {
+      "path": "plugins/org.eclipse.core.contenttype_3.9.900.v20260617-0626.jar",
+      "size": 107781,
+      "sha256": "6c57132740523b5c5de125c0041ca43c1606da6563214c1bae3999fa21ead893"
+    },
+    {
+      "path": "plugins/org.eclipse.core.expressions_3.9.700.v20260710-0925.jar",
+      "size": 99300,
+      "sha256": "06a18236ae181659e1e5499d912d68de527720686f1f51dab632d3e298e32b78"
+    },
+    {
+      "path": "plugins/org.eclipse.core.filebuffers_3.8.600.v20260426-1223.jar",
+      "size": 122324,
+      "sha256": "1537b244abd74626b9627395c8562e910f68b6526330a7556f32d2a624b6e198"
+    },
+    {
+      "path": "plugins/org.eclipse.core.filesystem_1.11.500.v20260721-1509.jar",
+      "size": 87415,
+      "sha256": "bf9ad56f6bee0044829bcbbe0ac5b9df28bb354beb0a4bdf0fe9a489ded12d36"
+    },
+    {
+      "path": "plugins/org.eclipse.core.jobs_3.15.900.v20260604-0622.jar",
+      "size": 120947,
+      "sha256": "941b3c5feeba4ec0a949a8a94ff10283b2505813fa736c9e6345f146ae1b7e8a"
+    },
+    {
+      "path": "plugins/org.eclipse.core.net_1.5.900.v20260507-0401.jar",
+      "size": 77837,
+      "sha256": "6e7a8db7d87a44bb35924bb345ddf0d9372413e3fee2edd842b50ed630ec254f"
+    },
+    {
+      "path": "plugins/org.eclipse.core.resources_3.24.100.v20260812-0827.jar",
+      "size": 965528,
+      "sha256": "946851cf5902cd3b002920063a30b169e5710088b6c1ad7dd05bdd3be4fbfff4"
+    },
+    {
+      "path": "plugins/org.eclipse.core.runtime_3.35.0.v20260623-1631.jar",
+      "size": 90388,
+      "sha256": "5b0c2794e9fe1785360dec920cc802f3388a0eb72ee25b89054b79ff3e2f07c9"
+    },
+    {
+      "path": "plugins/org.eclipse.core.variables_3.6.900.v20260602-0702.jar",
+      "size": 40286,
+      "sha256": "553f09a59f2662fa4a3bbc94e84bd83221c1c6fb532d81b57010162fb47460a6"
+    },
+    {
+      "path": "plugins/org.eclipse.debug.core_3.24.0.v20260714-0955.jar",
+      "size": 422465,
+      "sha256": "d145e39ee903c835c519b539fee28b5a02c6bdd6be3e084365023c8c6401b6c2"
+    },
+    {
+      "path": "plugins/org.eclipse.equinox.app_1.7.600.v20251211-1038.jar",
+      "size": 93212,
+      "sha256": "fd353398835107608f554779a6e91891725efb94e0f57559d0ab3cea4b6156c7"
+    },
+    {
+      "path": "plugins/org.eclipse.equinox.common_3.21.0.v20260604-1221.jar",
+      "size": 161122,
+      "sha256": "2545ed27d408f19882695703097e5998bf25652bd0dac76a8e6d1391ec228ab7"
+    },
+    {
+      "path": "plugins/org.eclipse.equinox.frameworkadmin.equinox_1.3.400.v20250515-0513.jar",
+      "size": 75996,
+      "sha256": "5efab37c3d1de41fa4bba91d4b0fb682f03477f89a8616eae49e0768e2766663"
+    },
+    {
+      "path": "plugins/org.eclipse.equinox.frameworkadmin_2.3.600.v20260306-0554.jar",
+      "size": 41506,
+      "sha256": "f2b956930b8383d708f1fe9df92938bffbe2e129082d4fd0b3d5f59c20a5c9f0"
+    },
+    {
+      "path": "plugins/org.eclipse.equinox.launcher.cocoa.macosx.aarch64_1.2.1600.v20260804-1928.jar",
+      "size": 42707,
+      "sha256": "4a4d3a01c18e7634b6c0160250563f5ad5e189c2ebb913b50f890887b47c7f0e"
+    },
+    {
+      "path": "plugins/org.eclipse.equinox.launcher.cocoa.macosx.x86_64_1.2.1600.v20260804-1928.jar",
+      "size": 42462,
+      "sha256": "ebb3d52cab339822ea4940b15d6ea6106b3f19b8f4e42f9123090ed36647a185"
+    },
+    {
+      "path": "plugins/org.eclipse.equinox.launcher.gtk.linux.aarch64_1.2.1600.v20260804-1928.jar",
+      "size": 85703,
+      "sha256": "d40dfbab49fee84d55e3837e52be68c1315e13bdf261d7e0174b1270ba729c9f"
+    },
+    {
+      "path": "plugins/org.eclipse.equinox.launcher.gtk.linux.x86_64_1.2.1600.v20260804-1928.jar",
+      "size": 84738,
+      "sha256": "3d74e756f0d78c8549d93264ad0f79812ab3077574b44eda3a1269873bfd4fa7"
+    },
+    {
+      "path": "plugins/org.eclipse.equinox.launcher.win32.win32.x86_64_1.3.100.v20260804-1928.jar",
+      "size": 150597,
+      "sha256": "a8aae728f4b5f053a65b3ffa73d119ab9d1aa620f5b47f587e38f7ac6ef194f0"
+    },
+    {
+      "path": "plugins/org.eclipse.equinox.launcher_1.8.0.v20260804-1928.jar",
+      "size": 52336,
+      "sha256": "9b3b1da60813ac5fa09dd5c198f1884be7076d0a5daec54faa3f351a787e34b7"
+    },
+    {
+      "path": "plugins/org.eclipse.equinox.preferences_3.12.100.v20251111-0704.jar",
+      "size": 130382,
+      "sha256": "fd04e81a28ab32b6bb073286eb293c44b760176fcf1e35ef15614d62df820f86"
+    },
+    {
+      "path": "plugins/org.eclipse.equinox.registry_3.12.600.v20250906-0651.jar",
+      "size": 206425,
+      "sha256": "4f8cd72681446b598390a8c24ee9b9996f6e4c5fabed022b50bd26f6f5a0bf6c"
+    },
+    {
+      "path": "plugins/org.eclipse.equinox.security.linux_1.1.400.v20250521-0415.jar",
+      "size": 27064,
+      "sha256": "fd2fe77849feea313fcc8fb49c7114bd55f0e3cc5ec4bd6c0891d79d7a7a8b08"
+    },
+    {
+      "path": "plugins/org.eclipse.equinox.security.macosx_1.102.500.v20250521-0414.jar",
+      "size": 31714,
+      "sha256": "a8408d4bcdc70e019d2d89ed8b1b0413eb74ea73e74fa3d064b7401643539797"
+    },
+    {
+      "path": "plugins/org.eclipse.equinox.security.win32_1.3.0.v20240419-2334.jar",
+      "size": 15476,
+      "sha256": "cf9668c1d1e481059366abc2719468aa52e1276475cf9c32d4d10f57b34d7182"
+    },
+    {
+      "path": "plugins/org.eclipse.equinox.security_1.4.700.v20250622-1644.jar",
+      "size": 120654,
+      "sha256": "91b74719f9c1a130193407808fe5daab3b92431efbf30b8f886f1ff5e97f468f"
+    },
+    {
+      "path": "plugins/org.eclipse.equinox.simpleconfigurator.manipulator_2.3.700.v20260306-0556.jar",
+      "size": 31055,
+      "sha256": "1a24a3c0fb01ad71f97432d5c2b364d9868b5a5ebd99a1308aacb1a2c03c47da"
+    },
+    {
+      "path": "plugins/org.eclipse.equinox.simpleconfigurator_1.5.700.v20251111-1031.jar",
+      "size": 57247,
+      "sha256": "d250938d3715529a9822fcdf46ad2f5de39720558d7195b5c1a8713af00bcd13"
+    },
+    {
+      "path": "plugins/org.eclipse.jdt.apt.core_3.8.800.v20260608-1927.jar",
+      "size": 411079,
+      "sha256": "f3f15b70f1ec21ca0cd8ecebdb09f2345894508216a9cb733c939d9582c87a3d"
+    },
+    {
+      "path": "plugins/org.eclipse.jdt.apt.pluggable.core_1.4.700.v20251202-0459.jar",
+      "size": 43117,
+      "sha256": "1bde3ae8f333266497c999e5160cc3a7ea8951a10d5191bf60dcda2c942242de"
+    },
+    {
+      "path": "plugins/org.eclipse.jdt.core.compiler.batch_3.46.100.v20260826-1225.jar",
+      "size": 3384534,
+      "sha256": "74c93172475fee0cd4e6eefb44233516dd40525642da35d009146d97ea598229"
+    },
+    {
+      "path": "plugins/org.eclipse.jdt.core.javac_1.0.0.z20260430-1959.jar",
+      "size": 873145,
+      "sha256": "a6d0f8fabd64c248c37c463789a1a13f801252b68b0a4f4808c207677b5cae17"
+    },
+    {
+      "path": "plugins/org.eclipse.jdt.core.manipulation_1.25.0.v20260813-1704.jar",
+      "size": 4926955,
+      "sha256": "dadd2bae4f2d9b8eeda92161edd146878e866d6555591dfe0e3309670d5fcd48"
+    },
+    {
+      "path": "plugins/org.eclipse.jdt.core_3.47.0.v20260828-1141.jar",
+      "size": 4521231,
+      "sha256": "723e30be1e841516c388ebb32017cb8b36662808f46be5265b78cc06bd4fe71c"
+    },
+    {
+      "path": "plugins/org.eclipse.jdt.debug_3.26.100.v20260714-1432.jar",
+      "size": 964671,
+      "sha256": "585fe0f754e8b364258abfb5733e65bf1da895b9c5d628d577e7cf7e6a421915"
+    },
+    {
+      "path": "plugins/org.eclipse.jdt.junit.core_3.15.0.v20260713-1834.jar",
+      "size": 195351,
+      "sha256": "8767b333df9c8dbdc7d5302c0bd9e8c2c7eb7ed1add433f6003bf63095e88675"
+    },
+    {
+      "path": "plugins/org.eclipse.jdt.junit.runtime_3.8.100.v20260507-0922.jar",
+      "size": 64703,
+      "sha256": "40f42db018f283e8e799333c1870d8a6ee14691a591927c77419373a1dd0d3a9"
+    },
+    {
+      "path": "plugins/org.eclipse.jdt.launching_3.24.300.v20260609-0435.jar",
+      "size": 619373,
+      "sha256": "d8aad606c07b42a189a353797d9b3d1493f794647128bbad17908b0d58ba95e0"
+    },
+    {
+      "path": "plugins/org.eclipse.jdt.ls.core_1.61.0.202609031315.jar",
+      "size": 1816623,
+      "sha256": "b382afc38a89e41959a56aee532ae567c7f804c3e4d4f13444114468789ec032"
+    },
+    {
+      "path": "plugins/org.eclipse.jdt.ls.filesystem_1.61.0.202609031315.jar",
+      "size": 23814,
+      "sha256": "e6775fb4c4ab58cfc8441040b741d4718f24614b3c6e05e941f1b68ebfa88f1f"
+    },
+    {
+      "path": "plugins/org.eclipse.jdt.ls.logback.appender_1.61.0.202609031315.jar",
+      "size": 17150,
+      "sha256": "3584cc8e64079a7dbcb9260f6005535e1b74e323c92ac0c9bf0e2dd3ca3a0fda"
+    },
+    {
+      "path": "plugins/org.eclipse.lsp4j.jsonrpc_1.0.0.v20260209-1721.jar",
+      "size": 155511,
+      "sha256": "9647feb0524bf763c878e12ab878a684102b81cccb3f77feecbec709d54f9bbb"
+    },
+    {
+      "path": "plugins/org.eclipse.lsp4j_1.0.0.v20260209-1721.jar",
+      "size": 684229,
+      "sha256": "ccd78893facc6bfcc359d56cba05d3d5b85eb41e4c40d4b4215ca45db5f416d9"
+    },
+    {
+      "path": "plugins/org.eclipse.ltk.core.refactoring_3.16.0.v20260702-0744.jar",
+      "size": 381852,
+      "sha256": "fc185dee6c34e594297471ab72f25c1e76deef6dbf674d3c2f0deee3b73e5b7f"
+    },
+    {
+      "path": "plugins/org.eclipse.m2e.apt.core_2.3.100.20250418-1315.jar",
+      "size": 56663,
+      "sha256": "768aab803fc90eff25130aaf583aeb8791f7a8e55a9c3cadba305b95c70032f9"
+    },
+    {
+      "path": "plugins/org.eclipse.m2e.core_2.7.800.20260522-0510.jar",
+      "size": 630252,
+      "sha256": "966345e9c87fd50adacb2785ff9486e851bdcaea02a089215a18bca956e33382"
+    },
+    {
+      "path": "plugins/org.eclipse.m2e.jdt_2.5.200.20260602-0749.jar",
+      "size": 175144,
+      "sha256": "24532a0dac7cd7cc44dedb21ad6b687b33787fc9eddf708476491a3fe86d9275"
+    },
+    {
+      "path": "plugins/org.eclipse.m2e.maven.runtime_3.9.1600.20260522-0510.jar",
+      "size": 5958733,
+      "sha256": "2aaf8786ecf333a5f8f910bac6e4ae04b243d5dcb811eb4aa79585b9fd4263c7"
+    },
+    {
+      "path": "plugins/org.eclipse.m2e.workspace.cli_0.4.0.jar",
+      "size": 17901,
+      "sha256": "53376fa2d7bfd2d5166806e74af9576ee3f8f1c1ac916e2cb4d2bb0c3e72c02f"
+    },
+    {
+      "path": "plugins/org.eclipse.osgi.compatibility.state_1.3.0.v20251022-1724.jar",
+      "size": 260438,
+      "sha256": "94c1f866af37588c50ed3e95ed6f03eae6e1d81f111cba100d503fef23186028"
+    },
+    {
+      "path": "plugins/org.eclipse.osgi_3.24.300.v20260721-1251.jar",
+      "size": 1615320,
+      "sha256": "4a770aa4a78df653af871073c8b4ddd56884895f5fc71d10c40b4289ac7c8b9f"
+    },
+    {
+      "path": "plugins/org.eclipse.search.core_3.16.700.v20260505-0615.jar",
+      "size": 62763,
+      "sha256": "daa86749c223226d64d47f1574be7c88580e27da4d562e0160cf44bfa569e843"
+    },
+    {
+      "path": "plugins/org.eclipse.text_3.14.800.v20260815-0849.jar",
+      "size": 363930,
+      "sha256": "14814c1f1a737fde0a2d56c47a2f02cf4c8c5dee748756c4763e674cae214250"
+    },
+    {
+      "path": "plugins/org.eclipse.xtext.xbase.lib_2.42.0.v20260223-0608.jar",
+      "size": 170351,
+      "sha256": "8cafdec5bb97a53c93b3b378e056a4d1acefb6f6baebd89c58c6e9794dcce89f"
+    },
+    {
+      "path": "plugins/org.gradle.toolingapi_8.9.0.v20260901-1217-s.jar",
+      "size": 3302722,
+      "sha256": "124d1147714d9b70bab136479b4501b6906ca43321b39d4bbf626d6c73d99fc1"
+    },
+    {
+      "path": "plugins/org.hamcrest_3.0.0.jar",
+      "size": 126373,
+      "sha256": "5d66b6a4a680755cb6ed7cb104fa7835ef644667586ff0737adeb977c39ecdbc"
+    },
+    {
+      "path": "plugins/org.jsoup_1.19.1.jar",
+      "size": 472999,
+      "sha256": "7b850eb00f2f77f606a343b2e4effe4107f3c1faa183729d85fbe16baf606096"
+    },
+    {
+      "path": "plugins/org.junit_4.13.2.v20240929-1000.jar",
+      "size": 426304,
+      "sha256": "62f9c996330614c3fce34abf18f4226b11b1ef646ba735cb1089b463a5ba15af"
+    },
+    {
+      "path": "plugins/org.objectweb.asm.commons_9.10.1.jar",
+      "size": 74840,
+      "sha256": "6d0abefb7cbf972ea16edb37ec14835372505063a45f976ab7ea889ed9497895"
+    },
+    {
+      "path": "plugins/org.objectweb.asm.tree.analysis_9.10.1.jar",
+      "size": 35140,
+      "sha256": "dede75a21306b65974ecd8f87114ff6970f09fb794157a4ca09ab25c888c2bfc"
+    },
+    {
+      "path": "plugins/org.objectweb.asm.tree_9.10.1.jar",
+      "size": 51958,
+      "sha256": "3dfb0d5b6a106cd40b5b250e39935fbf2f927f4477546a5369a3ac609cf0506b"
+    },
+    {
+      "path": "plugins/org.objectweb.asm.util_9.10.1.jar",
+      "size": 95628,
+      "sha256": "1bb99d091fba2597dc6d51193e9bbcf0d8447e7ed96bd8f0198b18152f09655c"
+    },
+    {
+      "path": "plugins/org.objectweb.asm_9.10.1.jar",
+      "size": 126151,
+      "sha256": "ed825d10ab1399c8c0cb669e688cf0c8c82629b4c8399b58352b68e92ca10fcb"
+    },
+    {
+      "path": "plugins/org.osgi.service.component_1.5.1.202212101352.jar",
+      "size": 66447,
+      "sha256": "0653852deab5c6f6e9c84e3aa8f72e72b9ce7dfaf7a6431f3d80f6f9d7a433ad"
+    },
+    {
+      "path": "plugins/org.osgi.service.prefs_1.1.2.202109301733.jar",
+      "size": 20165,
+      "sha256": "43c7c870710e363405d422da653cce0d798a4537f76e4930f79bceadd3a55345"
+    },
+    {
+      "path": "plugins/org.osgi.util.function_1.2.0.202109301733.jar",
+      "size": 23641,
+      "sha256": "208819c7c71690c15a6bb8b187474e7f9d0147946b680182a62b9f222ae014ec"
+    },
+    {
+      "path": "plugins/org.osgi.util.promise_1.3.0.202212101352.jar",
+      "size": 85659,
+      "sha256": "7053c57e7d7d88fec6b90979a3af125e1d2bb847268a328a2f1ed65ad0a4c185"
+    },
+    {
+      "path": "plugins/slf4j.api_2.0.18.jar",
+      "size": 69982,
+      "sha256": "44508fd1576500688c790b190acdd16fec4f8c79a3e0b900afd70503cf055f55"
+    },
+    {
+      "path": "plugins/wrapped.com.jetbrains.intellij.java.java-decompiler-engine_253.29346.240.jar",
+      "size": 940444,
+      "sha256": "1a0e48220efd35b458cb1ec90fc0044022c573ce8182fda5fcb0c55206d5b8ce"
+    },
+    {
+      "path": "plugins/wrapped.com.vladsch.flexmark.flexmark-ext-emoji_0.64.8.jar",
+      "size": 98641,
+      "sha256": "1135ca3863018fc03f98a5c656e8e4540d5442f067d10586c603876ab0095e3b"
+    },
+    {
+      "path": "plugins/wrapped.com.vladsch.flexmark.flexmark-ext-gfm-strikethrough_0.64.8.jar",
+      "size": 24325,
+      "sha256": "c622f360096204a63578b7350705991c7c030ab2ae5f2f9642b1821c358c7aaa"
+    },
+    {
+      "path": "plugins/wrapped.com.vladsch.flexmark.flexmark-ext-ins_0.64.8.jar",
+      "size": 12453,
+      "sha256": "d7b50c0e7d117a9c0c802d6bf2ad5a1e127af280f294bdcb29e4b15e31bc7d6f"
+    },
+    {
+      "path": "plugins/wrapped.com.vladsch.flexmark.flexmark-ext-superscript_0.64.8.jar",
+      "size": 12938,
+      "sha256": "dabef0631e2379654dd354cf61a4b8e8196f6a28009c41df5441352ecb1e2d9a"
+    },
+    {
+      "path": "plugins/wrapped.com.vladsch.flexmark.flexmark-ext-tables_0.64.8.jar",
+      "size": 48708,
+      "sha256": "ebc3452c61ae24fdbb7f7828a1aa84c0ac7807ab455dcaa361db766e53dcea52"
+    },
+    {
+      "path": "plugins/wrapped.com.vladsch.flexmark.flexmark-ext-wikilink_0.64.8.jar",
+      "size": 31081,
+      "sha256": "705a338bc9e9bf61f96fb72a6b12a70ecc95a84cb9e367cd302acf3bbd50fded"
+    },
+    {
+      "path": "plugins/wrapped.com.vladsch.flexmark.flexmark-html2md-converter_0.64.8.jar",
+      "size": 82996,
+      "sha256": "12d881a35b2ff8ed930c24108eacdae8649bb8226d3cf9b9003193d2ba0101ed"
+    },
+    {
+      "path": "plugins/wrapped.com.vladsch.flexmark.flexmark-jira-converter_0.64.8.jar",
+      "size": 12876,
+      "sha256": "de2e993095d26d01d622edf49c564d1ac650ba64c4df46f74dbd4c4df8a91100"
+    },
+    {
+      "path": "plugins/wrapped.com.vladsch.flexmark.flexmark-util-ast_0.64.8.jar",
+      "size": 67308,
+      "sha256": "03cb9aa7f4a26583fa908d804e874e6bec119f5a38cde93ceaccdc033b54a7a8"
+    },
+    {
+      "path": "plugins/wrapped.com.vladsch.flexmark.flexmark-util-builder_0.64.8.jar",
+      "size": 5788,
+      "sha256": "3200a8e776a16987fcacf58ac1e6f867feb71b19ddc8e5a47c58b567791afb2e"
+    },
+    {
+      "path": "plugins/wrapped.com.vladsch.flexmark.flexmark-util-collection_0.64.8.jar",
+      "size": 68044,
+      "sha256": "1688dd9fe10bbd74a00530fd7bb080be90762444d970ddff99d670423f9b476f"
+    },
+    {
+      "path": "plugins/wrapped.com.vladsch.flexmark.flexmark-util-data_0.64.8.jar",
+      "size": 25964,
+      "sha256": "beb7a5b1ff99361bd3081fcc8f5399b3ad44c2e22e60318c14a5310cd169a07f"
+    },
+    {
+      "path": "plugins/wrapped.com.vladsch.flexmark.flexmark-util-dependency_0.64.8.jar",
+      "size": 17131,
+      "sha256": "b248aa574c39ea1fcdcc58bb02dfee9c835eccbfc336cf1472de7a4d3d969de8"
+    },
+    {
+      "path": "plugins/wrapped.com.vladsch.flexmark.flexmark-util-format_0.64.8.jar",
+      "size": 111484,
+      "sha256": "3a926be1a7788d03b4fdfd85788ee76ff62246d48349efef1983f13412c1b1c9"
+    },
+    {
+      "path": "plugins/wrapped.com.vladsch.flexmark.flexmark-util-html_0.64.8.jar",
+      "size": 45423,
+      "sha256": "a08d0a77f98e0baab8a1f0de6933af614b08f2c82f508990a061a4b122050a3c"
+    },
+    {
+      "path": "plugins/wrapped.com.vladsch.flexmark.flexmark-util-misc_0.64.8.jar",
+      "size": 60547,
+      "sha256": "65f8139f44d03243e8d53d81d739e9cacff609c6d423002af8bd5eec241577e0"
+    },
+    {
+      "path": "plugins/wrapped.com.vladsch.flexmark.flexmark-util-options_0.64.8.jar",
+      "size": 12498,
+      "sha256": "8d46c7d570aded9e775598a3eba244ea2035a2fa64d106a4d6e30cb990bf1a63"
+    },
+    {
+      "path": "plugins/wrapped.com.vladsch.flexmark.flexmark-util-sequence_0.64.8.jar",
+      "size": 239124,
+      "sha256": "d94b8d5c14868d1b54d4e5e1c15ceab25ad5f34df0e7593d9b56f54caa979e07"
+    },
+    {
+      "path": "plugins/wrapped.com.vladsch.flexmark.flexmark-util-visitor_0.64.8.jar",
+      "size": 7278,
+      "sha256": "fe02f0a6b4f0334f5d061c0b2d232c6135f262c4b0e886a937f5605a436518ba"
+    },
+    {
+      "path": "plugins/wrapped.com.vladsch.flexmark.flexmark-util_0.64.8.jar",
+      "size": 2154,
+      "sha256": "345ed4a20006d18abaaface894deb75e915cf9b1ba4530cf2e9a0026775bebcb"
+    },
+    {
+      "path": "plugins/wrapped.com.vladsch.flexmark.flexmark_0.64.8.jar",
+      "size": 451880,
+      "sha256": "cdde0d2dd5e9965b023fa246cd5ce5240fe5fc578832968dbefefb43d13c2f3e"
+    },
+    {
+      "path": "plugins/wrapped.org.jetbrains.annotations_24.0.1.jar",
+      "size": 32570,
+      "sha256": "3e8e96e43b456d01d7ee08e8c043e6efbceb438a13e774d3b1dbc13941d3a24a"
+    }
+  ],
+  "configurations": {
+    "config_linux": {
+      "path": "config_linux/config.ini",
+      "size": 7946,
+      "sha256": "0591b9ca41a83b3d9fa4bcb36c83361bb287a63438fe665292e758bdc3e536a7"
+    },
+    "config_linux_arm": {
+      "path": "config_linux_arm/config.ini",
+      "size": 7947,
+      "sha256": "f3a00e56f5cb7b974e4eaf7215ec27a470b82f497ee5ea40297372fc4785cf8b"
+    },
+    "config_mac": {
+      "path": "config_mac/config.ini",
+      "size": 7952,
+      "sha256": "6334ec5dc504c99e8fa4a0eb1782afef5a80d905a89f47dd65227d30c6c04247"
+    },
+    "config_mac_arm": {
+      "path": "config_mac_arm/config.ini",
+      "size": 7953,
+      "sha256": "41807bb9e8b31fa3585b50f93c22b4b358611b4f31490954d085161f9f95535c"
+    },
+    "config_ss_linux": {
+      "path": "config_ss_linux/config.ini",
+      "size": 5838,
+      "sha256": "471f61b9dd9c42ba024a29c229d91ea637e969102f83620c5a8aa55c38615a5c"
+    },
+    "config_ss_linux_arm": {
+      "path": "config_ss_linux_arm/config.ini",
+      "size": 5839,
+      "sha256": "5ecd0eafb38ddc94d450ab6792d76f66003f8f3a928ade76d20e91190cf3f53d"
+    },
+    "config_ss_mac": {
+      "path": "config_ss_mac/config.ini",
+      "size": 5844,
+      "sha256": "708839d7439faa9b1f5ef38fd66977aca86aa2f7b800d98347982a6be2d849b4"
+    },
+    "config_ss_mac_arm": {
+      "path": "config_ss_mac_arm/config.ini",
+      "size": 5845,
+      "sha256": "ac398337717b675788a2d5a962cde9cd4fd57550542471a2bf1f3cf87eb6a626"
+    },
+    "config_ss_win": {
+      "path": "config_ss_win/config.ini",
+      "size": 5837,
+      "sha256": "217080b4d8d9dbe14f006244d28164485887cd1aeaa8a8e80e42ad92af4c6c3d"
+    },
+    "config_win": {
+      "path": "config_win/config.ini",
+      "size": 7945,
+      "sha256": "da95ae9aa8a8c493acef1a561db053a93c2ee99c0d4bfb9c5534a4031c82b098"
+    }
+  }
+}

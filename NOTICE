@@ -15,9 +15,25 @@ copied into the package next to the component:
   Microsoft vscode-java-test    MIT License
     (JUnit runner and plugin)   https://github.com/microsoft/vscode-java-test
 
-The package does not include the Eclipse JDT Language Server or a Java
-runtime. The plugin runs the JDT LS installation and the JDK the user installs
-(https://download.eclipse.org/jdtls/, Eclipse Public License 2.0).
+The plugin ZIP does not contain the Eclipse JDT Language Server or a Java
+runtime. The host reuses compatible installations or downloads the following
+pinned dependencies into separate managed state, preserving their upstream
+license and notice files:
+
+  Eclipse JDT Language Server 1.61.0
+    Eclipse Public License 2.0; included components retain their own licenses
+    https://github.com/eclipse-jdtls/eclipse.jdt.ls
+    https://download.eclipse.org/jdtls/milestones/1.61.0/
+  Microsoft Build of OpenJDK 25.0.5.0.2 (full JDK)
+    GNU General Public License, version 2, with the Classpath Exception;
+    included components retain their own notices
+    https://learn.microsoft.com/java/openjdk/download
+    https://learn.microsoft.com/java/openjdk/faq
+    https://github.com/microsoft/openjdk-jdk25u/tree/release/jdk-25.0.5.0.2_1
+
+The managed dependency versions, immutable URLs and SHA-256 checksums are
+recorded in io.github.lithe-idea.java-support/plugin.json. This Apache License
+for the plugin does not replace the licenses of those dependencies.
 
 The icons java.svg and java_dark.svg in
 io.github.lithe-idea.java-support/icons/ come from the JetBrains IntelliJ Platform

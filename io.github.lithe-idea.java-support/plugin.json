@@ -4,14 +4,143 @@
   "displayName": "Java Support",
   "version": "4.0.2",
   "pluginAPIVersion": 0,
-  "requires": {"backend": 0, "debugAdapters": 0, "languages": 0, "languageServers": 0, "pluginFunctions": 0, "settings": 0, "projectGenerators": 0, "toolDefinitions": 0, "sourceSettings": 1},
+  "requires": {"backend": 0, "debugAdapters": 0, "languages": 0, "languageServers": 0, "pluginFunctions": 0, "settings": 0, "projectGenerators": 0, "toolDefinitions": 0, "sourceSettings": 1, "managedRuntimes": 0},
+  "managedRuntimes": {
+    "resolve": {
+      "function": "java.resolveRuntimes",
+      "timeoutMilliseconds": 30000
+    },
+    "dependencies": [
+      {
+        "id": "jdk",
+        "version": "25.0.5.0.2",
+        "tool": "jdtls-runtime",
+        "artifacts": [
+          {
+            "os": "linux",
+            "arch": "arm64",
+            "url": "https://download.visualstudio.microsoft.com/download/pr/14450a49-85cd-4a91-aae1-73533f29b50f/da3e0632472c574335f779d20fa96bda/microsoft-jdk-25.0.5.0.2-linux-aarch64.tar.gz",
+            "sha256": "c0551fe6c3ea5b3244b74a275562bff128ae96563b0e13303597ccba72d15fa5",
+            "archive": "tar.gz",
+            "stripPrefix": "jdk-25.0.5.0.2+1",
+            "home": "",
+            "executable": "bin/java"
+          },
+          {
+            "os": "linux",
+            "arch": "x86_64",
+            "url": "https://download.visualstudio.microsoft.com/download/pr/14450a49-85cd-4a91-aae1-73533f29b50f/fc1ef3012ee520e0c6c9663e30c9dc34/microsoft-jdk-25.0.5.0.2-linux-x64.tar.gz",
+            "sha256": "173e8e4286289335b422b591c88a1f553fc44c701a876a7c8dd29037a598fc14",
+            "archive": "tar.gz",
+            "stripPrefix": "jdk-25.0.5.0.2+1",
+            "home": "",
+            "executable": "bin/java"
+          },
+          {
+            "os": "macos",
+            "arch": "arm64",
+            "url": "https://download.visualstudio.microsoft.com/download/pr/14450a49-85cd-4a91-aae1-73533f29b50f/9664b951f4e9f908d29d89bb749e453d/microsoft-jdk-25.0.5.0.2-macos-aarch64.tar.gz",
+            "sha256": "c9cf199844411c8bafd05722d2547538300523a63ff6207a440c71b175ff7873",
+            "archive": "tar.gz",
+            "stripPrefix": "jdk-25.0.5.0.2+1",
+            "home": "Contents/Home",
+            "executable": "bin/java"
+          },
+          {
+            "os": "macos",
+            "arch": "x86_64",
+            "url": "https://download.visualstudio.microsoft.com/download/pr/14450a49-85cd-4a91-aae1-73533f29b50f/146488b930fd4721e6553826415e3d50/microsoft-jdk-25.0.5.0.2-macos-x64.tar.gz",
+            "sha256": "e92259d25beacd96b6446edbf769f1d96beca706d486ddd34a25c9166befa05b",
+            "archive": "tar.gz",
+            "stripPrefix": "jdk-25.0.5.0.2+1",
+            "home": "Contents/Home",
+            "executable": "bin/java"
+          },
+          {
+            "os": "windows",
+            "arch": "arm64",
+            "url": "https://download.visualstudio.microsoft.com/download/pr/d3500af4-89c2-41c0-9a46-fae21d52f60b/4d925698e1db1bae2554b2e89c5e2399/microsoft-jdk-25.0.5.0.2-windows-aarch64.zip",
+            "sha256": "f227cc459fbd65a42c1b28123d68e207eb500899c1c78238f21a038cd33688a3",
+            "archive": "zip",
+            "stripPrefix": "jdk-25.0.5.0.2+1",
+            "home": "",
+            "executable": "bin/java.exe"
+          },
+          {
+            "os": "windows",
+            "arch": "x86_64",
+            "url": "https://download.visualstudio.microsoft.com/download/pr/d3500af4-89c2-41c0-9a46-fae21d52f60b/dbca35c699765b2a740ca73973a92715/microsoft-jdk-25.0.5.0.2-windows-x64.zip",
+            "sha256": "5da7525c8268a10a66bd76a39f4e9af24d4ebc974d42800a609852c498a68460",
+            "archive": "zip",
+            "stripPrefix": "jdk-25.0.5.0.2+1",
+            "home": "",
+            "executable": "bin/java.exe"
+          }
+        ]
+      },
+      {
+        "id": "jdtls",
+        "version": "1.61.0",
+        "artifacts": [
+          {
+            "os": "linux",
+            "arch": "arm64",
+            "url": "https://download.eclipse.org/jdtls/milestones/1.61.0/jdt-language-server-1.61.0-202609031315.tar.gz",
+            "sha256": "338e7e73d61836651ba2453919a0d34fa763eb4e7c03342092309bffb8934c64",
+            "archive": "tar.gz",
+            "home": ""
+          },
+          {
+            "os": "linux",
+            "arch": "x86_64",
+            "url": "https://download.eclipse.org/jdtls/milestones/1.61.0/jdt-language-server-1.61.0-202609031315.tar.gz",
+            "sha256": "338e7e73d61836651ba2453919a0d34fa763eb4e7c03342092309bffb8934c64",
+            "archive": "tar.gz",
+            "home": ""
+          },
+          {
+            "os": "macos",
+            "arch": "arm64",
+            "url": "https://download.eclipse.org/jdtls/milestones/1.61.0/jdt-language-server-1.61.0-202609031315.tar.gz",
+            "sha256": "338e7e73d61836651ba2453919a0d34fa763eb4e7c03342092309bffb8934c64",
+            "archive": "tar.gz",
+            "home": ""
+          },
+          {
+            "os": "macos",
+            "arch": "x86_64",
+            "url": "https://download.eclipse.org/jdtls/milestones/1.61.0/jdt-language-server-1.61.0-202609031315.tar.gz",
+            "sha256": "338e7e73d61836651ba2453919a0d34fa763eb4e7c03342092309bffb8934c64",
+            "archive": "tar.gz",
+            "home": ""
+          },
+          {
+            "os": "windows",
+            "arch": "arm64",
+            "url": "https://download.eclipse.org/jdtls/milestones/1.61.0/jdt-language-server-1.61.0-202609031315.tar.gz",
+            "sha256": "338e7e73d61836651ba2453919a0d34fa763eb4e7c03342092309bffb8934c64",
+            "archive": "tar.gz",
+            "home": ""
+          },
+          {
+            "os": "windows",
+            "arch": "x86_64",
+            "url": "https://download.eclipse.org/jdtls/milestones/1.61.0/jdt-language-server-1.61.0-202609031315.tar.gz",
+            "sha256": "338e7e73d61836651ba2453919a0d34fa763eb4e7c03342092309bffb8934c64",
+            "archive": "tar.gz",
+            "home": ""
+          }
+        ]
+      }
+    ]
+  },
   "requiresTools": ["java", "jdtls-runtime"],
   "vendor": {
     "id": "io.github.lithe-idea",
     "displayName": "Lithe Community",
     "signatureRequirement": "none"
   },
-  "permissions": ["backend.launch", "documents.contentProvider", "documents.read", "editor.actions", "languageServer.launch", "languageServer.request", "project.generate", "debug.launch", "debug.attach", "debug.start", "run.start", "window.messages", "workspace.metadata"],
+  "permissions": ["backend.launch", "runtimes.install", "documents.contentProvider", "documents.read", "editor.actions", "languageServer.launch", "languageServer.request", "project.generate", "debug.launch", "debug.attach", "debug.start", "run.start", "window.messages", "workspace.metadata"],
   "activationEvents": ["onLanguage:java", "onDebug:java"],
   "toolDefinitions": [
     {
@@ -322,7 +451,7 @@
         "arguments": [
           "-version"
         ],
-        "pattern": "version \\\"((?:2[1-9]|[3-9]\\d|\\d{3,})(?:\\.\\d+)*)"
+        "pattern": "version \\\"(25(?:\\.\\d+)*)[+_\\-\\\"]"
       },
       "homeLayouts": [
         {
@@ -476,18 +605,6 @@
           "platforms": [
             "linux"
           ]
-        },
-        {
-          "root": {
-            "kind": "home"
-          },
-          "pattern": ".vscode/extensions/redhat.java-*/jre/*"
-        },
-        {
-          "root": {
-            "kind": "home"
-          },
-          "pattern": ".cursor/extensions/redhat.java-*/jre/*"
         }
       ],
       "commands": [
@@ -601,7 +718,7 @@
       "id": "languageServerHome",
       "type": "directory",
       "title": "Language server folder",
-      "description": "Folder of the Eclipse JDT Language Server, the one that contains plugins and the config folders. Leave empty to find JDT LS installed with Homebrew, mason.nvim, Scoop or the VS Code Java extension, or through JDTLS_HOME or jdtls on PATH.",
+      "description": "Optional folder of the verified Eclipse JDT Language Server 1.61.0. Leave empty to reuse a compatible installation or let Lithe prepare the pinned server and its separate Java 25 runtime. This does not change the project JDK.",
       "default": "",
       "placeholder": "Automatic",
       "page": {

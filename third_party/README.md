@@ -1,24 +1,21 @@
 # 第三方输入
 
-`third_party/` 只记录插件包需要的上游输入，每个组件一个 `manifest.json`：上游版本、HTTPS 下载地址和 SHA-256。
+插件包和独立运行环境均使用固定上游版本、HTTPS 地址和 SHA-256。仓库只保存清单、许可证和运行环境文件指纹，不提交上游发布二进制。
 
 | 清单 | 内容 | 使用者 |
 | --- | --- | --- |
-| `jdtls/manifest.json` | 随包的 Lombok、java-debug、vscode-java-test 扩展，以及测试用 Eclipse JDT Language Server 的版本、下载地址和 SHA-256；`minimumJavaVersion` 是运行 JDT LS 的最低 Java 版本，与后端的 `MINIMUM_SERVER_JAVA_VERSION` 一致 | `scripts/prepare-jdtls.sh` |
+| `jdtls/manifest.json` | Eclipse JDT LS 1.61.0、Lombok、java-debug、vscode-java-test 的固定下载输入；`minimumJavaVersion: 21` 是这个上游 JDT LS 的实际最低 Java 版本 | `scripts/prepare-jdtls.sh`、扩展打包、真实服务器测试 |
+| `jdtls/runtime-files.json` | 该 JDT LS 原始归档的所有 114 个插件文件及五个平台配置模板的大小与 SHA-256 | `java.resolveRuntimes` 和启动前兼容性检查 |
+| `../io.github.lithe-idea.java-support/plugin.json` 的 `managedRuntimes` | 与上述清单一致的 JDT LS 及六个平台完整 Microsoft JDK 25.0.5.0.2 的下载锁 | 宿主通用运行环境安装器 |
 
-插件包不带 JDT LS 和 JDK：插件运行用户自己安装的 JDT LS 和 JDK 21+（`backend/src/jdtls.rs`）。清单里的 JDT LS
-只用于构建和测试：组装时据它的 `plugins/` 剔除 JDT LS 已自带的 Java Test 扩展包，集成测试把它当作用户的安装来启动。
+语言服务选择完整 JDK 25 是本插件的验证策略，不把 JDT LS 1.61.0 的上游最低要求误写成 25。项目的 JDK 和 source/target/release 与它分开。插件 ZIP 不包含 JDT LS / JDK；宿主安装时先检查可复用的外部或缓存安装，仅下载缺失依赖。
 
-规则：
+构建脚本把下载物放在被忽略的 `.artifacts/`，先校验 SHA-256 再使用。组装时用固定 JDT LS 的 `plugins/` 剔除它已包含的 Java Test 扩展包，并检查运行环境文件指纹一致。随包第三方许可证从上游复制，`NOTICE` 列出许可。运行环境按完整上游归档安装，保留其许可证与第三方 notices。
 
-- 下载物放在被 `.gitignore` 忽略的 `.artifacts/` 下，先校验 SHA-256 再使用；缓存校验失败时删除重下。
-  不要把 jar、JDK 或其他发布二进制提交到仓库。
-- 升级组件时同时改版本、地址和 SHA-256，并在 PR 里写明上游发布页。`cargo test` 会检查每个地址都是
-  HTTPS、每个校验和都是小写 SHA-256（`backend/tests/repository_pins.rs`）。
-- 插件包里的第三方许可证由组装脚本从上游包复制，`scripts/verify-package.sh` 检查它们存在；仓库根目录的
-  `NOTICE` 列出全部组件和许可。
+升级某个依赖时同时更新版本、不可变地址、SHA-256；JDT LS 还需更新运行环境 profile 与扩展兼容性验证，不因最新版本的下载可用就自动升级。对已校验解包目录执行：
 
-> English: `third_party/` pins every upstream input of the plugin package, and the JDT LS release the tests run as
-> the user's installation, by version, HTTPS URL and SHA-256.
-> The prepare scripts download into the ignored `.artifacts/` directory and verify the checksum before use; no
-> upstream binaries are committed. `backend/tests/repository_pins.rs` checks the pins.
+```sh
+node scripts/package/jdtls-runtime-profile.mjs .artifacts/jdtls --write
+```
+
+该命令只用于已审查的上游 pin 更新。正常 `prepare-jdtls.sh` 会比较而不会重写 profile。`backend/tests/repository_pins.rs` 检查 HTTPS、摘要格式、六平台覆盖、配置目录和 JDT LS 清单的一致性。上游来源和验证边界见 [运行环境说明](../docs/managed-runtimes.md)。

@@ -12,7 +12,7 @@ import {spawnSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {setTimeout as delay} from 'node:timers/promises';
 import {Client} from '../package/lsp-client.mjs';
-import {serverInputs,answeredExecutable} from '../package/jdtls-test-inputs.mjs';
+import {serverInputs,answeredExecutable,preparedRuntimes} from '../package/jdtls-test-inputs.mjs';
 const pkg=resolve(process.argv[2]??'.artifacts/package/arm64/io.github.lithe-idea.java-support');
 const manifest=JSON.parse(readFileSync(join(pkg,'plugin.json')));
 const stage=realpathSync.native(mkdtempSync(join(tmpdir(),'lithe-java-native-')));
@@ -46,7 +46,8 @@ try{
  };
  backend=new Client(join(pkg,manifest.backend.launch.path),[],{hostRequests});
  await backend.request('initialize',{processId:process.pid,rootUri:pathToFileURL(root).href,capabilities:{experimental:{litheFunctions:{versions:[0]},litheLogging:{versions:[0]}}}});backend.notify('initialized',{});
- const params={serverID:'java',platform:{os:{darwin:'macos',win32:'windows'}[process.platform]??process.platform,arch:process.env.LITHE_TEST_ARCH??(process.arch==='arm64'?'arm64':'x86_64')},settings:{logLevel:'WARNING',languageServerHome:inputs.home},tools:{...inputs.tools,...projectJava()}};
+ const params={serverID:'java',platform:{os:{darwin:'macos',win32:'windows'}[process.platform]??process.platform,arch:process.env.LITHE_TEST_ARCH??(process.arch==='arm64'?'arm64':'x86_64')},settings:{logLevel:'WARNING'},tools:{...inputs.tools,...projectJava()}};
+ params.runtimes=await preparedRuntimes(backend,manifest,params.platform,inputs,`native-${++op}`);
  for(const[key,name]of Object.entries({stateDirectory:'state',workspaceStateDirectory:'workspace-state',logDirectory:'logs',temporaryDirectory:'tmp'})){params[key]=join(stage,name);mkdirSync(params[key]);}
  const launch=await backend.request('lithe/function/invoke',{functionID:'java.resolveLaunch',operationID:`native-${++op}`,params,context});configuration=launch.workspaceConfiguration;
  server=new Client(answeredExecutable(launch,inputs),launch.arguments,{env:{...process.env,...launch.environment},hostRequests:{'workspace/configuration':p=>p.items.map(item=>item.section?item.section.split('.').reduce((value,key)=>value?.[key],configuration)??null:configuration)}});

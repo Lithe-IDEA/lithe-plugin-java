@@ -1,32 +1,18 @@
 //! Finds the Eclipse JDT Language Server installed on the user's machine.
 //!
-//! The plugin package does not ship JDT LS or a Java runtime for it, the same
-//! way the Go plugin uses the user's own `gopls`: the user installs JDT LS
-//! with a package manager or an editor, and the launch reads its files from
-//! there. The backend only reads that installation. Equinox gets a writable
-//! copy of the installation's `config.ini` under the host's state directory
-//! (`prepare_jdt_configuration_area`), so neither the backend nor JDT LS
-//! writes into the user's installation.
+//! These read-only discovery helpers enumerate external installations. The
+//! managed-runtime hook in [`crate::managed_runtimes`] applies the stricter
+//! pinned-file qualification before reusing one. Missing dependencies are
+//! downloaded by the host into separate state, never into the plugin package.
 //!
-//! # Where the launch looks
+//! The discovery order is `JDTLS_HOME`, a `jdtls` launcher on `PATH`, common
+//! package managers (Homebrew, Linuxbrew, mason.nvim, Scoop), then installed
+//! VS Code Java extensions. An explicit `languageServerHome` is final.
 //!
-//! [`locate`] takes the first installation of these, in order:
-//!
-//! 1. the `languageServerHome` setting. A folder set there is the user's
-//!    explicit choice, so an unusable one fails the launch instead of falling
-//!    back to another installation;
-//! 2. the `JDTLS_HOME` environment variable;
-//! 3. a `jdtls` launcher on `PATH`, resolved through its symbolic links to the
-//!    installation it belongs to;
-//! 4. the folders package managers install JDT LS into (Homebrew, Linuxbrew,
-//!    mason.nvim, Scoop);
-//! 5. the language server inside an installed VS Code Java extension
-//!    (`redhat.java`), newest version first.
-//!
-//! A folder holds an installation when it, or its `libexec/` (Homebrew keeps
-//! the files there), contains exactly one Equinox launcher JAR in `plugins/`
-//! and the `config_<platform>/config.ini` of the host platform. Nothing else
-//! is checked: JDT LS reports a version it cannot run at `initialize`.
+//! [`inspect`] recognizes the basic launcher/configuration layout only. It
+//! does not assert compatibility with the plugin; the managed hook verifies
+//! the complete bundle set and platform template against the pinned archive.
+//! Mutable Equinox configuration is copied into host-provided state.
 
 use lithe_plugin_sdk::PluginError;
 use std::ffi::OsString;

@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 // Builds the plugin's own JDT LS extension bundle (jdtls-extension/project-model)
 // into <destination>/project-model/. It is compiled against the JDT LS release
-// prepared by scripts/prepare-jdtls.sh, the release the tests run; the bundle
-// only uses APIs JDT has kept since its 3.x releases, so a user's newer JDT LS
-// loads it too. The jar is reproducible: entries are sorted and dated
+// prepared by scripts/prepare-jdtls.sh, also pinned for managed installation.
+// Other JDT LS releases need a new compatibility qualification. The jar is
+// reproducible: entries are sorted and dated
 // BUNDLE_DATE, so the same sources and JDK give the same bytes.
 // Usage: node scripts/package/project-model-bundle.mjs <jdtls-home> <jdtls-extensions-dir>
 import { execFileSync } from 'node:child_process';
@@ -16,8 +16,8 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 export const BUNDLE_SOURCE = join(root, 'jdtls-extension/project-model');
 export const BUNDLE_DIRECTORY = 'project-model';
 export const BUNDLE_DATE = '2026-01-01T00:00:00Z';
-// The oldest Java a supported JDT LS runs on is 21; 17 keeps the class files
-// loadable by every JDK the user may still point JDT LS at.
+// Keep the existing extension bytecode baseline; the complete verified
+// language-service environment runs on Java 25.
 const RELEASE = '17';
 
 /** The bundle's jar name, from its manifest's symbolic name and version. */
