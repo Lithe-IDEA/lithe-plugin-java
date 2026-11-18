@@ -58,6 +58,7 @@ pub mod project_model;
 pub mod project_settings;
 pub mod run;
 pub mod settings_session;
+pub mod web_facet;
 
 use crate::launch::LAUNCH_FUNCTION_ID;
 use crate::run::{

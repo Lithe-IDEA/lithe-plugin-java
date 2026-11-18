@@ -51,3 +51,10 @@
 | 项目结构页无头截图 | implemented / verified | — | — | `scripts/compiler/visual.mjs` 渲染真实投影（中英、明暗），截图见 `docs/assets/module-structure/` |
 
 2026-11-17：macOS arm64 本机用 JDT LS 1.61.0 自动化通过。需要宿主声明 `sourceSettings` 1（[1lck/Lithe-IDEA#2087](https://github.com/1lck/Lithe-IDEA/pull/2087)）；原生文件选择器、Windows 与 Linux 结果由实机验收和 CI 补充。
+
+## Eclipse WTP Web Facet 版本编辑
+
+| 能力 | macOS | Windows | Linux | 证据 |
+| --- | --- | --- | --- | --- |
+| Java 项目结构中的 Web Facet 独立原生来源、按 jst.java 限定可选版本、版本读写与修改前 revision 校验；无法安全编辑的 Facet 文件只跳过该来源并上报一次降级 | implemented / verified | implemented / pending | implemented / pending | `backend/src/web_facet.rs` 单元测试；`scripts/compiler/test-module-structure.mjs` 用真实 JDT LS 1.61 覆盖读取、不合规文件、版本限制、保存，以及所有来源和字段 ID 符合 Core 规则；`scripts/compiler/visual.mjs` 在固定宿主上经 Core `ReadSourceSettings` 渲染 Web Facet 页，截图见 `docs/assets/module-structure/web-facet-*.png`。2026-11-18 macOS arm64 本机通过；Linux 由 CI 的同一脚本覆盖；Windows 与原生窗口点按待实机验收 |
+| 编辑 WTP .component、IDEA .iml Web Facet、WTP 服务器配置 | not-implemented | not-implemented | not-implemented | 单文件安全修改，不覆盖其他 IDE 模型 |
