@@ -289,6 +289,131 @@ fn the_users_jdt_ls_runs_on_the_declared_runtime_tool() {
 }
 
 #[test]
+fn settings_and_localizations_fit_within_core_text_limits() {
+    // Core's `plugin-model` rejects settings or l10n descriptions longer than
+    // `MAX_SETTING_TEXT * 4` (480 Unicode scalar values) and labels longer than
+    // `MAX_SETTING_TEXT` (120). Catching this offline prevents shipping a
+    // manifest the host cannot admit.
+    const MAX_SETTING_TEXT: usize = 120;
+    const MAX_DESCRIPTION_TEXT: usize = MAX_SETTING_TEXT * 4;
+
+    let check_text = |value: &str, max: usize, field: &str| {
+        let count = value.chars().count();
+        assert!(
+            !value.trim().is_empty() && count <= max,
+            "{field} must be non-empty and at most {max} characters, got {count}"
+        );
+    };
+
+    let manifest = read_json(&format!("{PLUGIN_ID}/plugin.json"));
+    for setting in manifest["settings"].as_array().unwrap() {
+        let id = text(setting, "id");
+        check_text(
+            text(setting, "title"),
+            MAX_SETTING_TEXT,
+            &format!("{id}.title"),
+        );
+        if let Some(description) = setting.get("description").and_then(Value::as_str) {
+            check_text(
+                description,
+                MAX_DESCRIPTION_TEXT,
+                &format!("{id}.description"),
+            );
+        }
+        for key in ["placeholder", "unit", "section"] {
+            if let Some(value) = setting.get(key).and_then(Value::as_str) {
+                check_text(value, MAX_SETTING_TEXT, &format!("{id}.{key}"));
+            }
+        }
+        if let Some(options) = setting.get("options").and_then(Value::as_array) {
+            for option in options {
+                let option_value = text(option, "value");
+                check_text(
+                    text(option, "title"),
+                    MAX_SETTING_TEXT,
+                    &format!("{id}.options.{option_value}"),
+                );
+            }
+        }
+    }
+    for action in manifest["settingActions"].as_array().unwrap() {
+        let id = text(action, "id");
+        check_text(
+            text(action, "title"),
+            MAX_SETTING_TEXT,
+            &format!("settingActions.{id}.title"),
+        );
+        if let Some(description) = action.get("description").and_then(Value::as_str) {
+            check_text(
+                description,
+                MAX_DESCRIPTION_TEXT,
+                &format!("settingActions.{id}.description"),
+            );
+        }
+    }
+
+    let l10n_dir = repository_root().join(PLUGIN_ID).join("l10n");
+    for entry in fs::read_dir(&l10n_dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+            continue;
+        }
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        let file = read_json(&format!("{PLUGIN_ID}/l10n/{name}"));
+        if let Some(settings) = file.get("settings").and_then(Value::as_object) {
+            for (id, item) in settings {
+                if let Some(description) = item.get("description").and_then(Value::as_str) {
+                    check_text(
+                        description,
+                        MAX_DESCRIPTION_TEXT,
+                        &format!("{name}: settings.{id}.description"),
+                    );
+                }
+                for key in ["title", "placeholder", "unit"] {
+                    if let Some(value) = item.get(key).and_then(Value::as_str) {
+                        check_text(
+                            value,
+                            MAX_SETTING_TEXT,
+                            &format!("{name}: settings.{id}.{key}"),
+                        );
+                    }
+                }
+                if let Some(options) = item.get("options").and_then(Value::as_object) {
+                    for (option_value, option_title) in options {
+                        let option_title = option_title.as_str().unwrap_or_else(|| {
+                            panic!("{name}: settings.{id}.options.{option_value} must be string")
+                        });
+                        check_text(
+                            option_title,
+                            MAX_SETTING_TEXT,
+                            &format!("{name}: settings.{id}.options.{option_value}"),
+                        );
+                    }
+                }
+            }
+        }
+        if let Some(actions) = file.get("settingActions").and_then(Value::as_object) {
+            for (id, item) in actions {
+                if let Some(title) = item.get("title").and_then(Value::as_str) {
+                    check_text(
+                        title,
+                        MAX_SETTING_TEXT,
+                        &format!("{name}: settingActions.{id}.title"),
+                    );
+                }
+                if let Some(description) = item.get("description").and_then(Value::as_str) {
+                    check_text(
+                        description,
+                        MAX_DESCRIPTION_TEXT,
+                        &format!("{name}: settingActions.{id}.description"),
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn third_party_inputs_are_pinned_by_https_url_and_sha256() {
     let relative = "third_party/jdtls/manifest.json";
     let mut pins = 0;

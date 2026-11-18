@@ -545,7 +545,7 @@
       "id": "languageServerHome",
       "type": "directory",
       "title": "Language server folder",
-      "description": "Select the extracted Eclipse JDT Language Server folder containing one plugins/org.eclipse.equinox.launcher_*.jar and the platform config.ini (Windows: config_win; macOS: config_mac or config_mac_arm; Linux: config_linux or config_linux_arm). Download: https://download.eclipse.org/jdtls/milestones/ — verify the published checksum before extracting. Leave empty to discover JDTLS_HOME, jdtls on PATH, package-manager installations or VS Code Java extensions. An explicit folder is never replaced automatically. Separately choose JDK for JDT LS in Settings > Build, Execution, Deployment > Toolchains: Java 21 minimum, Java 25 for JDT LS 1.63+. JDK downloads: https://adoptium.net/temurin/releases/. Keep the project JDK and global PATH unchanged; restart the Java language server after configuring.",
+      "description": "Extracted JDT LS folder with plugins/org.eclipse.equinox.launcher_*.jar and platform config.ini (config_win, config_mac[_arm], config_linux[_arm]). Download: https://download.eclipse.org/jdtls/milestones/ (verify checksum). Leave empty to discover JDTLS_HOME, PATH, package managers, or VS Code; explicit folders are kept. Set \"JDK for JDT LS\" in Toolchains (Java 21+, 25 for 1.63+; https://adoptium.net/temurin/releases/); project JDK stays unchanged.",
       "default": "",
       "placeholder": "Automatic",
       "page": {
