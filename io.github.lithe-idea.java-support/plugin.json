@@ -2,7 +2,7 @@
   "schemaVersion": 0,
   "id": "io.github.lithe-idea.java-support",
   "displayName": "Java Support",
-  "version": "4.0.1",
+  "version": "4.1.0",
   "pluginAPIVersion": 0,
   "requires": {"backend": 0, "debugAdapters": 0, "languages": 0, "languageServers": 0, "pluginFunctions": 0, "settings": 0, "projectGenerators": 0, "toolDefinitions": 0, "sourceSettings": 1},
   "requiresTools": ["java", "jdtls-runtime"],
@@ -509,6 +509,62 @@
       "displayName": "Java",
       "fileExtensions": ["java"],
       "projectFileNames": ["pom.xml", "build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts"]
+    },
+    {
+      "id": "jsp",
+      "displayName": "JavaServer Pages",
+      "fileExtensions": [
+        "jsp",
+        "jspf",
+        "tag",
+        "tagf"
+      ],
+      "grammar": {
+        "kind": "textmate",
+        "path": "grammars/jsp.tmLanguage.json"
+      },
+      "configuration": {
+        "blockComment": [
+          "<%--",
+          "--%>"
+        ],
+        "brackets": [
+          [
+            "{",
+            "}"
+          ],
+          [
+            "[",
+            "]"
+          ],
+          [
+            "(",
+            ")"
+          ]
+        ],
+        "autoClosingPairs": [
+          [
+            "{",
+            "}"
+          ],
+          [
+            "[",
+            "]"
+          ],
+          [
+            "(",
+            ")"
+          ],
+          [
+            "\"",
+            "\""
+          ],
+          [
+            "'",
+            "'"
+          ]
+        ]
+      }
     }
   ],
   "debugAdapters": [

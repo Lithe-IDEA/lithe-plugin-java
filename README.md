@@ -343,3 +343,9 @@ node scripts/package/build-windows.mjs /path/to/lithe-java-backend.exe
 ## Linux ARM64 / x64
 
 Linux 构建、资源归属与原生验证入口见 [Linux 构建与验证](docs/linux-packaging.md)。
+
+## JSP / EL 基础语法（4.1.0）
+
+Java Support 现在声明 `.jsp`、`.jspf`、`.tag`、`.tagf` 为 JSP 文档，并随插件包提供 TextMate 语法，覆盖 JSP 指令、脚本片段、JSP/JSTL 标签、注释、HTML 元素和 `${...}` / `#{...}` EL 表达式。四种扩展名不再依赖 HTML 文件扩展名猜测。
+
+**范围边界：** 这只是轻量的语法着色及括号/注释配置；未实现 JSP/EL 的语义补全、跨文件跳转、诊断、JSP 断点和热部署。Java 的 JDT LS 仍只服务 `.java` 文件。跨平台安装包都必须包含 `grammars/jsp.tmLanguage.json`，回归见 `scripts/package/jsp-grammar.test.mjs`。

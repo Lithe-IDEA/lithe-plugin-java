@@ -52,7 +52,8 @@ for notice in LICENSE NOTICE; do
 done
 node "$ROOT_DIR/scripts/package/collect-notices.mjs" --verify "$PACKAGE"
 
-allowed=(plugin.json bin icons templates l10n jdtls-extensions LICENSE NOTICE licenses)
+allowed=(plugin.json bin icons templates l10n grammars jdtls-extensions LICENSE NOTICE licenses)
+[[ -f "$PACKAGE/grammars/jsp.tmLanguage.json" ]] || fail "JSP TextMate grammar is missing"
 for entry in "$PACKAGE"/*(DN); do
     (( ${allowed[(Ie)${entry:t}]} )) || fail "undeclared top-level entry ${entry:t}"
 done
