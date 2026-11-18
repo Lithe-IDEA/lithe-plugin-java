@@ -1,14 +1,15 @@
 # 功能验证矩阵
 
-## 语言服务器来源（3.0.0）
+## 自动准备语言服务环境（本次改动）
 
 | 能力 | macOS | Windows | Linux | 证据 |
 | --- | --- | --- | --- | --- |
-| 使用用户安装的 JDT LS（设置目录、`JDTLS_HOME`、`PATH` 上的 `jdtls`、Homebrew、mason.nvim、Scoop、VS Code Java 扩展） | implemented / verified | implemented / pending | implemented / pending | `backend/src/jdtls.rs` 单元测试；macOS arm64 本机用 Homebrew JDT LS 1.60.0 和固定的 1.61.0 跑 `scripts/compiler/test-live.mjs`（普通与 Eclipse 工程），核对插件包与 JDT LS 安装文件不变 |
-| 用 `jdtls-runtime` 工具（仅匹配 JDK 21+，含 VS Code / Cursor `redhat.java` 自带 JRE）运行 JDT LS，低于目标 JDT LS bundle 要求的最低 Java 版本（如 21 或 25）时报错 | implemented / verified | implemented / pending | implemented / pending | `backend/src/jdtls.rs`、`backend/src/launch.rs`、`backend/tests/repository_pins.rs` 单元测试；本机 JDK 21、25、26 均已验证，JDK 26 运行 JDT LS 时需宿主传入项目 JDK |
-| 插件包不含 JDT LS 和 JDK | implemented / verified | implemented / pending | implemented / pending | `scripts/verify-package.sh`、`scripts/package/build-linux.mjs`；macOS arm64 包 11.3 MiB |
+| 完整 JDK 25 与固定 JDT LS 分别声明，已有依赖复用，只下载缺失部分 | implemented / pending | implemented / pending | x64 verified；ARM64 pending | `managed_runtimes` 单元测试覆盖四种存在组合；真实宿主安装结果见 [运行环境说明](managed-runtimes.md) |
+| JDT LS 精确 114 文件 + 当前平台模板校验，拒绝混装/残缺；完整 JDK 的版本、OS、CPU、java/javac 执行文件检查 | implemented / pending | implemented / pending | x64 verified；ARM64 pending | 六平台文件布局与 ELF / Mach-O / PE 头单测；Linux 用官方归档及真实 SDK hook |
+| 服务 JDK 25 独立于项目 JDK；显式选择优先，再复用受管缓存，最后自动发现 | implemented / pending | implemented / pending | x64 verified；ARM64 pending | `backend/src/managed_runtimes.rs`、`repository_pins.rs`；真实 launch 只绑定 `jdtls-runtime` |
+| 插件 ZIP 无 JDT LS/JDK；批准的 runtimes map 启动真实 JDT，包/运行环境保持只读 | implemented / pending | implemented / pending | x64 verified；ARM64 pending | `scripts/package/smoke-linux.mjs` 的完整快照与 initialize/shutdown；[Linux 验证](linux-packaging.md) |
 
-2026-11-16：Windows 与 Linux 的原生结果以 CI 和后续实机验证为准，本机结果不能推断。
+2026-11-18：官方完整 JDK 六平台 URL / SHA-256 与归档根目录已核对；实际机器运行仅覆盖 Linux x64，不能用文件头单测或下载可用性宣称其他平台原生通过。Windows ARM64 的运行环境声明不代表已新增 ARM64 宿主或插件发布包。此前 3.0.0 的 macOS 外部 JDT LS 1.60.0 / JDK 21 验证属于旧行为；当前兼容性锁只接收 JDT LS 1.61.0 + 完整 JDK 25。
 
 ## Linux 安装包
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Linux packages carry the JDT LS extensions verified from their pins and a
-// native backend from this source checkout; JDT LS and its JDK are the user's.
+// native backend from this source checkout; the host prepares JDT LS and its JDK separately.
 // All writes are build outputs, never installed files.
 import {execFileSync} from 'node:child_process';
 import {chmodSync,cpSync,mkdirSync,readFileSync,rmSync,mkdtempSync,readdirSync,lstatSync,writeFileSync} from 'node:fs';
@@ -33,7 +33,7 @@ function verify(directory){
  verifyBinary(join(directory,manifest.backend.launch.path),arch,{executable:true});
  if(readdirSync(join(directory,'jdtls-extensions')).sort().join()!==[...packaged].sort().join())throw Error('Unexpected JDT LS extension entries');
  const walk=path=>{for(const name of readdirSync(path)){const file=join(path,name);const s=lstatSync(file);if(s.isSymbolicLink())throw Error(`Package link: ${file}`);
-  // JDT LS and the JDK are the user's; finding either means a build copied it in.
+  // JDT LS and the JDK belong in the managed cache, not in the plugin package.
   if((s.isFile()&&/^org\.eclipse\.equinox\.launcher_.*\.jar$|^java$|^libjvm\.so$/.test(name))||(s.isDirectory()&&/^config_/.test(name)))throw Error(`Package must not contain JDT LS or a JDK: ${file}`);
   if(s.isDirectory())walk(file);}};walk(directory);
  verifyNotices(directory);

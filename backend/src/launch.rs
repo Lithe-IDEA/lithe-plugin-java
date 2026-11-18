@@ -10,12 +10,11 @@
 //!
 //! # Where the files are
 //!
-//! JDT LS itself is not in the package: [`crate::jdtls`] finds the
-//! installation on the machine, the way the Go plugin uses the user's own
-//! `gopls`. The answer runs it with the plugin's `jdtls-runtime` tool
-//! ([`SERVER_RUNTIME_TOOL`]), a JDK the host resolves from the user's choice
-//! and discovery, and refuses one older than
-//! [`MINIMUM_SERVER_JAVA_VERSION`] when the host reports its version.
+//! JDT LS and its JDK live outside the small plugin package. The host prepares
+//! the dependencies declared in `managedRuntimes`; [`crate::managed_runtimes`]
+//! qualifies existing files before any missing dependency is downloaded. The
+//! launch uses that approved server home and the separate `jdtls-runtime`
+//! tool ([`SERVER_RUNTIME_TOOL`]). The project's `java` tool stays independent.
 //!
 //! The package only carries what the plugin adds to JDT LS: the Lombok agent
 //! and the Java Debug and Java Test extension bundles. `resolveParams` carries
@@ -49,9 +48,9 @@
 //! [`settings_session::java_configuration`]: crate::settings_session::java_configuration
 
 use crate::jdtls::{
-    self, SearchEnvironment, ServerInstallation, LAUNCH_SERVER_INVALID, LAUNCH_SERVER_MISSING,
-    SERVER_HOME_SETTING,
+    ServerInstallation, LAUNCH_SERVER_INVALID, LAUNCH_SERVER_MISSING, SERVER_HOME_SETTING,
 };
+use crate::managed_runtimes;
 use crate::project_model::{ModelOptions, ProjectModel};
 use crate::run::file_uri;
 use crate::settings_session::{java_configuration, jdt_settings, SettingsSession, SERVER_ID};
@@ -104,13 +103,13 @@ pub const LAUNCH_ERROR_CODES: &[&str] = &[
 /// JDT LS accepts.
 pub const SERVER_RUNTIME_TOOL: &str = "jdtls-runtime";
 /// Oldest Java feature release JDT LS runs on.
-pub const MINIMUM_SERVER_JAVA_VERSION: u64 = 21;
+pub const MINIMUM_SERVER_JAVA_VERSION: u64 = managed_runtimes::JAVA_FEATURE;
 /// Message of [`LAUNCH_RUNTIME_TOO_OLD`] for [`MINIMUM_SERVER_JAVA_VERSION`].
 ///
 /// TODO(host-api: API-37 i18n): user-facing text must go through the host's
 /// i18n table.
-pub const RUNTIME_TOO_OLD_MESSAGE: &str = "The Eclipse JDT Language Server needs Java 21 or \
-later, but the JDK chosen for it is older. Choose a JDK 21 or later for \"JDK for JDT LS\" in \
+pub const RUNTIME_TOO_OLD_MESSAGE: &str = "The Eclipse JDT Language Server needs Java 25 or \
+later, but the JDK chosen for it is older. Choose a JDK 25 or later for \"JDK for JDT LS\" in \
 Settings > Build, Execution, Deployment > Toolchains.";
 
 /// Message of [`LAUNCH_RUNTIME_TOO_OLD`] for the Java feature release
@@ -254,8 +253,8 @@ pub struct LaunchRequest {
     pub heap_max_mb: u64,
     /// `settings.logLevel`: the JDT LS log level.
     pub log_level: String,
-    /// `settings.languageServerHome`: the JDT LS folder the user chose;
-    /// `None` finds one ([`crate::jdtls::locate`]).
+    /// Explicit `settings.languageServerHome`, otherwise the approved
+    /// `runtimes.jdtls.home`. No launch-time rediscovery can replace it.
     pub server_home: Option<PathBuf>,
     /// `tools["jdtls-runtime"].version`, when the host resolved the JDK that
     /// runs JDT LS and read its version.
@@ -330,6 +329,17 @@ pub fn parse_launch_params(params: &Value) -> Result<LaunchRequest, PluginError>
             }
         },
     };
+    let prepared_home = match params.get("runtimes").and_then(|value| value.get("jdtls")) {
+        None => None,
+        Some(value) => Some(
+            value
+                .get("home")
+                .and_then(Value::as_str)
+                .map(PathBuf::from)
+                .filter(|home| home.is_absolute())
+                .ok_or_else(|| invalid_params("The prepared language server folder is invalid."))?,
+        ),
+    };
     let model_options = crate::project_model::parse_options(&settings).map_err(invalid_params)?;
     Ok(LaunchRequest {
         os: os.to_string(),
@@ -340,7 +350,7 @@ pub fn parse_launch_params(params: &Value) -> Result<LaunchRequest, PluginError>
         temporary_directory: directory(params, "temporaryDirectory")?,
         heap_max_mb,
         log_level: log_level.to_string(),
-        server_home,
+        server_home: server_home.or(prepared_home),
         server_runtime_version: host_tool_version(params, SERVER_RUNTIME_TOOL),
         java_runtimes: jdt_java_runtimes(&host_java_tool(params)),
         model_options,
@@ -726,13 +736,15 @@ pub fn resolve_launch_function(
     context.check_cancelled()?;
     let request = parse_launch_params(&params)?;
     check_server_runtime(&request)?;
-    let server = jdtls::locate_for_runtime(
-        request.server_home.as_deref(),
-        &SearchEnvironment::current(),
-        &request.os,
-        &request.architecture,
-        server_runtime_feature(&request),
-    )?;
+    let home = request
+        .server_home
+        .as_deref()
+        .ok_or_else(managed_runtimes::not_prepared)?;
+    let server =
+        managed_runtimes::inspect_server(home, &request.os, &request.architecture, &|| {
+            context.check_cancelled().map_err(Into::into)
+        })?
+        .ok_or_else(managed_runtimes::incompatible_server)?;
     let package_root = package_root()?;
     let diagnostics = context.diagnostics();
     let operation = context.function_id().to_owned();
@@ -788,6 +800,7 @@ pub fn resolve_launch_function(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::jdtls;
 
     #[test]
     #[cfg(windows)]
@@ -1194,14 +1207,16 @@ mod tests {
     }
 
     #[test]
-    fn a_runtime_older_than_java_21_is_refused_before_anything_is_written() {
+    fn a_runtime_older_than_java_25_is_refused_before_anything_is_written() {
         let fixture = Fixture::new();
         let mut params = fixture.params();
         for (version, accepted) in [
             ("17.0.19", false),
             ("8.0.392", false),
-            ("21", true),
-            ("21.0.9", true),
+            ("21", false),
+            ("21.0.9", false),
+            ("25", true),
+            ("25.0.5.0.2", true),
             ("26.0.2", true),
             ("unknown", true),
         ] {

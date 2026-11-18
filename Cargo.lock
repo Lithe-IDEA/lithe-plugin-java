@@ -397,6 +397,7 @@ dependencies = [
  "libc",
  "lithe-java-domain",
  "lithe-plugin-sdk",
+ "regex",
  "serde_json",
  "sha2",
  "url",

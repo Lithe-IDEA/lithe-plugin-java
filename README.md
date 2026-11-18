@@ -6,9 +6,7 @@
 > （Web App Libraries、EAR Libraries、Server Runtime）、IntelliJ IDEA 的模块与库，以及传统 Web 的 `WEB-INF/lib`，
 > 在内存中补全类路径并自动找到 Tomcat 等 Servlet 容器，不修改项目文件，详见 [docs/project-models.md](docs/project-models.md)。
 >
-> **3.0.0 起使用你自己的 JDT LS**：插件包不再附带 Eclipse JDT Language Server 和运行它的 JDK（包从约 250 MB 降到约 11 MB），
-> 做法和 Go 插件使用你自己的 `gopls` 一样。需要先安装 JDT LS（例如 `brew install jdtls`）和 JDK 21 或更新版本，
-> 详见下文[语言服务器与 JDK](#语言服务器与-jdk)。
+> **自动准备 Java 语言服务环境**：安装时分别检查完整 JDK 25 和固定的 JDT LS 1.61.0，只下载缺少或不兼容的部分。运行环境保存在插件包之外，后续插件更新复用同一份缓存；项目自己的 JDK 独立选择。需要同时支持 `managedRuntimes` 0 的配套 Lithe / Core，详见[语言服务器与 JDK](#语言服务器与-jdk)和[实现与验证](docs/managed-runtimes.md)。
 
 > **Viva 预览版 Java 支持（1.2.0）**：清单已迁到当前契约 0，后端使用 Core
 > `65cf82343c5e315aae2e335b2e8f0217b703e89a` 中的 Rust SDK 0.4.0（尚无对应发布标签）。
@@ -23,12 +21,12 @@
 
 
 [Lithe](https://github.com/1lck/Lithe-IDEA) 的 Java 插件（`io.github.lithe-idea.java-support`）：
-用你电脑上的 Eclipse JDT Language Server，加上随包的 Lombok、java-debug、vscode-java-test 扩展，
+使用自动准备或经校验复用的 Eclipse JDT Language Server，加上随包的 Lombok、java-debug、vscode-java-test 扩展，
 为 Java 项目提供补全、诊断、导航、运行/调试入口、测试运行和 Spring Boot / MyBatis 索引。
 它是普通插件（vendor 为 `Lithe Community`），插件包不带发布者签名。
 
 > English: The Java plugin for Lithe, a regular plugin (vendor `Lithe Community`) whose package carries no publisher
-> signature. It runs your own Eclipse JDT LS on your own JDK 21+, adds the packaged Lombok, java-debug and
+> signature. It prepares the pinned Eclipse JDT LS and a separate full JDK 25, reuses compatible installations, and adds the packaged Lombok, java-debug and
 > vscode-java-test extensions, and provides Java language features, run/debug entry points, test runs and Spring Boot /
 > MyBatis indexes. The Java rules live in a Rust domain crate and a plugin backend built on the published Lithe Rust plugin
 > SDK. Maven and Gradle import settings come from the Maven and Gradle plugins through a function interface that
@@ -53,7 +51,9 @@
 
 `.jsp` 仍按 HTML 打开；Java 补全、跳转和 JSP 源码断点不属于此次新增能力。
 
-## 当前 Viva 验证入口
+## 既有 Viva 工作流验证记录
+
+本节保留此前版本的工作流与性能记录；新的运行环境准备、缓存和平台验收以 [managed-runtimes.md](docs/managed-runtimes.md) 为准。
 
 先用 `scripts/build-package.sh --arch arm64` 与 `scripts/archive-package.sh` 构建真实插件包。
 在包含配套修复的 Lithe 检出中，把 `LITHE_TEST_JAVA_PLUGIN_ARCHIVE` 指向该 ZIP，
@@ -169,7 +169,8 @@ Spring/MyBatis 等既有能力不属于本轮 Maven 验收范围。
 | `documents.read` | 读取当前 Java 文档以收集动作 |
 | `documents.contentProvider` | 提供 JDT 虚拟源码 |
 | `editor.actions` | 注册 Run/Debug 行内动作 |
-| `languageServer.launch` | 启动包内 JDT LS |
+| `languageServer.launch` | 启动经过准备的 JDT LS |
+| `runtimes.install` | 由宿主下载并缓存清单固定来源、固定校验和的语言服务依赖 |
 | `languageServer.request` | JDT 构建、main、测试、类路径和调试扩展请求 |
 | `project.generate` | 既有 Java/Spring Boot 生成器 |
 | `debug.launch`、`debug.attach`、`debug.start` | 声明 java-debug 适配器并经 Run 工作流发起调试 |
@@ -185,7 +186,7 @@ Spring/MyBatis 等既有能力不属于本轮 Maven 验收范围。
 
 | 功能 | 说明 |
 | --- | --- |
-| 语言服务 | 用你电脑上的 JDT LS（加上随包的 Lombok）提供补全、诊断、导航；运行它的 JDK 21+ 和项目自己的 JDK 分别选择 |
+| 语言服务 | 使用固定 JDT LS 1.61.0 和独立的完整 JDK 25；缺失依赖自动准备，已有兼容安装复用；项目 JDK 单独选择 |
 | 运行与调试 | 在 `main` 方法和测试旁显示 Run/Debug 行内动作；点击后后端经 JDT LS 构建并解析类路径，用用户选择的 JDK 通过宿主 Run 窗口启动，调试经 java-debug 连接；当前 Viva 包暂不提供控制台堆栈链接 |
 | 测试 | 发现 JUnit/TestNG 测试项，按类或方法启动 Eclipse JUnit 运行器（TestNG 用 vscode-java-test 运行器），运行结束后显示通过/失败计数 |
 | Spring Boot / MyBatis | 索引 Spring 端点与 MyBatis 映射，支持跳转 |
@@ -194,33 +195,35 @@ Spring/MyBatis 等既有能力不属于本轮 Maven 验收范围。
 
 ## 语言服务器与 JDK
 
-插件包不带 JDT LS，也不带运行它的 JDK，和 Go 插件使用你自己的 `gopls` 一样。需要：
+安装 Java 支持时，宿主先调用插件的只读 `java.resolveRuntimes` 检查两个独立依赖，再下载缺少的部分。插件 ZIP 继续只包含 Rust 后端、配置、Lombok 和 JDT 扩展，不把大型运行环境重复放进每次插件更新。
 
-1. **Eclipse JDT Language Server**。按以下顺序找，优先使用当前 `jdtls-runtime` 可满足其最低 Java 版本要求的安装；若都不满足则落到第一个并报出该安装所需的最低 Java 版本：
-   1. 设置 → 语言与框架 → Java →「语言服务器目录」。选了目录就只用它，目录里没有 JDT LS 时直接报错，不会退回别的安装；
-   2. 环境变量 `JDTLS_HOME`；
-   3. `PATH` 上的 `jdtls` 启动脚本所属的安装（沿符号链接找到真实目录）；
-   4. Homebrew（`/opt/homebrew/opt/jdtls`、`/usr/local/opt/jdtls`）、Linuxbrew、mason.nvim、Scoop 的安装目录；
-   5. VS Code 及其衍生编辑器里 Java 扩展（`redhat.java`）自带的 `server/`，取最新版本。
+| 本机可复用的依赖 | 安装时需要下载 |
+| --- | --- |
+| 完整 JDK 25 和匹配的 JDT LS 1.61.0 | 无 |
+| 只有完整 JDK 25 | JDT LS |
+| 只有匹配的 JDT LS 1.61.0 | 完整 JDK 25 |
+| 两者都缺少或不兼容 | 两者 |
 
-   目录（或其中的 `libexec/`）里要有唯一一个 `plugins/org.eclipse.equinox.launcher_*.jar` 和当前平台的
-   `config_<平台>/config.ini`。安装方式举例：macOS / Linux 用 `brew install jdtls`；也可以从
-   [download.eclipse.org/jdtls](https://download.eclipse.org/jdtls/milestones/) 下载解压，再在设置里选目录。
-   已测试 JDT LS 1.61.0（CI 固定，见 `third_party/jdtls/manifest.json`）和 Homebrew 1.60.0。
-2. **满足目标 JDT LS 要求的 JDK（至少 JDK 21；JDT LS 1.63+ 要求 JDK 25）**，用来运行 JDT LS。它是插件新增的「JDK for JDT LS」工具（`jdtls-runtime`），
-   在设置 → 构建、执行、部署 → 工具链里显示和选择；没选时依次用登录 shell 的 `java`（仅匹配 21 及更新版本，跳过 `PATH` 上的 Java 8/11/17）和找到的最高版本 JDK（含系统 JDK 目录与 VS Code / Cursor `redhat.java` 扩展自带的 `jre/`）。
-   后端会从目标 JDT LS 核心 bundle 的 `MANIFEST.MF`（`Bundle-RequiredExecutionEnvironment`）读取实际最低 Java 版本，低于该版本时启动直接报错并提示去工具链里选择。项目自己的 JDK 是原来的「JDK」工具（`java`），两者互不影响。
-   JDT 只能为它支持的 Java 版本编译：没有为项目选 JDK 时，JDT 用运行它的 JDK 编译，这个 JDK 比 JDT LS 支持的最新 Java 还新时编译会报错。
+默认下载为 **Microsoft Build of OpenJDK 25.0.5.0.2（完整 JDK）**和 **Eclipse JDT LS 1.61.0**。每个平台的固定 HTTPS 地址、SHA-256、解包根目录都在 `plugin.json`；JDT LS 与随包扩展共用 `third_party/jdtls/manifest.json` 的版本基线。没有使用滚动的 latest 下载地址。
 
-找不到 JDT LS 时，语言服务启动失败（`launch.server_missing`），错误信息说明如何安装或去哪里设置。
-宿主当前的 `commandInstallers` 只能安装 `systemCommand` 启动的命令，JDT LS 由插件后端启动，所以还不能像 Go 插件那样在插件详情里一键安装。
+运行环境位于插件的独立 `state/runtimes`，以依赖、版本、平台和校验和识别，与插件版本目录分开。后续更新若依赖 pin 不变，会复用缓存；只修改其中一个依赖时，只准备那个依赖。下载或解包失败不会发布半成品，已经准备好的安装保留。缓存损坏会重新准备；卸载插件会清理它的状态和运行环境。旧运行环境世代暂不自动清理，避免影响仍在运行的进程和失败回滚。
+
+仍可手动选择安装：
+
+- **JDT LS**：设置 → 语言与框架 → Java →「语言服务器目录」。显式选择会检查完整 bundle 集合与当前平台配置的 SHA-256，必须匹配本插件验证的 1.61.0。目录不兼容时直接提示修正，不会忽略设置。留空时先复用缓存，再检查 `JDTLS_HOME`、`PATH`、Homebrew、Linuxbrew、mason.nvim、Scoop 和 VS Code Java 扩展中的服务器；这些位置找到的其他版本不会被当作兼容版本。
+- **运行 JDT LS 的 JDK**：工具链中的「JDK for JDT LS」（`jdtls-runtime`）。必须是当前平台的完整 JDK 25，包含可执行的 `java`、`javac`、模块镜像和 `jmods`；JRE、早期访问版本、其他大版本和不完整安装不能复用。自动准备只绑定此工具，不设置全局 `JAVA_HOME`。
+- **项目 JDK**：原有「JDK」（`java`）继续独立选择，项目仍可使用 Java 8、11、17、21 等受项目构建支持的版本。选择语言服务 JDK 25 不会修改项目的 source/target/release、Maven/Gradle 设置或运行 JDK。未选择项目 JDK 时，JDT 自身的默认行为仍可能使用服务 JDK；旧项目应明确选择项目运行环境。
+
+首次准备需要访问清单中的官方下载源；环境齐全后不再为启动语言服务联网。Maven/Gradle 项目依赖的下载仍由各自工具和设置控制。自动配齐环境解决启动依赖缺失、路径与版本混装等问题；它不能自动修复错误的项目模型、私有仓库认证、项目依赖或上游 JDT 兼容性缺陷。
+
+六个平台都有官方完整 JDK 下载声明；这不代表六个平台的插件都已实机验收。Windows ARM64 原生插件包仍以宿主和后端发布支持为前提，见[验证矩阵](docs/feature-matrix.md)。
 
 ## 工作方式
 
 - Java 专属的 URI、JDT 初始化、编译/运行/调试和长 classpath 规划属于本插件及成熟上游；宿主只提供通用服务。
   Maven / Gradle 自己解析配置，通过 `languageImport.settings` 接口提供 JDT 导入设置，Java 不维护第二套构建模型。
-- `backend/src/jdtls.rs` 找到你安装的 JDT LS，`backend/src/launch.rs` 加上随包的 Lombok、java-debug、java-test，
-  用 `jdtls-runtime` 工具（JDK 21+）启动它。宿主传入用户所选项目 JDK 的安装事实，插件据此设置 JDT 运行时；
+- `backend/src/managed_runtimes.rs` 校验并选择依赖，宿主负责缺失依赖的下载和原子安装；`backend/src/launch.rs` 使用批准的运行环境映射，加上随包的 Lombok、java-debug、java-test，
+  用独立的 `jdtls-runtime` 工具（完整 JDK 25）启动它。宿主传入用户所选项目 JDK 的安装事实，插件据此设置 JDT 运行时；
   运行 JDT LS 的 JDK 不代替项目的目标版本。
 - 初始化就绪不等于索引完成。JDT 公开的 `progressReportProvider` 扩展将完成事件发到已声明的
   `language/progressReport` 通道。只有动作查询发生瞬态失败才在完成边界刷新；同时处理完成与超时倒序，
@@ -228,7 +231,7 @@ Spring/MyBatis 等既有能力不属于本轮 Maven 验收范围。
 - Windows 使用原生 `java.exe`，文件 URI 由 `url` crate 处理，包路径通过 `dunce` 去除可安全简化的 verbatim 前缀，
   避免 Lombok 的 `-javaagent` 加载失败。过长 classpath 复用领域层的 manifest JAR 规划，适用于 Java 8 及更新版本；
   ASCII 百分号编码覆盖中文/空格，宿主写入临时 JAR 并在运行结束删除。长 module-path 尚未覆盖。
-- 已安装插件包和你的 JDT LS 安装始终只读。JDT 配置副本（从安装里的 `config_<平台>/config.ini` 复制）、索引、日志、锁和临时文件
+- 已安装插件包、JDT LS 和完整 JDK 安装始终只读。JDT 配置副本（从安装里的 `config_<平台>/config.ini` 复制）、索引、日志、锁和临时文件
   写到宿主提供的用户状态/缓存/临时目录；插件包、JDT LS 安装、app bundle 和 Windows 安装目录不作为可写目标。
   随包扩展在构建期固定来源、校验哈希，运行期不下载。
 
@@ -245,7 +248,8 @@ Spring/MyBatis 等既有能力不属于本轮 Maven 验收范围。
 | 其余函数成功（编辑器驱动或启动时的读取，如 `java.runMarkers`、`java.codeVision`、`spring.index`） | 不记录 | `suppress_success_diagnostics`（`backend/src/lib.rs`） | — |
 | 任一函数失败 | ERROR | SDK 自动 | 类别为 `pluginErrorCode`（如 `java.invalidRequest`；`languageImport.settingsChanged` 的 `relay.caller_missing`、`relay.context_missing`、`relay.invalid_params`）、耗时；不含消息与 `details` |
 | 领域命令失败类别 | ERROR | `plugin_error_code` | `java.invalidRequest`、`java.workspaceNotFound`、`java.permissionDenied`、`java.notSupported`、`java.runtimeMissing`、`java.processStartFailed`、`java.processFailed`、`java.parseFailed`、`java.cancelled`、`java.timedOut`、`java.connectionClosed`、`java.unknown`；SDK 识别的取消不记录 |
-| JDT 启动规划失败 | ERROR | SDK 自动 | `launch.invalid_params`、`launch.package_unavailable`、`launch.resource_missing`、`launch.configuration_failed`、`launch.server_missing`（找不到 JDT LS）、`launch.server_invalid`（设置的目录不是 JDT LS）、`launch.runtime_too_old`（运行 JDT LS 的 JDK 低于目标 JDT LS 要求的最低版本，至少 21） |
+| JDT 启动规划失败 | ERROR | SDK 自动 | `launch.invalid_params`、`launch.package_unavailable`、`launch.resource_missing`、`launch.configuration_failed`、`launch.runtime_too_old`（语言服务 JDK 低于本插件要求的 25）；运行环境问题使用下行类别 |
+| 运行环境准备失败 | ERROR | SDK 自动 | `runtime.invalid_params`、`runtime.server_incompatible`、`runtime.jdk_invalid`、`runtime.not_prepared`、`runtime.profile_invalid`；缺少自动准备的依赖属于正常计划，不记录错误，成功读取不记录 INFO；恢复提示随界面语言中英切换 |
 | JDT 配置清理或工作区读取降级 | WARN | SDK `degraded` | `launch.configuration_cleanup_failed`、`launch.workspace_folders_unavailable` |
 | 取消 | 不记录 | SDK | — |
 | 列出 `languageImport.settings` 提供方失败、单个提供方失败或超时、答复不可用、答复含越界键、提供方导出的函数版本不符 | WARN（`degraded`） | `backend/src/plugin_functions.rs` | 类别 `relay.providers_unavailable`、`relay.provider_failed`、`relay.provider_timed_out`、`relay.settings_rejected`、`relay.keys_rejected`、`relay.provider_version_mismatch`，计数；不含提供方 ID |

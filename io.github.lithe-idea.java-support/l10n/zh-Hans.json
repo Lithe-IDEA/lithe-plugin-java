@@ -2,7 +2,7 @@
   "settings": {
     "languageServerHome": {
       "title": "语言服务器目录",
-      "description": "Eclipse JDT Language Server 的目录，即包含 plugins 和 config 目录的那一层。留空时自动查找：JDTLS_HOME、PATH 上的 jdtls，以及 Homebrew、mason.nvim、Scoop 或 VS Code Java 扩展安装的 JDT LS。",
+      "description": "可选的 Eclipse JDT Language Server 1.61.0 目录。留空时复用已验证兼容的安装，缺少时由 Lithe 自动准备固定版本的语言服务器和独立的 Java 25 运行环境；不会更改项目自己的 JDK。",
       "placeholder": "自动查找"
     },
     "heapMaxMB": {

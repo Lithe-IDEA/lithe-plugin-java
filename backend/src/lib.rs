@@ -16,7 +16,8 @@
 //! The manifest declares the `java` language server with
 //! `launch.kind: "backend"`, so the host asks [`launch`] for the JDT LS
 //! command line, initialization options and startup settings before each
-//! start. JDT LS is the user's own installation, which [`jdtls`] finds.
+//! start. [`managed_runtimes`] qualifies the separately installed JDT LS
+//! and full JDK; the host downloads only missing declared dependencies.
 //! The launch reads the settings the [`settings_session`] knows for
 //! the workspace, so a restart starts with the last pushed settings.
 //!
@@ -52,6 +53,7 @@ pub mod class_content;
 pub mod jdtls;
 pub mod launch;
 pub mod library_settings;
+pub mod managed_runtimes;
 pub mod module_structure;
 pub mod plugin_functions;
 pub mod project_model;
@@ -188,6 +190,13 @@ pub fn backend() -> Result<Backend, SdkError> {
             Ok(plan)
         }
     })?;
+    backend.function(
+        managed_runtimes::RESOLVE_FUNCTION_ID,
+        managed_runtimes::resolve_runtimes_function,
+    )?;
+    // Cache qualification is a startup read, including an expected missing
+    // dependency. The SDK still records failures of explicit configuration.
+    backend.suppress_success_diagnostics(managed_runtimes::RESOLVE_FUNCTION_ID)?;
 
     // The run session registers the editor actions of every workspace context
     // and keeps the result listener of each test run; both happen outside a
@@ -428,6 +437,7 @@ mod tests {
             .chain(plugin_functions::RELAY_CATEGORIES)
             .chain(launch::LAUNCH_ERROR_CODES)
             .chain(launch::LAUNCH_CATEGORIES)
+            .chain(managed_runtimes::ERROR_CODES)
             .chain(run::RUN_ERROR_CODES)
             .chain(run::RUN_CATEGORIES)
         {
