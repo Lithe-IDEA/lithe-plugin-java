@@ -1,0 +1,367 @@
+{
+  "name": "JavaServer Pages",
+  "scopeName": "text.html.jsp",
+  "comment": "JSP on top of the host's HTML grammar. The JSP constructs are injected wherever HTML puts the text (element content, attribute values, <script> and <style>), as the JSP translator finds them before HTML is parsed. They are also listed first at the root, so a host without grammar injections still colors the top-level ones. Scriptlet bodies take only Java's lexical rules: a JSP block may close a Java brace in a later scriptlet, and Java's own comments would run past %>.",
+  "patterns": [
+    {
+      "include": "#jsp-comment"
+    },
+    {
+      "include": "#jsp-directive"
+    },
+    {
+      "include": "#jsp-declaration"
+    },
+    {
+      "include": "#jsp-expression"
+    },
+    {
+      "include": "#jsp-scriptlet"
+    },
+    {
+      "include": "#el"
+    },
+    {
+      "include": "#custom-tag"
+    },
+    {
+      "include": "text.html.basic"
+    }
+  ],
+  "injections": {
+    "L:text.html.jsp - (comment.block.jsp | meta.embedded.block.jsp | meta.directive.jsp | meta.expression.el.jsp)": {
+      "patterns": [
+        {
+          "include": "#jsp-comment"
+        },
+        {
+          "include": "#jsp-directive"
+        },
+        {
+          "include": "#jsp-declaration"
+        },
+        {
+          "include": "#jsp-expression"
+        },
+        {
+          "include": "#jsp-scriptlet"
+        },
+        {
+          "include": "#el"
+        }
+      ]
+    },
+    "L:text.html.jsp - (meta.tag | comment | meta.embedded.block.jsp | meta.directive.jsp | meta.expression.el.jsp)": {
+      "patterns": [
+        {
+          "include": "#custom-tag"
+        }
+      ]
+    }
+  },
+  "repository": {
+    "jsp-comment": {
+      "name": "comment.block.jsp",
+      "begin": "<%--",
+      "end": "--%>",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.comment.begin.jsp"
+        }
+      },
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.comment.end.jsp"
+        }
+      }
+    },
+    "jsp-directive": {
+      "name": "meta.directive.jsp",
+      "begin": "(<%@)\\s*([A-Za-z]+)\\b",
+      "end": "%>",
+      "beginCaptures": {
+        "1": {
+          "name": "punctuation.section.directive.begin.jsp"
+        },
+        "2": {
+          "name": "keyword.control.directive.jsp"
+        }
+      },
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.section.directive.end.jsp"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#directive-attribute"
+        }
+      ]
+    },
+    "directive-attribute": {
+      "patterns": [
+        {
+          "match": "([A-Za-z_][\\w.:-]*)\\s*(=)",
+          "captures": {
+            "1": {
+              "name": "entity.other.attribute-name.jsp"
+            },
+            "2": {
+              "name": "punctuation.separator.key-value.jsp"
+            }
+          }
+        },
+        {
+          "name": "string.quoted.double.jsp",
+          "begin": "\"",
+          "end": "\"",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.begin.jsp"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.end.jsp"
+            }
+          }
+        },
+        {
+          "name": "string.quoted.single.jsp",
+          "begin": "'",
+          "end": "'",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.begin.jsp"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.end.jsp"
+            }
+          }
+        }
+      ]
+    },
+    "jsp-declaration": {
+      "name": "meta.embedded.block.jsp",
+      "contentName": "source.java.embedded.jsp",
+      "begin": "<%!",
+      "end": "%>",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.section.embedded.begin.jsp"
+        }
+      },
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.section.embedded.end.jsp"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#java"
+        }
+      ]
+    },
+    "jsp-expression": {
+      "name": "meta.embedded.block.jsp",
+      "contentName": "source.java.embedded.jsp",
+      "begin": "<%=",
+      "end": "%>",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.section.embedded.begin.jsp"
+        }
+      },
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.section.embedded.end.jsp"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#java"
+        }
+      ]
+    },
+    "jsp-scriptlet": {
+      "name": "meta.embedded.block.jsp",
+      "contentName": "source.java.embedded.jsp",
+      "begin": "<%(?![@!=]|--)",
+      "end": "%>",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.section.embedded.begin.jsp"
+        }
+      },
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.section.embedded.end.jsp"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#java"
+        }
+      ]
+    },
+    "java": {
+      "comment": "Java tokens that never run past the %> that ends the JSP block.",
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.java",
+          "match": "(//).*?(?=%>|$)",
+          "captures": {
+            "1": {
+              "name": "punctuation.definition.comment.java"
+            }
+          }
+        },
+        {
+          "name": "comment.block.java",
+          "begin": "/\\*",
+          "end": "\\*/|(?=%>)",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.comment.java"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.comment.java"
+            }
+          }
+        },
+        {
+          "include": "source.java#strings"
+        },
+        {
+          "include": "source.java#numbers"
+        },
+        {
+          "include": "source.java#constants-and-special-vars"
+        },
+        {
+          "include": "source.java#storage-modifiers"
+        },
+        {
+          "include": "source.java#primitive-types"
+        },
+        {
+          "include": "source.java#keywords"
+        }
+      ]
+    },
+    "el": {
+      "name": "meta.expression.el.jsp",
+      "contentName": "source.el.jsp",
+      "begin": "(?<!\\\\)([$#])(\\{)",
+      "end": "\\}",
+      "beginCaptures": {
+        "1": {
+          "name": "punctuation.definition.expression.begin.el.jsp"
+        },
+        "2": {
+          "name": "punctuation.definition.expression.begin.el.jsp"
+        }
+      },
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.expression.end.el.jsp"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#el-content"
+        }
+      ]
+    },
+    "el-content": {
+      "patterns": [
+        {
+          "name": "string.quoted.single.el.jsp",
+          "begin": "'",
+          "end": "'",
+          "patterns": [
+            {
+              "name": "constant.character.escape.el.jsp",
+              "match": "\\\\."
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.double.el.jsp",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.el.jsp",
+              "match": "\\\\."
+            }
+          ]
+        },
+        {
+          "name": "constant.language.el.jsp",
+          "match": "\\b(?:true|false|null)\\b"
+        },
+        {
+          "name": "keyword.operator.word.el.jsp",
+          "match": "\\b(?:and|or|not|empty|eq|ne|lt|gt|le|ge|div|mod|instanceof)\\b"
+        },
+        {
+          "name": "constant.numeric.el.jsp",
+          "match": "\\b\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?\\b"
+        },
+        {
+          "name": "keyword.operator.el.jsp",
+          "match": "->|\\+=|==|!=|<=|>=|&&|\\|\\||[-+*/%<>!?:=;]"
+        },
+        {
+          "comment": "EL 3.0 set and map literals and lambda bodies nest braces.",
+          "begin": "\\{",
+          "end": "\\}",
+          "patterns": [
+            {
+              "include": "#el-content"
+            }
+          ]
+        },
+        {
+          "name": "variable.other.el.jsp",
+          "match": "[A-Za-z_$][\\w$]*"
+        }
+      ]
+    },
+    "custom-tag": {
+      "comment": "JSP actions and tag-library tags such as <jsp:include> and <c:forEach>; HTML would mark them unrecognized.",
+      "name": "meta.tag.custom.jsp",
+      "begin": "(</?)([A-Za-z_][\\w.-]*)(:)([A-Za-z_][\\w.-]*)(?=[\\s/>])",
+      "end": "(/?>)",
+      "beginCaptures": {
+        "1": {
+          "name": "punctuation.definition.tag.begin.html"
+        },
+        "2": {
+          "name": "entity.name.tag.namespace.jsp"
+        },
+        "3": {
+          "name": "punctuation.separator.namespace.jsp"
+        },
+        "4": {
+          "name": "entity.name.tag.jsp"
+        }
+      },
+      "endCaptures": {
+        "1": {
+          "name": "punctuation.definition.tag.end.html"
+        }
+      },
+      "patterns": [
+        {
+          "include": "text.html.basic#attribute"
+        }
+      ]
+    }
+  }
+}

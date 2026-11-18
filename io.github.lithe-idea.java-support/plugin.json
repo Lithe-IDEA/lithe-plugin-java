@@ -509,6 +509,62 @@
       "displayName": "Java",
       "fileExtensions": ["java"],
       "projectFileNames": ["pom.xml", "build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts"]
+    },
+    {
+      "id": "jsp",
+      "displayName": "JavaServer Pages",
+      "fileExtensions": [
+        "jsp",
+        "jspf",
+        "tag",
+        "tagf"
+      ],
+      "grammar": {
+        "kind": "textmate",
+        "path": "grammars/jsp.tmLanguage.json"
+      },
+      "configuration": {
+        "blockComment": [
+          "<%--",
+          "--%>"
+        ],
+        "brackets": [
+          [
+            "{",
+            "}"
+          ],
+          [
+            "[",
+            "]"
+          ],
+          [
+            "(",
+            ")"
+          ]
+        ],
+        "autoClosingPairs": [
+          [
+            "{",
+            "}"
+          ],
+          [
+            "[",
+            "]"
+          ],
+          [
+            "(",
+            ")"
+          ],
+          [
+            "\"",
+            "\""
+          ],
+          [
+            "'",
+            "'"
+          ]
+        ]
+      }
     }
   ],
   "debugAdapters": [

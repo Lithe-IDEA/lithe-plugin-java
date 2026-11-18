@@ -343,3 +343,15 @@ node scripts/package/build-windows.mjs /path/to/lithe-java-backend.exe
 ## Linux ARM64 / x64
 
 Linux 构建、资源归属与原生验证入口见 [Linux 构建与验证](docs/linux-packaging.md)。
+
+## JSP / EL 语法着色
+
+Java Support 把 `.jsp`、`.jspf`、`.tag`、`.tagf` 声明为 JSP 文档，并随插件包提供 TextMate 语法 `grammars/jsp.tmLanguage.json`。语法建立在宿主自带的 HTML 语法（`text.html.basic`）之上，HTML 以及其中 `<script>`、`<style>` 的 JavaScript/CSS 着色与原来把 `.jsp` 当 HTML 打开时一致；JSP 注释、指令、声明、表达式、脚本片段和 `${...}` / `#{...}` EL 以注入方式出现在 HTML 的任何位置（属性值、脚本、样式内也能识别），`<c:forEach>`、`<jsp:include>` 这类带前缀的标签按标签库标签着色，不再被 HTML 标成无法识别。
+
+脚本片段内部只使用 Java 的词法规则（字符串、数字、关键字、修饰符、类型、常量），注释在 `%>` 处结束。原因是 JSP 常把一个 Java 代码块拆在多个脚本片段中（`<% if (ok) { %> … <% } %>`），套用完整的 Java 语法会把中间的 HTML 当成 Java。
+
+语法注入需要桌面端 0.8.4 及以上；更早的宿主只识别 HTML 正文层级的 JSP 结构。
+
+验证：`scripts/package/jsp-grammar.test.mjs` 做静态检查；`node scripts/grammar/host-jsp.mjs <宿主检出>` 用宿主自己的 TextMate 分词器和内置 HTML/CSS/JS/Java 语法逐个检查着色结果，宿主版本固定在 `grammar-host.json`，CI 的 “JSP grammar on the host tokenizer” 任务运行它（Draft PR 也运行）。
+
+**范围边界：** 这只是语法着色及注释/括号配置；未实现 JSP/EL 的语义补全、跨文件跳转、诊断、JSP 断点和热部署。JDT LS 仍只服务 `.java` 文件。

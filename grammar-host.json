@@ -1,0 +1,5 @@
+{
+  "repository": "https://github.com/1lck/Lithe-IDEA",
+  "revision": "08ccf3ab6ae0f30b41200ec93c1d0aeefdcb7a5c",
+  "note": "Host whose TextMate tokenizer and bundled HTML, CSS, JavaScript and Java grammars check grammars/jsp.tmLanguage.json (scripts/grammar/host-jsp.mjs). Grammar injections need desktop 0.8.4 or later; on older hosts the root-level JSP rules still apply."
+}

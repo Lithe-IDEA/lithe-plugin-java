@@ -158,6 +158,36 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  jsp-grammar-host:
+    # Runs on drafts too: it needs neither the Rust Core nor a package, only the
+    # host's pure-Go editor packages.
+    name: JSP grammar on the host tokenizer
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Read pinned host revision
+        id: host
+        run: echo "revision=$(node -p 'JSON.parse(require("fs").readFileSync("grammar-host.json")).revision')" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          repository: 1lck/Lithe-IDEA
+          ref: ${{ steps.host.outputs.revision }}
+          path: .artifacts/grammar-host
+          sparse-checkout: desktop
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: .artifacts/grammar-host/desktop/go.mod
+          cache: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Tokenize JSP with the host's TextMate engine
+        run: node scripts/grammar/host-jsp.mjs .artifacts/grammar-host
+
   native-settings-visual:
     name: Native compiler settings screenshots
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft

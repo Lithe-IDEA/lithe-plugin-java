@@ -41,7 +41,7 @@ function verify(directory){
 try{
  mkdirSync(pkg);
  cpSync(join(root,id,'plugin.json'),join(pkg,'plugin.json'));
- for(const name of ['icons','templates','l10n'])cpSync(join(root,id,name),join(pkg,name),{recursive:true});
+ for(const name of ['icons','templates','l10n','grammars'])cpSync(join(root,id,name),join(pkg,name),{recursive:true});
  const destination=join(pkg,'jdtls-extensions');mkdirSync(destination);
  for(const name of extensions)cpSync(join(jdt,name),join(destination,name),{recursive:true});
  buildProjectModelBundle(jdt,destination);

@@ -42,7 +42,7 @@ const id = 'io.github.lithe-idea.java-support';
 const packageRoot = join(staging, id);
 try {
   await mkdir(packageRoot, { recursive: true });
-  for (const name of ['icons', 'templates', 'l10n']) await cp(join(root, id, name), join(packageRoot, name), { recursive: true });
+  for (const name of ['icons', 'templates', 'l10n', 'grammars']) await cp(join(root, id, name), join(packageRoot, name), { recursive: true });
   const extensions = join(packageRoot, 'jdtls-extensions');
   await mkdir(extensions);
   for (const name of ['lombok', 'java-debug', 'java-test', 'manifest.json']) {
