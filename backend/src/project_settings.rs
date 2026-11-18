@@ -368,10 +368,13 @@ impl ProjectSettings {
         };
         let mut groups = if libraries {
             let mut groups = Vec::new();
-            if !module_sources.is_empty() {
+            if module_sources.iter().any(|source| source["group"] == "modules") {
                 groups.push(
                     json!({"id":"modules","title":local(zh,"Modules","模块"),"layout":"sidebar"}),
                 );
+            }
+            if module_sources.iter().any(|source| source["group"] == "facets") {
+                groups.push(json!({"id":"facets","title":local(zh,"Web Facets","Web Facet"),"layout":"sidebar"}));
             }
             if module_sources.is_empty()
                 || sources.iter().any(|source| source["group"] == "libraries")
@@ -468,6 +471,7 @@ impl ProjectSettings {
         // (folder, source file, source) in folder order, so that an
         // enclosing module comes before the modules inside it.
         let mut rows: Vec<(PathBuf, PathBuf, Value)> = Vec::new();
+        let mut facet_sources = Vec::new();
         for (project, file, revision, classpath, name) in classpaths {
             let rel = project_model::relative_inside(root, &file).ok_or_else(fail)?;
             let choices = modules::Choices {
@@ -478,6 +482,22 @@ impl ProjectSettings {
             let id = format!("source{:x}", Sha256::digest(rel.as_bytes()));
             if classpath.editable {
                 bindings.insert(id.clone(), file.clone());
+            }
+            // Web Facet is stored in another native XML source. Keep it
+            // separate from .classpath so each save replaces exactly one file.
+            if facet_sources.len() < 256 {
+                let facet_file = project.join(crate::web_facet::FILE);
+                if fs::symlink_metadata(&facet_file).is_ok_and(|info| info.is_file()) {
+                    let (bytes, revision) = read(&facet_file)?;
+                    if let Some(fields) = crate::web_facet::fields(zh, &bytes)? {
+                        let rel = project_model::relative_inside(root, &facet_file).ok_or_else(fail)?;
+                        let facet_id = format!("facet{:x}", Sha256::digest(rel.as_bytes()));
+                        if paths.insert(facet_file.clone()) {
+                            bindings.insert(facet_id.clone(), facet_file);
+                            facet_sources.push(json!({"id":facet_id,"group":"facets","title":name.clone(),"path":rel,"revision":revision,"writable":true,"fields":fields}));
+                        }
+                    }
+                }
             }
             rows.push((project, file, json!({"id":id,"group":"modules","title":name,"path":rel,"revision":revision,"writable":classpath.editable,"fields":fields})));
         }
@@ -554,6 +574,7 @@ impl ProjectSettings {
             }
             sources.push(source);
         }
+        sources.extend(facet_sources);
         Ok(sources)
     }
     /// Prepares only the confirmed native source; publication belongs to the host.
@@ -591,6 +612,8 @@ impl ProjectSettings {
         let values = params["values"].as_object().ok_or_else(fail)?;
         let replacement = if path.ends_with(".classpath") {
             crate::module_structure::edit(&bytes, parent, values)?
+        } else if path.ends_with(crate::web_facet::FILE) {
+            crate::web_facet::edit(&bytes, values)?
         } else if path.ends_with(SETTINGS) {
             let workspace = context.workspace_context().ok_or_else(fail)?;
             let options = session.model_options(workspace.context_id());

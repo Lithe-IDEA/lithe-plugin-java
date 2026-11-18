@@ -42,3 +42,9 @@ JRE 下拉框可选“工作区默认 JRE”或 JavaSE-1.8/11/17/21/25 执行环
 ## 验证
 
 `scripts/compiler/test-module-structure.mjs` 用真实 JDT LS 打开两个 Eclipse 工程和一个 Maven 模块：检查读取页面不写任何项目文件、Maven 模块只读并带解析出的类路径；再通过页面添加模块依赖（导出）、工作区外的 JAR、新的源文件夹并修改输出文件夹，确认写回的 `.classpath` 保留注释和源码附件，JDT 随后编译成功，class 落在新的输出文件夹；插件包和 JDT LS 安装不变。`scripts/compiler/visual.mjs` 用宿主 Viva 无头窗口渲染同一份真实投影（中英、明暗）。
+
+## Eclipse WTP Web Facet
+
+带有 `.classpath` 的 Eclipse 工程如果同时存在 `.settings/org.eclipse.wst.common.project.facet.core.xml` 中的 `jst.web`，项目结构页会额外显示「Web Facets」分组。可在独立来源中选择 Dynamic Web Module 版本，再点击保存。保存前宿主检查原始版本，写回时仅编辑此 XML 文件中的现有 `jst.web` 版本并保留其他 Facet、注释及 XML 节点。
+
+这不是 Web Facet 的完整编辑器：不会自动创建缺失的 Facet，不改 WTP `.component` 的 Web 根和部署装配，也不写 IDEA `.iml`；后者仍为只读工程模型。
