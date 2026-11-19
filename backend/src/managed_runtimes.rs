@@ -280,7 +280,6 @@ pub fn inspect_jdk(home: &Path, os: &str, arch: &str) -> Option<(PathBuf, String
         .iter()
         .all(|name| native_launcher(&home.join(format!("bin/{name}{suffix}")), os, arch))
         || !regular_nonempty(&home.join("lib/modules"))
-        || !regular_nonempty(&home.join("jmods/java.base.jmod"))
     {
         return None;
     }

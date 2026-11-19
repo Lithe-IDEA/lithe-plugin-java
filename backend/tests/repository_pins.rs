@@ -282,7 +282,8 @@ fn managed_dependencies_pin_all_six_platforms_and_bind_only_the_service_tool() {
             if dependency["id"] == "jdk" {
                 assert_eq!(dependency["tool"], SERVER_RUNTIME_TOOL);
                 assert_eq!(dependency["version"], JDK_VERSION);
-                let expected_prefix = if artifact["os"] == "windows" && artifact["arch"] == "arm64" {
+                let expected_prefix = if artifact["os"] == "windows" && artifact["arch"] == "arm64"
+                {
                     "jdk-25.0.5.0.2+1"
                 } else {
                     "jdk-25.0.5+8"

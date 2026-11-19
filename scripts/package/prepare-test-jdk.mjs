@@ -24,7 +24,7 @@ export function prepareTestJDK(){
  const home=join(directory,artifact.stripPrefix,artifact.home??'');
  const executable=join(home,artifact.executable);
  const suffix=os==='windows'?'.exe':'';
- if([executable,join(home,`bin/javac${suffix}`),join(home,'release'),join(home,'lib/modules'),join(home,'jmods/java.base.jmod')].every(existsSync))return executable;
+ if([executable,join(home,`bin/javac${suffix}`),join(home,'release'),join(home,'lib/modules')].every(existsSync))return executable;
  mkdirSync(cache,{recursive:true});
  const archive=join(cache,basename(new URL(artifact.url).pathname));
  if(!existsSync(archive)||digest(archive)!==artifact.sha256){
