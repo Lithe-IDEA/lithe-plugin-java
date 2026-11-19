@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -24,6 +25,109 @@ import (
 	"github.com/vivaui/viva/headless"
 )
 
+type visualBackend struct {
+	client    *core.Client
+	sessionID string
+	pluginID  string
+	mu        sync.Mutex
+	wg        sync.WaitGroup
+}
+
+func startVisualBackend(t *testing.T, client *core.Client, pluginID, executablePath, workDir string) *visualBackend {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	started, err := client.StartPluginBackend(ctx, core.PluginBackendStart{
+		ProviderID:                    "visual-backend",
+		PluginID:                      pluginID,
+		ExecutablePath:                executablePath,
+		RootURI:                       core.NativeDocumentPath{Path: workDir, Platform: "auto"},
+		WorkingDirectory:              workDir,
+		InitializeTimeoutMilliseconds: 5000,
+		RequestTimeoutMilliseconds:    5000,
+		ShutdownTimeoutMilliseconds:   3000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := &visualBackend{client: client, sessionID: started.SessionID, pluginID: pluginID}
+	t.Cleanup(func() {
+		backend.wg.Wait()
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 8*time.Second)
+		defer cleanupCancel()
+		if stopErr := client.StopPluginBackend(cleanupCtx, started.SessionID); stopErr != nil {
+			t.Errorf("stop visual backend: %v", stopErr)
+		}
+		for {
+			destroyErr := client.DestroyPluginBackend(cleanupCtx, started.SessionID)
+			if destroyErr == nil {
+				return
+			}
+			var coreErr *core.Error
+			if !errors.As(destroyErr, &coreErr) || coreErr.Code != core.CodeInvalidRequest || coreErr.Message != "A running language-server session cannot be destroyed." {
+				t.Errorf("destroy visual backend: %v", destroyErr)
+				return
+			}
+			if _, waitErr := client.WaitBackendEvents(cleanupCtx, started.SessionID, 250); waitErr != nil {
+				t.Errorf("wait visual backend shutdown: %v", waitErr)
+				return
+			}
+		}
+	})
+	registered, ready := false, false
+	for !(registered && ready) {
+		events, waitErr := client.WaitBackendEvents(ctx, started.SessionID, 1000)
+		if waitErr != nil {
+			t.Fatal(waitErr)
+		}
+		for _, event := range events {
+			if event.Type == "functionsChanged" && strings.Contains(string(event.Result), `"settings.view"`) {
+				registered = true
+			}
+			if event.Type == "stateChanged" && event.State == "ready" {
+				ready = true
+			}
+		}
+	}
+	return backend
+}
+
+func (b *visualBackend) invoke(ctx context.Context, function string, params json.RawMessage) (json.RawMessage, error) {
+	b.wg.Add(1)
+	defer b.wg.Done()
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	callCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	op, err := b.client.InvokePluginFunction(callCtx, b.sessionID, "", b.pluginID, function, params)
+	if err != nil {
+		return nil, err
+	}
+	for {
+		events, waitErr := b.client.WaitBackendEvents(callCtx, b.sessionID, 1000)
+		if waitErr != nil {
+			return nil, waitErr
+		}
+		for _, event := range events {
+			if event.Type == "requestCompleted" && event.OperationID == op {
+				if len(event.Error) != 0 && string(event.Error) != "null" {
+					return nil, fmt.Errorf("backend function %s failed: %s", function, event.Error)
+				}
+				var wrapped struct {
+					Value json.RawMessage `json:"value"`
+				}
+				if err := json.Unmarshal(event.Result, &wrapped); err != nil {
+					return nil, fmt.Errorf("decode function result %s: %w", function, err)
+				}
+				if len(wrapped.Value) == 0 {
+					return json.RawMessage("null"), nil
+				}
+				return wrapped.Value, nil
+			}
+		}
+	}
+}
+
 // This plugin-owned overlay renders the public projection captured from its real
 // engine tests. It does not publish files; native publication is tested separately.
 type pluginNativeVisualSource struct {
@@ -32,6 +136,7 @@ type pluginNativeVisualSource struct {
 	packageRoot, workspace string
 	sources                pluginsettings.SourceEditor
 	actionID               string
+	backend                *visualBackend
 }
 
 func (s *pluginNativeVisualSource) Load(ctx context.Context, _ string, language i18n.Language) (pluginservice.SettingsEditor, error) {
@@ -41,19 +146,48 @@ func (s *pluginNativeVisualSource) Load(ctx context.Context, _ string, language 
 func (s *pluginNativeVisualSource) Save(context.Context, pluginservice.SettingsEditor, string, []core.PluginSettingEdit) (pluginsettings.SaveResult, error) {
 	return pluginsettings.SaveResult{}, errors.New("visual capture never publishes")
 }
-func (s *pluginNativeVisualSource) Action(context.Context, pluginservice.SettingsEditor, string, bool) (pluginservice.SettingsActionResult, error) {
+func (s *pluginNativeVisualSource) Action(ctx context.Context, editor pluginservice.SettingsEditor, id string, confirmed bool) (pluginservice.SettingsActionResult, error) {
 	return pluginservice.SettingsActionResult{Plan: core.PluginSettingsActionPlan{Kind: "invoke", ActionID: s.actionID, SourceEditor: true}, Sources: &s.sources}, nil
 }
 func (s *pluginNativeVisualSource) SaveSources(context.Context, pluginservice.SettingsEditor, string, pluginsettings.SourceEditor, []core.SourceSettingsEdits) (pluginsettings.SourceEditor, error) {
 	return s.sources, errors.New("visual capture never publishes")
 }
+func (s *pluginNativeVisualSource) View(ctx context.Context, _ pluginservice.SettingsEditor, region, function string, event, view json.RawMessage, closing bool) (json.RawMessage, bool, error) {
+	params := map[string]json.RawMessage{}
+	if len(event) > 0 {
+		if err := json.Unmarshal(event, &params); err != nil {
+			return nil, false, err
+		}
+	}
+	surface, err := json.Marshal(core.PluginViewSurface{SettingRegionID: region})
+	if err != nil {
+		return nil, false, err
+	}
+	params["surface"] = surface
+	payload, err := json.Marshal(params)
+	if err != nil {
+		return nil, false, err
+	}
+	answer, err := s.backend.invoke(ctx, function, payload)
+	if err != nil || closing {
+		return nil, false, err
+	}
+	if len(answer) == 0 || string(answer) == "null" {
+		answer = json.RawMessage(`{}`)
+	}
+	return s.backend.client.ApplyPluginViewResult(ctx, s.manifest, core.PluginViewSurface{SettingRegionID: region}, view, answer)
+}
 
 func TestPluginNativeSourceVisual(t *testing.T) {
-	packageRoot, input, out := os.Getenv("LITHE_NATIVE_PACKAGE"), os.Getenv("LITHE_NATIVE_SNAPSHOTS"), os.Getenv("LITHE_NATIVE_OUTPUT")
-	if packageRoot == "" || input == "" || out == "" {
+	packageRoot, backendPath, input, out := os.Getenv("LITHE_NATIVE_PACKAGE"), os.Getenv("LITHE_NATIVE_BACKEND"), os.Getenv("LITHE_NATIVE_SNAPSHOTS"), os.Getenv("LITHE_NATIVE_OUTPUT")
+	if packageRoot == "" || backendPath == "" || input == "" || out == "" {
 		t.Fatal("run the plugin's scripts/compiler/visual.mjs")
 	}
 	manifest, err := os.ReadFile(filepath.Join(packageRoot, "plugin.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	zhLocalization, err := os.ReadFile(filepath.Join(packageRoot, "l10n", "zh-Hans.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,11 +201,13 @@ func TestPluginNativeSourceVisual(t *testing.T) {
 	if err = json.Unmarshal(manifest, &metadata); err != nil {
 		t.Fatal(err)
 	}
+	coreClient := core.NewClient()
 	admission, cancelAdmission := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancelAdmission()
-	if _, err = core.NewClient().ValidatePluginManifest(admission, manifest, pluginhost.Declared()); err != nil {
+	if _, err = coreClient.ValidatePluginManifest(admission, manifest, pluginhost.Declared()); err != nil {
 		t.Fatal(err)
 	}
+	backend := startVisualBackend(t, coreClient, metadata.ID, backendPath, t.TempDir())
 	compilerID, languageID := "", ""
 	for _, action := range metadata.SettingActions {
 		switch action.ID {
@@ -119,12 +255,22 @@ func TestPluginNativeSourceVisual(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					source := &pluginNativeVisualSource{store: pluginsettings.New(core.NewClient(), t.TempDir()), manifest: manifest, packageRoot: packageRoot, workspace: t.TempDir(), sources: pluginsettings.SourceEditor{State: state}, actionID: item.actionID}
+					source := &pluginNativeVisualSource{store: pluginsettings.New(coreClient, t.TempDir()), manifest: manifest, packageRoot: packageRoot, workspace: t.TempDir(), sources: pluginsettings.SourceEditor{State: state}, actionID: item.actionID, backend: backend}
 					fetch := func(context.Context) (marketplace.Snapshot, error) {
 						return marketplace.Snapshot{Index: core.MarketplaceIndex{Plugins: []core.MarketplacePlugin{{ID: metadata.ID, Name: metadata.DisplayName, LatestVersion: metadata.Version}}}}, nil
 					}
-					w := newWindow(NewController(Options{Text: func() *i18n.Messages { return i18n.For(language) }, Language: func() i18n.Language { return language }, SystemLanguage: language, SystemDark: func() bool { return theme == "dark" }, PluginSettings: source, SettingsNavigation: core.NewClient().SettingsNavigation, SettingsPages: func(ctx context.Context) ([]core.SettingsPage, error) {
-						return core.NewClient().SettingsPages(ctx, []core.SettingsContribution{{Manifest: manifest, Owner: core.PluginSettingsOwner{PluginID: metadata.ID, Version: metadata.Version}, Enabled: true}})
+					w := newWindow(NewController(Options{SettingsError: func(operation string, err error) {
+						t.Logf("settings error %s: %v", operation, err)
+					}, Text: func() *i18n.Messages { return i18n.For(language) }, Language: func() i18n.Language { return language }, SystemLanguage: language, SystemDark: func() bool { return theme == "dark" }, PluginSettings: source, SettingsNavigation: coreClient.SettingsNavigation, SettingsPages: func(ctx context.Context, lang i18n.Language) ([]core.SettingsPage, error) {
+						localizations := map[string]string{}
+						if lang == i18n.Chinese {
+							localizations["l10n/zh-Hans.json"] = string(zhLocalization)
+						}
+						pages, pagesErr := coreClient.SettingsPages(ctx, []core.SettingsContribution{{Manifest: manifest, Owner: core.PluginSettingsOwner{PluginID: metadata.ID, Version: metadata.Version}, Enabled: true, Localizations: localizations}}, lang.Code())
+						if pagesErr != nil {
+							t.Logf("SettingsPages(%s) error: %v", lang.Code(), pagesErr)
+						}
+						return pages, pagesErr
 					}, Marketplace: fetch, MarketplaceInstalled: fetch, PluginState: func(string) PluginState {
 						return PluginState{Installed: true, Enabled: true, Version: metadata.Version}
 					}}), Values{Theme: theme, Language: language.Code()})
@@ -148,10 +294,19 @@ func TestPluginNativeSourceVisual(t *testing.T) {
 					if title == "" {
 						t.Fatalf("action %s is not on page %s", item.actionID, item.key)
 					}
-					if item.actionID == "libraries" && item.name == views[1].name {
-						// The language page itself, with the plugin's own settings.
+					d.until("region preview", func() bool {
+						if w.region != nil && w.region.session.Err() != nil {
+							t.Fatalf("region session err: %v", w.region.session.Err())
+						}
+						return w.region != nil && w.region.session.Drawn()
+					})
+					if item.actionID == "compiler" || (item.actionID == "libraries" && item.name == views[1].name) {
 						d.pump()
-						if err = session.Screenshot(filepath.Join(out, "java-settings-"+language.Code()+"-"+theme+".png")); err != nil {
+						prefix := "java-settings-"
+						if item.actionID == "compiler" {
+							prefix = "java-compiler-settings-"
+						}
+						if err = session.Screenshot(filepath.Join(out, prefix+language.Code()+"-"+theme+".png")); err != nil {
 							t.Fatal(err)
 						}
 					}
