@@ -12,5 +12,8 @@ const target=join(host,'desktop/internal/settingswindow/plugin_native_source_tes
 const overlay=join(stage,'overlay.json');writeFileSync(overlay,JSON.stringify({Replace:{[target]:join(root,'e2e/host/desktop/internal/settingswindow/plugin_native_source_test.go')}}));
 const revision=(await runTool('git',['-C',host,'rev-parse','HEAD'])).toString().trim();
 writeFileSync(join(stage,'visual-host.json'),JSON.stringify({repository:manifest.repository,revision,core:process.env.LITHE_CORE_RUST_DIR??'host pin'},null,2));
-const result=await runTool(process.env.LITHE_TEST_BASH??'bash',['scripts/desktop/desktop-go.sh','test','-overlay',overlay,'-tags','vivahead lithevisual','./internal/settingswindow','-run','^TestPluginNativeSourceVisual$','-count=1','-timeout=120s'],{cwd:host,env:{...process.env,LITHE_NATIVE_PACKAGE:join(root,manifest.package),LITHE_NATIVE_SNAPSHOTS:stage,LITHE_NATIVE_OUTPUT:join(stage,'visual')},timeout:1200000});
+await runTool('cargo',['build','--locked','--manifest-path',join(root,'Cargo.toml'),'-p','lithe-java-backend'],{timeout:600000});
+const targetDir=process.env.CARGO_TARGET_DIR??join(root,'target');
+const backend=join(targetDir,'debug',process.platform==='win32'?'lithe-java-backend.exe':'lithe-java-backend');
+const result=await runTool(process.env.LITHE_TEST_BASH??'bash',['scripts/desktop/desktop-go.sh','test','-overlay',overlay,'-tags','vivahead lithevisual','./internal/settingswindow','-run','^TestPluginNativeSourceVisual$','-count=1','-timeout=120s'],{cwd:host,env:{...process.env,LITHE_NATIVE_PACKAGE:join(root,manifest.package),LITHE_NATIVE_BACKEND:backend,LITHE_NATIVE_SNAPSHOTS:stage,LITHE_NATIVE_OUTPUT:join(stage,'visual')},timeout:1200000});
 process.stdout.write(result);

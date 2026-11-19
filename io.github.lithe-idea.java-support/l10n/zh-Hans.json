@@ -1,4 +1,5 @@
 {
+  "$schema": "https://raw.githubusercontent.com/Lithe-IDEA/Lithe-core-rust/main/shared/plugins/contract/v1/plugin-l10n.schema.json",
   "settings": {
     "languageServerHome": {
       "title": "语言服务器目录",
@@ -41,6 +42,28 @@
     "libraries": {
       "title": "读取项目结构",
       "description": "读取每个模块的源文件夹、输出文件夹、JRE 和依赖。保存时写入 Eclipse 的 .classpath 和页面列出的库配置文件；Maven、Gradle 模块只读。"
+    }
+  },
+  "settingRegions": {
+    "language": {
+      "keywords": [
+        "语言服务器",
+        "堆内存",
+        "类路径",
+        "项目结构",
+        "模块",
+        "依赖",
+        "工程模型",
+        "Servlet 容器"
+      ]
+    },
+    "compiler": {
+      "keywords": [
+        "Java 编译器",
+        "字节码",
+        "编译级别",
+        "目标版本"
+      ]
     }
   }
 }

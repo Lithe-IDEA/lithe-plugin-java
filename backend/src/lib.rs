@@ -60,6 +60,7 @@ pub mod project_model;
 pub mod project_settings;
 pub mod run;
 pub mod settings_session;
+pub mod settings_view;
 pub mod web_facet;
 
 use crate::launch::LAUNCH_FUNCTION_ID;
@@ -268,6 +269,11 @@ pub fn backend() -> Result<Backend, SdkError> {
     backend.function("compiler.prepareSettings", move |params, context| {
         projects.edit(params, context, &session)
     })?;
+    backend.function(
+        settings_view::SETTINGS_VIEW_FUNCTION_ID,
+        settings_view::view_function,
+    )?;
+    backend.suppress_success_diagnostics(settings_view::SETTINGS_VIEW_FUNCTION_ID)?;
     Ok(backend)
 }
 
@@ -440,6 +446,8 @@ mod tests {
             .chain(managed_runtimes::ERROR_CODES)
             .chain(run::RUN_ERROR_CODES)
             .chain(run::RUN_CATEGORIES)
+            .chain(settings_view::VIEW_ERROR_CODES)
+            .chain(settings_view::VIEW_CATEGORIES)
         {
             assert!(seen.insert(*name), "{name} names two causes");
         }

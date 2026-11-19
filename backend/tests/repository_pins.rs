@@ -12,6 +12,7 @@ use lithe_java_backend::launch::{
     SERVER_RUNTIME_TOOL,
 };
 use lithe_java_backend::managed_runtimes::{JDK_VERSION, RESOLVE_FUNCTION_ID};
+use lithe_java_backend::settings_view::SETTINGS_VIEW_FUNCTION_ID;
 use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -211,6 +212,11 @@ fn the_language_service_jdk_is_separate_from_the_project_jdk() {
         .iter()
         .find(|definition| definition["id"] == "java")
         .unwrap();
+    assert_eq!(manifest["requires"]["toolDefinitions"], 1);
+    assert_eq!(text(java, "category"), "runtime");
+    assert_eq!(text(java, "audience"), "user");
+    assert_eq!(text(runtime, "category"), "runtime");
+    assert_eq!(text(runtime, "audience"), "plugin");
     // Discovery reuses full JDK installations, not editor-specific JREs.
     let java_discovery = java["discovery"].as_array().unwrap();
     let runtime_discovery = runtime["discovery"].as_array().unwrap();
@@ -395,4 +401,64 @@ fn assert_sha256(value: &str, label: &str) {
                 .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
         "{label} is not a lowercase SHA-256: {value}"
     );
+}
+
+#[test]
+fn manifest_and_zh_hans_declare_setting_regions() {
+    let manifest = read_json(&format!("{PLUGIN_ID}/plugin.json"));
+    assert_eq!(manifest["requires"]["ui"], 0);
+    assert!(
+        manifest["permissions"]
+            .as_array()
+            .is_some_and(|items| items.iter().any(|item| item == "ui.contribute")),
+        "permissions must include ui.contribute"
+    );
+    let regions = manifest["settingRegions"]
+        .as_array()
+        .expect("settingRegions must be an array");
+    let language = regions
+        .iter()
+        .find(|region| region["id"] == "language")
+        .expect("language settingRegion must exist");
+    assert_eq!(text(&language["page"], "languageID"), "java");
+    assert_eq!(
+        text(&language["view"], "function"),
+        SETTINGS_VIEW_FUNCTION_ID
+    );
+    assert!(
+        language["keywords"]
+            .as_array()
+            .is_some_and(|items| !items.is_empty()),
+        "language settingRegion keywords must be non-empty"
+    );
+
+    let compiler = regions
+        .iter()
+        .find(|region| region["id"] == "compiler")
+        .expect("compiler settingRegion must exist");
+    assert_eq!(text(&compiler["page"], "compilerID"), "java");
+    assert_eq!(
+        text(&compiler["view"], "function"),
+        SETTINGS_VIEW_FUNCTION_ID
+    );
+    assert!(
+        compiler["keywords"]
+            .as_array()
+            .is_some_and(|items| !items.is_empty()),
+        "compiler settingRegion keywords must be non-empty"
+    );
+
+    let zh = read_json(&format!("{PLUGIN_ID}/l10n/zh-Hans.json"));
+    for region_id in ["language", "compiler"] {
+        let keywords = zh["settingRegions"][region_id]["keywords"]
+            .as_array()
+            .unwrap_or_else(|| panic!("zh-Hans settingRegions.{region_id}.keywords missing"));
+        assert!(
+            !keywords.is_empty()
+                && keywords
+                    .iter()
+                    .all(|item| item.as_str().is_some_and(|s| !s.is_empty())),
+            "zh-Hans settingRegions.{region_id}.keywords must contain non-empty strings"
+        );
+    }
 }
