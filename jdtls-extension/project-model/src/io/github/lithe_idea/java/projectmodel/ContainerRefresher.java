@@ -8,6 +8,7 @@ import org.eclipse.core.resources.IResourceChangeEvent;
 import org.eclipse.core.resources.IResourceChangeListener;
 import org.eclipse.core.resources.IResourceDelta;
 import org.eclipse.core.resources.IResourceDeltaVisitor;
+import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.IPath;
 import org.eclipse.core.runtime.IProgressMonitor;
@@ -32,6 +33,7 @@ final class ContainerRefresher extends Job implements IPreferencesChangeListener
 	ContainerRefresher() {
 		super("Refresh Lithe project model containers");
 		setSystem(true);
+		setRule(ResourcesPlugin.getWorkspace().getRoot());
 	}
 
 	@Override
@@ -51,21 +53,32 @@ final class ContainerRefresher extends Job implements IPreferencesChangeListener
 			return;
 		}
 		boolean[] relevant = { false };
+		boolean[] classpath = { false };
+		ProjectModelSettings settings = ProjectModelSettings.current();
+		boolean checkClasspath = !settings.classFolders.isEmpty() || !settings.sourceRoles.isEmpty()
+				|| settings.workspaceSourcePaths.isPresent() || settings.workspaceOutputPath.isPresent();
 		try {
 			delta.accept((IResourceDeltaVisitor) child -> {
-				if (relevant[0]) {
+				if (relevant[0] && (!checkClasspath || classpath[0])) {
 					return false;
 				}
 				IResource resource = child.getResource();
 				if (resource.getType() == IResource.FILE && isModelInput(resource.getProjectRelativePath())) {
 					relevant[0] = true;
 				}
+				if (checkClasspath && ((resource.getType() == IResource.PROJECT
+						&& (child.getKind() == IResourceDelta.ADDED
+								|| (child.getFlags() & (IResourceDelta.OPEN | IResourceDelta.DESCRIPTION)) != 0))
+						|| (resource.getType() == IResource.FILE
+								&& ".classpath".equals(resource.getProjectRelativePath().toString())))) {
+					classpath[0] = true;
+				}
 				return true;
 			});
 		} catch (CoreException e) {
 			ProjectModelLog.error("Cannot inspect a resource change", e);
 		}
-		if (relevant[0] && !ContainerResolver.ownedContainers().isEmpty()) {
+		if (classpath[0] || (relevant[0] && !ContainerResolver.ownedContainers().isEmpty())) {
 			schedule(DELAY_MILLISECONDS);
 		}
 	}
@@ -87,6 +100,8 @@ final class ContainerRefresher extends Job implements IPreferencesChangeListener
 	@Override
 	protected IStatus run(IProgressMonitor monitor) {
 		ProjectModelSettings settings = ProjectModelSettings.current();
+		ClassFolderClasspath.refresh(settings, monitor);
+		SourceFolderClasspath.refresh(settings, monitor);
 		for (Map.Entry<IPath, List<IJavaProject>> owned : ContainerResolver.ownedContainers().entrySet()) {
 			if (monitor.isCanceled()) {
 				return Status.CANCEL_STATUS;

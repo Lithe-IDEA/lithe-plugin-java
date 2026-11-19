@@ -682,6 +682,229 @@ pub fn project_name(module: &Path) -> String {
         .unwrap_or(folder)
 }
 
+/// IDEA modules are displayed as declared. JDT resolves their libraries in
+/// one unmanaged workspace project, so effective paths are workspace facts.
+pub(crate) fn idea_fields(
+    zh: bool,
+    root: &Path,
+    module: &crate::project_model::IdeaModule,
+    classpaths: Option<&[String]>,
+) -> Vec<Value> {
+    use crate::project_model::Origin;
+
+    let source_section = local(zh, "Sources", "源");
+    let paths_section = local(zh, "Paths", "路径");
+    let dependencies_section = local(zh, "Dependencies", "依赖");
+    let declared = local(zh, "IDEA declaration", "IDEA 声明");
+    let effective: Option<std::collections::BTreeSet<_>> = classpaths.map(|paths| {
+        paths
+            .iter()
+            .map(|path| classpath_key(Path::new(path)))
+            .collect()
+    });
+    let row = |kind: &str, value: &str, title: &str, detail: String| json!({"kind":kind,"value":truncate(value,MAX_VALUE),"title":truncate(title,256),"detail":truncate(&detail,1024)});
+    let kinds = [
+        (FOLDER, "Source folder", "源码文件夹", &module.sources),
+        ("test", "Test source", "测试源码", &module.test_sources),
+        ("resource", "Resource", "资源", &module.resources),
+        (
+            "test-resource",
+            "Test resource",
+            "测试资源",
+            &module.test_resources,
+        ),
+        ("excluded", "Excluded", "排除", &module.excluded),
+    ];
+    let roots: Vec<_> = kinds
+        .iter()
+        .flat_map(|(kind, en, cn, paths)| {
+            paths
+                .iter()
+                .map(|path| row(kind, path, path, local(zh, en, cn)))
+        })
+        .take(MAX_ENTRIES)
+        .collect();
+    let root_kinds: Vec<_> = kinds
+        .iter()
+        .map(|(kind, en, cn, _)| json!({"id":kind,"title":local(zh,en,cn),"input":"directory"}))
+        .collect();
+    let content_roots: Vec<_> = module
+        .content_roots
+        .iter()
+        .take(MAX_ENTRIES)
+        .map(|path| {
+            let path = if path == "." {
+                root.to_path_buf()
+            } else {
+                root.join(path)
+            };
+            truncate(&path.display().to_string(), MAX_VALUE)
+        })
+        .collect();
+    let mut dependencies = Vec::new();
+    for (entry, directory) in module
+        .libraries
+        .iter()
+        .map(|item| (item, false))
+        .chain(module.class_folders.iter().map(|item| (item, true)))
+        .take(MAX_ENTRIES)
+    {
+        let pattern = entry.pattern.as_str();
+        let glob = pattern
+            .strip_suffix("/**/*.jar")
+            .map(|base| (base, true))
+            .or_else(|| pattern.strip_suffix("/*.jar").map(|base| (base, false)));
+        let (kind, type_name, title) = if let Some((base, _)) = glob {
+            (
+                LIBRARY,
+                local(zh, "JAR directory", "JAR 库目录"),
+                split_path(base).0,
+            )
+        } else if directory {
+            (
+                CLASSES,
+                local(zh, "Class folder", "类目录"),
+                split_path(pattern).0,
+            )
+        } else {
+            (ARCHIVE, local(zh, "Archive", "归档"), split_path(pattern).0)
+        };
+        let source = if entry.origin == Origin::IdeaProjectLibrary {
+            local(zh, "IDEA project library", "IDEA 项目库")
+        } else {
+            local(zh, "IDEA module library", "IDEA 模块库")
+        };
+        let status = effective.as_ref().map_or_else(
+            || local(zh, "JDT status unconfirmed", "JDT 状态未确认"),
+            |paths| {
+                if let Some((base, recursive)) = glob {
+                    let prefix =
+                        format!("{}/", classpath_key(&root.join(base)).trim_end_matches('/'));
+                    let matches = paths
+                        .iter()
+                        .filter(|path| {
+                            path.strip_prefix(&prefix).is_some_and(|tail| {
+                                tail.ends_with(".jar") && (recursive || !tail.contains('/'))
+                            })
+                        })
+                        .count();
+                    if matches > 0 {
+                        return if zh {
+                            format!("JDT 已加载 {matches} 个 JAR")
+                        } else {
+                            format!("{matches} JARs loaded by JDT")
+                        };
+                    }
+                } else if paths.contains(&classpath_key(&root.join(pattern))) {
+                    return local(zh, "Loaded by JDT", "JDT 已生效");
+                }
+                local(zh, "Not on JDT classpath", "未进入 JDT 类路径")
+            },
+        );
+        dependencies.push(row(
+            kind,
+            pattern,
+            title,
+            format!(
+                "{type_name} · {source} ({}) · {status} · {pattern}",
+                entry.label
+            ),
+        ));
+    }
+    for name in &module.module_dependencies {
+        if dependencies.len() == MAX_ENTRIES {
+            break;
+        }
+        dependencies.push(row(
+            MODULE,
+            name,
+            name,
+            local(
+                zh,
+                "IDEA module dependency (declared)",
+                "IDEA 模块依赖（原工程声明）",
+            ),
+        ));
+    }
+    for item in &module.unresolved {
+        if dependencies.len() == MAX_ENTRIES {
+            break;
+        }
+        use crate::project_model::UnresolvedKind;
+        let reason = match item.kind {
+            UnresolvedKind::MissingFile => local(zh, "Missing path", "路径不存在"),
+            UnresolvedKind::MissingLibrary => local(zh, "Undefined library", "找不到项目库定义"),
+            UnresolvedKind::IdeLibrary => local(
+                zh,
+                "IDEA library outside the project",
+                "IDEA 全局库或应用库",
+            ),
+            UnresolvedKind::UnknownMacro => {
+                local(zh, "Unknown IDEA path variable", "IDEA 路径变量未解析")
+            }
+            UnresolvedKind::OutsideWorkspace => continue,
+            UnresolvedKind::UserLibrary => continue,
+        };
+        dependencies.push(row(LIBRARY, &item.name, &item.name, reason));
+    }
+    let output_source = if module.inherits_output {
+        local(zh, "Inherited from IDEA project", "继承 IDEA 项目输出")
+    } else {
+        declared.clone()
+    };
+    let sdk = module
+        .sdk
+        .clone()
+        .unwrap_or_else(|| local(zh, "Inherited from IDEA project", "继承 IDEA 项目 SDK"));
+    let classpath_status = if effective.is_some() {
+        local(
+            zh,
+            "JDT returned the workspace classpath",
+            "JDT 已返回工作区类路径",
+        )
+    } else {
+        local(
+            zh,
+            "JDT classpath unconfirmed. Reload after indexing finishes.",
+            "JDT 类路径未确认。索引结束后可点「重新加载」。",
+        )
+    };
+    vec![
+        json!({"id":"content-roots","title":local(zh,"Content roots","内容根"),"section":source_section,"kind":"stringList",
+            "value":content_roots,"effectiveValue":content_roots,"effectiveSource":declared}),
+        json!({"id":ROOTS_FIELD,"title":local(zh,"Source folders","源码文件夹"),"section":source_section,"kind":"entryList",
+            "value":roots,"effectiveValue":roots,"effectiveSource":declared,
+            "entryKinds":root_kinds}),
+        json!({"id":OUTPUT_FIELD,"title":local(zh,"IDEA output","IDEA 输出目录"),"section":paths_section,"kind":"text",
+            "value":module.output,"effectiveValue":Value::Null,"effectiveSource":output_source}),
+        json!({"id":"test-output","title":local(zh,"IDEA test output","IDEA 测试输出目录"),"section":paths_section,"kind":"text",
+            "value":module.test_output,"effectiveValue":Value::Null,"effectiveSource":output_source}),
+        json!({"id":JRE_FIELD,"title":local(zh,"IDEA SDK","IDEA SDK"),"section":dependencies_section,"kind":"text",
+            "value":truncate(&sdk,MAX_VALUE),"effectiveValue":Value::Null,"effectiveSource":declared}),
+        json!({"id":"jdt-status","title":local(zh,"JDT classpath status","JDT 类路径状态"),"section":dependencies_section,"kind":"text",
+            "value":classpath_status,"effectiveValue":classpath_status,"effectiveSource":"JDT"}),
+        json!({"id":DEPENDENCIES_FIELD,"title":dependencies_section,"section":dependencies_section,"kind":"entryList",
+        "description":local(zh,"Read from the IDEA module. JDT status refers to the workspace compile classpath. Edit in IDEA or add workspace libraries in Referenced libraries (.vscode/settings.json).",
+            "读取 IDEA 模块声明。生效状态以 JDT 工作区类路径为准。可在 IDEA 修改原配置，或在「引用的库」补充工作区配置（.vscode/settings.json）。"),
+        "value":dependencies,"effectiveValue":dependencies,"effectiveSource":module.descriptor,
+        "entryKinds":[
+            {"id":ARCHIVE,"title":local(zh,"Archive","归档"),"input":"file"},
+            {"id":CLASSES,"title":local(zh,"Class folder","类目录"),"input":"directory"},
+            {"id":LIBRARY,"title":local(zh,"Library","库"),"input":"choice","choices":[]},
+            {"id":MODULE,"title":local(zh,"Module dependency","模块依赖"),"input":"choice","choices":[]}
+        ]}),
+    ]
+}
+
+pub(crate) fn classpath_key(path: &Path) -> String {
+    let path = path.to_string_lossy().replace('\\', "/");
+    if cfg!(windows) {
+        path.to_lowercase()
+    } else {
+        path
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

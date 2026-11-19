@@ -27,6 +27,11 @@ import {runTool} from './process.mjs';
 
 const pkg=resolve(process.argv[2]??'.artifacts/package/arm64/io.github.lithe-idea.java-support');
 const manifest=JSON.parse(readFileSync(join(pkg,'plugin.json')));
+const javaServer=manifest.languageServers.find(server=>server.languageID==='java');
+for(const command of ['java.project.getAll','java.project.getSettings','java.project.getClasspaths','lithe.java.projectModel.describe']){
+ assert.ok(javaServer.commands.includes(command),`Undeclared language-server command: ${command}`);
+}
+assert.ok(javaServer.requestMethods.includes('java/projectConfigurationsUpdate'),'Undeclared project settings refresh notification');
 const inputs=serverInputs();
 const javac=process.env.LITHE_TEST_JAVAC??'javac',jarTool=process.env.LITHE_TEST_JAR??'jar';
 const write=(path,content)=>{mkdirSync(dirname(path),{recursive:true});writeFileSync(path,content);};

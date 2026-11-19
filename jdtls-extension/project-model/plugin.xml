@@ -9,6 +9,7 @@
 -->
 <plugin>
    <extension point="org.eclipse.jdt.core.classpathContainerInitializer">
+      <classpathContainerInitializer id="io.github.lithe_idea.java.projectmodel.IDEA_CLASS_FOLDERS" class="io.github.lithe_idea.java.projectmodel.LitheContainerInitializer"/>
       <classpathContainerInitializer id="org.eclipse.jst.j2ee.internal.web.container" class="io.github.lithe_idea.java.projectmodel.LitheContainerInitializer"/>
       <classpathContainerInitializer id="org.eclipse.jst.j2ee.internal.module.container" class="io.github.lithe_idea.java.projectmodel.LitheContainerInitializer"/>
       <classpathContainerInitializer id="org.eclipse.jst.server.core.container" class="io.github.lithe_idea.java.projectmodel.LitheContainerInitializer"/>

@@ -11,20 +11,26 @@ use crate::project_model::{
     Explicit, ModelKind, Origin, ProjectModel, UnresolvedKind, UPSTREAM_DEFAULT_LIBRARIES,
 };
 use serde_json::{json, Value};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 /// Field IDs of the `.vscode/settings.json` source.
 pub const LIBRARIES_FIELD: &str = "libraries";
 pub const SOURCE_PATHS_FIELD: &str = "source-paths";
+pub const CLASS_FOLDERS_FIELD: &str = "class-folders";
 pub const STORE_DETECTED_FIELD: &str = "store-detected";
 /// JDT LS project setting with the absolute source folders of a project.
 pub const SOURCE_PATHS_FACT: &str = "org.eclipse.jdt.ls.core.sourcePaths";
+pub const OUTPUT_PATH_FACT: &str = "org.eclipse.jdt.ls.core.outputPath";
 /// The project model bundle's command (`DescribeCommandHandler`).
 pub const DESCRIBE_COMMAND: &str = "lithe.java.projectModel.describe";
 /// Most lines of one read-only list; the host shows at most 256.
 const MAX_LINES: usize = 256;
 /// The contract's bound of one list item.
 const MAX_ITEM_BYTES: usize = 4096;
+pub(crate) const JAR_DIRECTORY: &str = "jar-directory";
+pub(crate) const CLASS_FOLDER: &str = "classes";
+pub(crate) const ARCHIVE: &str = "archive";
 
 fn text(zh: bool, en: &str, cn: &str) -> String {
     if zh { cn } else { en }.to_owned()
@@ -79,7 +85,11 @@ impl Page<'_> {
     pub fn settings_fields(&self, fact: &Value, libraries: Value) -> Vec<Value> {
         let zh = self.zh;
         let detected = crate::project_model::detected_include(self.model).len();
-        let library_source = if detected > 0 {
+        let library_source = if self.model.kind == ModelKind::Idea
+            && !fact[crate::project_settings::LIBRARIES_FACT].is_array()
+        {
+            text(zh, "JDT classpath not confirmed", "JDT 类路径未确认")
+        } else if detected > 0 {
             if zh {
                 format!("JDT 实际生效，含自动识别的 {detected} 项")
             } else {
@@ -128,6 +138,19 @@ impl Page<'_> {
             "inheritedValue": if inherited.is_empty() { Value::Null } else { json!(inherited) },
             "effectiveSource": effective_source,
         }));
+        if !self.model.kind.managed() {
+            fields.push(json!({
+                "id": CLASS_FOLDERS_FIELD,
+                "title":text(zh,"Additional class folders","补充类目录"),
+                "description":text(zh,
+                    "Folders containing compiled classes. Add an absolute path or a workspace-relative path, one per line. Saved under java.lithe.classFolders in .vscode/settings.json.",
+                    "包含已编译类的目录。每行填写一个绝对路径或相对于工作区的路径，保存到 .vscode/settings.json 的 java.lithe.classFolders。"),
+                "kind":"stringList",
+                "value":self.explicit.class_folders.as_ref().filter(|value| value.is_array()),
+                "effectiveValue":Value::Null,
+                "effectiveSource":".vscode/settings.json",
+            }));
+        }
         if !self.storable().is_empty() || !self.storable_source_paths().is_empty() {
             let stored = self.stored();
             fields.push(json!({
@@ -143,6 +166,202 @@ impl Page<'_> {
             }));
         }
         fields
+    }
+
+    pub fn workspace_fields(
+        &self,
+        fact: &Value,
+        classpaths: Option<&[String]>,
+    ) -> (Vec<Value>, bool) {
+        use crate::module_structure::{
+            classpath_key, DEPENDENCIES_FIELD, OUTPUT_FIELD, ROOTS_FIELD,
+        };
+
+        let zh = self.zh;
+        let dependencies = text(zh, "Dependencies", "依赖");
+        let origin = ".vscode/settings.json";
+        let mut fields = self.settings_fields(fact, Value::Null);
+        fields.retain(|field| field["id"] == STORE_DETECTED_FIELD);
+        let configured_roots = self.explicit.source_paths.as_ref().filter(|value| {
+            value.as_array().is_some_and(|paths| !paths.is_empty())
+                || (value.is_array() && !self.explicit.source_roles.is_empty())
+        });
+        let jdt_roots = relative_list(self.root, &fact[SOURCE_PATHS_FACT]);
+        let kinds = [
+            ("folder", text(zh, "Source folder", "源码文件夹")),
+            ("test", text(zh, "Test source", "测试源码")),
+            ("resource", text(zh, "Resources", "资源")),
+            ("test-resource", text(zh, "Test resources", "测试资源")),
+            ("excluded", text(zh, "Excluded folder", "排除目录")),
+        ];
+        let entry_kinds: Vec<_> = kinds
+            .iter()
+            .map(|(id, title)| json!({"id":id,"title":title,"input":"directory"}))
+            .collect();
+        let entries = |value: Option<&Value>| {
+            value.and_then(Value::as_array).map(|paths| {
+            let mut seen = BTreeSet::new();
+            let rows = paths.iter().filter_map(Value::as_str).filter(|path| valid_path(path) && seen.insert(*path))
+                .take(MAX_LINES).map(|path| json!({"kind":"folder","value":path,"title":truncate(path.to_owned(),256)})).collect::<Vec<_>>();
+            json!(rows)
+        })
+        };
+        let mut declared = entries(configured_roots);
+        let excluded = self.explicit.source_roles.get("excluded");
+        if let Some(rows) = declared.as_mut().and_then(Value::as_array_mut) {
+            for row in rows.iter_mut() {
+                if let Some((kind, label)) = kinds.iter().skip(1).take(3).find(|(kind, _)| {
+                    self.explicit
+                        .source_roles
+                        .get(kind)
+                        .is_some_and(|paths| paths.iter().any(|path| row["value"] == path.as_str()))
+                }) {
+                    row["kind"] = json!(kind);
+                    row["detail"] = json!(label);
+                }
+            }
+            if let Some(paths) = excluded {
+                let mut seen = BTreeSet::new();
+                let capacity = MAX_LINES.saturating_sub(rows.len());
+                rows.extend(paths.iter().filter(|path| valid_path(path) && seen.insert(*path)).take(capacity)
+                    .map(|path| json!({"kind":"excluded","value":path,"title":truncate(path.to_owned(),256),"detail":kinds[4].1})));
+            }
+        }
+        let roots_complete = configured_roots
+            .and_then(Value::as_array)
+            .is_none_or(|paths| {
+                paths.len() + excluded.map_or(0, Vec::len) <= MAX_LINES
+                    && paths
+                        .iter()
+                        .all(|path| path.as_str().is_some_and(valid_path))
+            });
+        fields.insert(0, json!({"id":ROOTS_FIELD,"title":text(zh,"Source folders","源码文件夹"),
+            "section":text(zh,"Sources","源"),"kind":"entryList",
+            "value":declared,"effectiveValue":entries(Some(&jdt_roots)),
+            "inheritedValue":if configured_roots.is_none() { entries(Some(&jdt_roots)) } else { None },
+            "effectiveSource":if configured_roots.is_some() { origin.to_owned() } else { text(zh,"JDT inference","JDT 推断") },
+            "description":text(zh, "Choose each folder's role. Exclusions apply within source roots. Resource folders copy non-Java files to the compiler output.", "可按用途添加目录。排除目录作用于其所在的源码根。资源目录中的非 Java 文件会复制到编译输出。"),
+            "entryKinds":entry_kinds}));
+        let output = self.explicit.output_path.as_ref().and_then(Value::as_str);
+        let effective_output = fact[OUTPUT_PATH_FACT]
+            .as_str()
+            .filter(|path| !path.is_empty())
+            .map(|path| crate::project_model::relative_or_absolute(self.root, Path::new(path)));
+        fields.insert(1, json!({"id":OUTPUT_FIELD,"title":text(zh,"Output folder","输出文件夹"),
+            "section":text(zh,"Paths","路径"),"kind":"text","value":output,"effectiveValue":effective_output,
+            "inheritedValue":if output.is_none() { effective_output.as_deref() } else { None },
+            "effectiveSource":if effective_output.is_some() || output.is_none() { "JDT" } else { origin },
+            "description":text(zh,"Workspace-relative output folder. Leave empty to use JDT's default.","填写相对于工作区的输出文件夹。留空时使用 JDT 默认目录。")}));
+        for field in &mut fields[2..] {
+            field["section"] = json!(&dependencies);
+        }
+
+        let actual = classpaths.map(|paths| {
+            paths
+                .iter()
+                .map(|path| classpath_key(Path::new(path)))
+                .collect::<BTreeSet<_>>()
+        });
+        let include = if self.explicit.libraries.is_none() {
+            vec![UPSTREAM_DEFAULT_LIBRARIES.to_owned()]
+        } else {
+            self.explicit.include()
+        };
+        let class_folders = self
+            .explicit
+            .class_folders
+            .as_ref()
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten();
+        let mut seen = BTreeSet::new();
+        let mut complete = true;
+        let mut rows = Vec::new();
+        for (value, class_folder) in include
+            .iter()
+            .map(|v| (v.as_str(), false))
+            .chain(class_folders.filter_map(Value::as_str).map(|v| (v, true)))
+        {
+            let normalized = value.replace('\\', "/");
+            let directory = (!class_folder)
+                .then(|| jar_directory(&normalized))
+                .flatten();
+            let (kind, label, target) = if class_folder {
+                (
+                    CLASS_FOLDER,
+                    text(zh, "Class folder", "类目录"),
+                    normalized.as_str(),
+                )
+            } else if let Some((base, _)) = directory {
+                (JAR_DIRECTORY, text(zh, "JAR directory", "JAR 库目录"), base)
+            } else {
+                (
+                    ARCHIVE,
+                    text(zh, "JAR file or pattern", "JAR 文件或匹配规则"),
+                    normalized.as_str(),
+                )
+            };
+            if !seen.insert((kind, value)) {
+                continue;
+            }
+            if rows.len() == MAX_LINES || !valid_path(value) {
+                complete = false;
+                continue;
+            }
+            let status = match &actual {
+                Some(actual) if !target.contains(['*', '?', '[', '{']) => {
+                    let path = self.root.join(target);
+                    let key = classpath_key(&dunce::canonicalize(&path).unwrap_or(path));
+                    if let Some((_, recursive)) = directory {
+                        let prefix = format!("{}/", key.trim_end_matches('/'));
+                        let count = actual
+                            .iter()
+                            .filter(|path| {
+                                path.strip_prefix(&prefix).is_some_and(|tail| {
+                                    tail.to_ascii_lowercase().ends_with(".jar")
+                                        && (recursive || !tail.contains('/'))
+                                })
+                            })
+                            .count();
+                        if zh {
+                            format!("JDT 已加载 {count} 个 JAR")
+                        } else {
+                            format!("{count} JARs loaded by JDT")
+                        }
+                    } else if actual.contains(&key) {
+                        text(zh, "Loaded by JDT", "JDT 已生效")
+                    } else {
+                        text(zh, "Not on JDT classpath", "未进入 JDT 类路径")
+                    }
+                }
+                _ => text(zh, "JDT status unconfirmed", "JDT 状态未确认"),
+            };
+            let title = target
+                .trim_end_matches('/')
+                .rsplit('/')
+                .next()
+                .filter(|name| !name.is_empty())
+                .unwrap_or(target);
+            rows.push(
+                json!({"kind":kind,"value":value,"title":truncate(title.to_owned(),256),
+                "detail":truncate(format!("{label} · {status} · {value}"),1024)}),
+            );
+        }
+        let description = if complete {
+            text(zh, "Workspace dependencies saved in .vscode/settings.json. Automatically detected entries are shown under Project model.",
+                "工作区依赖保存到 .vscode/settings.json。自动识别的依赖显示在「工程模型」。")
+        } else {
+            text(zh, "Some configured dependencies exceed this editor's limits. Edit .vscode/settings.json to change them.",
+                "部分依赖超出编辑器支持的范围。请在 .vscode/settings.json 中修改。")
+        };
+        fields.insert(2, json!({"id":DEPENDENCIES_FIELD,"title":dependencies,"section":dependencies,"kind":"entryList",
+            "description":description,"value":rows,"effectiveValue":rows,"effectiveSource":origin,
+            "entryKinds":[
+                {"id":ARCHIVE,"title":text(zh,"JAR file","JAR 文件"),"input":"file","extensions":["jar"]},
+                {"id":JAR_DIRECTORY,"title":text(zh,"JAR directory","JAR 库目录"),"input":"directory"},
+                {"id":CLASS_FOLDER,"title":text(zh,"Class folder","类目录"),"input":"directory"}
+            ]}));
+        (fields, complete && roots_complete)
     }
 
     /// Read-only sources of the model. `taken` holds the paths of the
@@ -498,11 +717,6 @@ impl Page<'_> {
                         "IDEA global or application library, kept outside the project",
                         "IDEA 全局库或应用库，不在项目内",
                     ),
-                    UnresolvedKind::ClassFolder => text(
-                        zh,
-                        "class folder; JDT accepts only JAR files",
-                        "类文件夹，JDT 只接受 JAR",
-                    ),
                     UnresolvedKind::UnknownMacro => text(
                         zh,
                         "path variable known only to IDEA",
@@ -523,6 +737,20 @@ impl Page<'_> {
             })
             .collect()
     }
+}
+
+pub(crate) fn jar_directory(pattern: &str) -> Option<(&str, bool)> {
+    pattern
+        .strip_suffix("/**/*.jar")
+        .or_else(|| pattern.strip_suffix("/**"))
+        .map(|base| (base, true))
+        .or_else(|| pattern.strip_suffix("/*.jar").map(|base| (base, false)))
+}
+
+pub(crate) fn valid_path(value: &str) -> bool {
+    !value.trim().is_empty()
+        && value.len() <= MAX_ITEM_BYTES
+        && !value.chars().any(char::is_control)
 }
 
 /// `n` English things, singular for one.
@@ -636,12 +864,40 @@ mod tests {
     use crate::project_model::servlet::{ServletResolution, ServletRuntime};
     use crate::project_model::{Detected, Unresolved};
 
+    #[test]
+    fn workspace_shows_jdt_source_and_output_without_creating_overrides() {
+        let model = model(ModelKind::Plain);
+        let explicit = Explicit::default();
+        let root = Path::new("workspace");
+        let (fields, _) = Page {
+            zh: false,
+            root,
+            model: &model,
+            explicit: &explicit,
+            described: None,
+        }
+        .workspace_fields(
+            &json!({
+                (SOURCE_PATHS_FACT): [root.join("src")],
+                "org.eclipse.jdt.ls.core.outputPath": root.join("bin"),
+            }),
+            None,
+        );
+        let field = |id| fields.iter().find(|field| field["id"] == id).unwrap();
+        assert!(field("roots")["value"].is_null());
+        assert_eq!(field("roots")["inheritedValue"][0]["value"], "src");
+        assert!(field("output")["value"].is_null());
+        assert_eq!(field("output")["inheritedValue"], "bin");
+        assert_eq!(field("output")["effectiveValue"], "bin");
+    }
+
     fn model(kind: ModelKind) -> ProjectModel {
         ProjectModel {
             kind,
             enabled: true,
             descriptor: Some(".idea/modules.xml".into()),
             idea_modules: 2,
+            idea_module_details: Vec::new(),
             eclipse_projects: 0,
             libraries: vec![Detected {
                 pattern: "web/WEB-INF/lib/*.jar".into(),

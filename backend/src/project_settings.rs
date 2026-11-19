@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use url::Url;
 
-use crate::project_model::{self, Environment, Explicit, ModelOptions, ProjectModel};
+use crate::project_model::{self, Environment, Explicit, ModelKind, ModelOptions, ProjectModel};
 
 const LIMIT: u64 = 2 * 1024 * 1024;
 const TARGET: &str = "org.eclipse.jdt.core.compiler.codegen.targetPlatform";
@@ -27,6 +27,9 @@ const PREFS: &str = ".settings/org.eclipse.jdt.core.prefs";
 const SETTINGS: &str = ".vscode/settings.json";
 const LIBRARY_KEY: &str = "java.project.referencedLibraries";
 const SOURCE_PATHS_KEY: &str = "java.project.sourcePaths";
+const OUTPUT_KEY: &str = "java.project.outputPath";
+const JDT_COMMAND_TIMEOUT_MS: u64 = 30_000;
+const WORKSPACE_CLASSPATH_TIMEOUT_MS: u64 = 1_500;
 
 /// Bounded native read bindings; no configuration documents or tool models are cached.
 #[derive(Default)]
@@ -77,9 +80,17 @@ fn root(context: &Context) -> Result<PathBuf, FunctionError> {
     dunce::canonicalize(path).map_err(|_| fail())
 }
 fn command(context: &Context, name: &str, args: Value) -> Result<Value, FunctionError> {
+    command_with_timeout(context, name, args, JDT_COMMAND_TIMEOUT_MS)
+}
+fn command_with_timeout(
+    context: &Context,
+    name: &str,
+    args: Value,
+    timeout_ms: u64,
+) -> Result<Value, FunctionError> {
     context.check_cancelled()?;
     let workspace = context.workspace_context().ok_or_else(fail)?;
-    let answer=context.host().request(crate::settings_session::REQUEST_METHOD,json!({"context":workspace.to_value(),"serverID":"java","method":"workspace/executeCommand","params":{"command":name,"arguments":args},"timeoutMilliseconds":30000})).map_err(|_|fail())?;
+    let answer=context.host().request(crate::settings_session::REQUEST_METHOD,json!({"context":workspace.to_value(),"serverID":"java","method":"workspace/executeCommand","params":{"command":name,"arguments":args},"timeoutMilliseconds":timeout_ms})).map_err(|_|fail())?;
     Ok(answer.get("value").cloned().unwrap_or(Value::Null))
 }
 fn local(zh: bool, en: &str, cn: &str) -> String {
@@ -173,7 +184,7 @@ fn compiler_fields(
 }
 
 impl ProjectSettings {
-    /// Projects native settings only after the declared JDT server is ready.
+    /// Projects native settings and reports the JDT facts available for them.
     pub fn snapshot(
         &self,
         params: Value,
@@ -191,7 +202,29 @@ impl ProjectSettings {
                 .refresh_native_settings(context.workspace_context().ok_or_else(fail)?, &root)
                 .map_err(|_| fail())?;
         }
-        let projects = command(context, "java.project.getAll", json!([]))?;
+        let model = if libraries {
+            let workspace = context.workspace_context().ok_or_else(fail)?;
+            let options = session.model_options(workspace.context_id());
+            let explicit = Explicit::from_document(&native_json(&read(&root.join(SETTINGS))?.0)?);
+            Some((
+                project_model::detect(&root, &options, &Environment::current()),
+                explicit,
+            ))
+        } else {
+            None
+        };
+        let workspace_module = model.as_ref().is_some_and(|(model, _)| {
+            matches!(model.kind, ModelKind::Plain | ModelKind::LegacyWeb)
+        });
+        let workspace_uri = model
+            .as_ref()
+            .filter(|(model, _)| workspace_module || !model.idea_module_details.is_empty())
+            .and_then(|_| Url::from_file_path(&root).ok());
+        let projects = if let Some(uri) = &workspace_uri {
+            json!([uri.as_str()])
+        } else {
+            command(context, "java.project.getAll", json!([]))?
+        };
         if params["operation"] == "readAfterSave" {
             let identifiers: Vec<_> = projects
                 .as_array()
@@ -211,10 +244,42 @@ impl ProjectSettings {
             LIBRARIES_FACT,
             crate::library_settings::SOURCE_PATHS_FACT
         ]);
+        // The workspace configuration is available while JDT waits for indexing.
+        let workspace_classpaths = workspace_uri.as_ref().and_then(|uri| {
+            resolved_classpaths(context, uri.as_str(), WORKSPACE_CLASSPATH_TIMEOUT_MS)
+        });
         let mut facts = Vec::new();
+        if let Some(uri) = &workspace_uri {
+            let settings = workspace_classpaths
+                .as_ref()
+                .and_then(|_| {
+                    command_with_timeout(
+                        context,
+                        "java.project.getSettings",
+                        json!([
+                            uri.as_str(),
+                            [
+                                LIBRARIES_FACT,
+                                crate::library_settings::SOURCE_PATHS_FACT,
+                                crate::library_settings::OUTPUT_PATH_FACT
+                            ]
+                        ]),
+                        WORKSPACE_CLASSPATH_TIMEOUT_MS,
+                    )
+                    .ok()
+                })
+                .unwrap_or(Value::Null);
+            facts.push((root.clone(), settings));
+        }
+        context.check_cancelled()?;
         // Maven and Gradle projects: shown read-only on the structure page.
         let mut managed_projects = Vec::new();
-        for entry in projects.as_array().ok_or_else(fail)? {
+        for entry in projects
+            .as_array()
+            .ok_or_else(fail)?
+            .iter()
+            .filter(|_| workspace_uri.is_none())
+        {
             context.check_cancelled()?;
             let value = entry.as_str().ok_or_else(fail)?;
             let path = Url::parse(value)
@@ -275,31 +340,25 @@ impl ProjectSettings {
         // what the project model bundle made of Eclipse containers. A JDT LS
         // without the bundle (an older user installation) has no describe
         // command; the page then shows only what the backend detected.
-        let model = if libraries {
-            let workspace = context.workspace_context().ok_or_else(fail)?;
-            let options = session.model_options(workspace.context_id());
-            let explicit = Explicit::from_document(&native_json(&read(&root.join(SETTINGS))?.0)?);
-            let model = project_model::detect(&root, &options, &Environment::current());
-            let described = command(
+        let described = if libraries && workspace_uri.is_none() {
+            command(
                 context,
                 crate::library_settings::DESCRIBE_COMMAND,
                 json!([]),
             )
-            .ok();
-            Some((model, explicit, described))
+            .ok()
         } else {
             None
         };
-        let page =
-            model.as_ref().map(
-                |(model, explicit, described)| crate::library_settings::Page {
-                    zh,
-                    root: &root,
-                    model,
-                    explicit,
-                    described: described.as_ref(),
-                },
-            );
+        let page = model
+            .as_ref()
+            .map(|(model, explicit)| crate::library_settings::Page {
+                zh,
+                root: &root,
+                model,
+                explicit,
+                described: described.as_ref(),
+            });
         let mut sources = Vec::new();
         let mut bindings = BTreeMap::new();
         let mut paths = BTreeSet::new();
@@ -335,8 +394,22 @@ impl ProjectSettings {
                 .replace('\\', "/");
             let id = format!("source{:x}", Sha256::digest(rel.as_bytes()));
             let (bytes, revision) = read(&source_path)?;
+            let mut writable = true;
             let mut fields = if let Some(page) = &page {
-                page.settings_fields(&fact, library_input(&native_json(&bytes)?))
+                let settings = native_json(&bytes)?;
+                if workspace_module {
+                    let explicit = Explicit::from_document(&settings);
+                    let page = crate::library_settings::Page {
+                        explicit: &explicit,
+                        ..*page
+                    };
+                    let (fields, complete) =
+                        page.workspace_fields(&fact, workspace_classpaths.as_deref());
+                    writable = complete;
+                    fields
+                } else {
+                    page.settings_fields(&fact, library_input(&settings))
+                }
             } else {
                 compiler_fields(zh, &properties(&bytes)?, &fact, true)
             };
@@ -350,10 +423,12 @@ impl ProjectSettings {
                     }
                 }
             }
-            bindings.insert(id.clone(), source_path);
-            sources.push(json!({"id":id,"group":if libraries{"libraries"}else{"modules"},"title":path.file_name().and_then(|n|n.to_str()).unwrap_or("Java"),"path":rel,"revision":revision,"writable":true,"fields":fields}));
+            if writable {
+                bindings.insert(id.clone(), source_path);
+            }
+            sources.push(json!({"id":id,"group":if libraries && !workspace_module{"libraries"}else{"modules"},"title":crate::module_structure::project_name(&path),"path":rel,"revision":revision,"writable":writable,"fields":fields}));
         }
-        let module_sources = if libraries {
+        let mut module_sources = if libraries {
             self.module_sources(
                 context,
                 zh,
@@ -366,10 +441,33 @@ impl ProjectSettings {
         } else {
             Vec::new()
         };
+        if let Some(page) = &page {
+            if !page.model.idea_module_details.is_empty() {
+                for module in &page.model.idea_module_details {
+                    let file = root.join(&module.descriptor);
+                    let Some(rel) = project_model::relative_inside(&root, &file) else {
+                        continue;
+                    };
+                    if !paths.insert(file.clone()) {
+                        continue;
+                    }
+                    let (_, revision) = read(&file)?;
+                    let id = format!("idea{:x}", Sha256::digest(rel.as_bytes()));
+                    let fields = crate::module_structure::idea_fields(
+                        zh,
+                        &root,
+                        module,
+                        workspace_classpaths.as_deref(),
+                    );
+                    module_sources.push(json!({"id":id,"group":"modules","title":module.name,"path":rel,"revision":revision,"writable":false,"fields":fields}));
+                }
+            }
+        }
         let mut groups = if libraries {
             let mut groups = Vec::new();
             if module_sources
                 .iter()
+                .chain(&sources)
                 .any(|source| source["group"] == "modules")
             {
                 groups.push(
@@ -382,9 +480,7 @@ impl ProjectSettings {
             {
                 groups.push(json!({"id":"facets","title":local(zh,"Web Facets","Web Facet"),"layout":"sidebar"}));
             }
-            if module_sources.is_empty()
-                || sources.iter().any(|source| source["group"] == "libraries")
-            {
+            if sources.iter().any(|source| source["group"] == "libraries") {
                 groups.push(json!({"id":"libraries","title":local(zh,"Referenced libraries","引用的库"),"layout":"form"}));
             }
             groups
@@ -528,21 +624,7 @@ impl ProjectSettings {
             else {
                 continue;
             };
-            // JDT reads the options from a JSON string, as vscode-java sends them.
-            let resolved = command(
-                context,
-                "java.project.getClasspaths",
-                json!([uri, r#"{"scope":"test"}"#]),
-            );
-            let Some(resolved) = resolved.ok().and_then(|value| {
-                value["classpaths"].as_array().map(|items| {
-                    items
-                        .iter()
-                        .filter_map(Value::as_str)
-                        .map(str::to_owned)
-                        .collect::<Vec<_>>()
-                })
-            }) else {
+            let Some(resolved) = resolved_classpaths(context, uri, JDT_COMMAND_TIMEOUT_MS) else {
                 unavailable += 1;
                 continue;
             };
@@ -676,6 +758,25 @@ impl ProjectSettings {
     }
 }
 
+fn resolved_classpaths(context: &Context, uri: &str, timeout_ms: u64) -> Option<Vec<String>> {
+    // JDT reads the options from a JSON string, as vscode-java sends them.
+    let value = command_with_timeout(
+        context,
+        "java.project.getClasspaths",
+        json!([uri, r#"{"scope":"test"}"#]),
+        timeout_ms,
+    )
+    .ok()?;
+    Some(
+        value["classpaths"]
+            .as_array()?
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::to_owned)
+            .collect(),
+    )
+}
+
 /// Reads the actual upstream settings sources and overlays the detected
 /// project model; used at startup and on every push. Returns the `java`
 /// sections to overlay and the model they came from.
@@ -691,7 +792,7 @@ pub fn native_settings(
     let (bytes, _) = read(&root.join(SETTINGS))?;
     let explicit = Explicit::from_document(&native_json(&bytes)?);
     let model = project_model::detect(root, options, &Environment::current());
-    let overlay = project_model::overlay(&model, &explicit);
+    let overlay = project_model::overlay(root, &model, &explicit);
     for section in ["project", "lithe"] {
         if overlay
             .get(section)
@@ -731,13 +832,105 @@ fn edit_settings(
     values: &serde_json::Map<String, Value>,
     options: &ModelOptions,
 ) -> Result<Vec<u8>, FunctionError> {
-    use crate::library_settings::{LIBRARIES_FIELD, SOURCE_PATHS_FIELD, STORE_DETECTED_FIELD};
+    use crate::library_settings::{
+        CLASS_FOLDERS_FIELD, LIBRARIES_FIELD, SOURCE_PATHS_FIELD, STORE_DETECTED_FIELD,
+    };
     let mut document = bytes.to_vec();
     if let Some(libraries) = values.get(LIBRARIES_FIELD) {
         document = edit_json(&document, LIBRARY_KEY, libraries)?;
     }
     if let Some(paths) = values.get(SOURCE_PATHS_FIELD) {
         document = edit_json(&document, SOURCE_PATHS_KEY, paths)?;
+    }
+    if let Some(roots) = values.get(crate::module_structure::ROOTS_FIELD) {
+        let mut roles = BTreeMap::<&str, Vec<String>>::new();
+        let paths = match roots {
+            Value::Null => Value::Null,
+            Value::Array(entries) if entries.len() <= 256 => {
+                let mut folders: Vec<(&str, String)> = Vec::new();
+                for entry in entries {
+                    let kind = entry["kind"]
+                        .as_str()
+                        .filter(|kind| {
+                            *kind == "folder"
+                                || project_model::SOURCE_ROLE_KEYS
+                                    .iter()
+                                    .any(|(role, _)| role == kind)
+                        })
+                        .ok_or_else(fail)?;
+                    let path = entry["value"]
+                        .as_str()
+                        .filter(|path| crate::library_settings::valid_path(path))
+                        .ok_or_else(fail)?;
+                    let path = Path::new(path);
+                    let candidate = if path.is_absolute() {
+                        path.to_path_buf()
+                    } else {
+                        root.join(path)
+                    };
+                    let resolved = dunce::canonicalize(candidate).map_err(|_| fail())?;
+                    if !resolved.is_dir() {
+                        return Err(fail());
+                    }
+                    let relative =
+                        project_model::relative_inside(root, &resolved).ok_or_else(fail)?;
+                    if relative.contains(['*', '?', '|']) || (kind == "excluded" && relative == ".")
+                    {
+                        return Err(fail());
+                    }
+                    if let Some((mark, _)) = folders.iter_mut().find(|(_, path)| *path == relative)
+                    {
+                        *mark = kind;
+                    } else {
+                        folders.push((kind, relative));
+                    }
+                }
+                let mut paths = Vec::new();
+                for (kind, relative) in folders {
+                    if kind != "folder" {
+                        roles.entry(kind).or_default().push(relative.clone());
+                    }
+                    if kind != "excluded" {
+                        paths.push(relative);
+                    }
+                }
+                json!(paths)
+            }
+            _ => return Err(fail()),
+        };
+        document = edit_json(&document, SOURCE_PATHS_KEY, &paths)?;
+        let current = native_json(&document)?;
+        for (kind, key) in project_model::SOURCE_ROLE_KEYS {
+            let value = roles.remove(kind).map_or(Value::Null, |paths| json!(paths));
+            if current.get(key).unwrap_or(&Value::Null) != &value {
+                document = edit_json(&document, key, &value)?;
+            }
+        }
+    }
+    if let Some(paths) = values.get(CLASS_FOLDERS_FIELD) {
+        document = edit_json(&document, project_model::CLASS_FOLDERS_KEY, paths)?;
+    }
+    if let Some(entries) = values.get(crate::module_structure::DEPENDENCIES_FIELD) {
+        document = edit_workspace_dependencies(root, &document, entries)?;
+    }
+    if let Some(output) = values.get(crate::module_structure::OUTPUT_FIELD) {
+        let output = match output {
+            Value::Null => Value::Null,
+            Value::String(path) if path.trim().is_empty() => Value::Null,
+            Value::String(path)
+                if crate::library_settings::valid_path(path)
+                    && Path::new(path).components().all(|part| {
+                        matches!(
+                            part,
+                            std::path::Component::Normal(_) | std::path::Component::CurDir
+                        )
+                    }) =>
+            {
+                output.clone()
+            }
+            _ => return Err(fail()),
+        };
+        document = edit_json(&document, OUTPUT_KEY, &output)?;
     }
     if let Some(store) = values.get(STORE_DETECTED_FIELD) {
         let store = match store {
@@ -768,7 +961,77 @@ fn edit_settings(
     }
     Ok(document)
 }
-/// Sets or (with null) removes the string list `key`; a rich
+
+fn edit_workspace_dependencies(
+    root: &Path,
+    bytes: &[u8],
+    entries: &Value,
+) -> Result<Vec<u8>, FunctionError> {
+    use crate::library_settings::{
+        jar_directory, valid_path, ARCHIVE, CLASS_FOLDER, JAR_DIRECTORY,
+    };
+    let settings = native_json(bytes)?;
+    let original = Explicit::from_document(&settings);
+    let mut include = Vec::new();
+    let mut classes = Vec::new();
+    if !entries.is_null() {
+        let entries = entries
+            .as_array()
+            .filter(|items| items.len() <= 256)
+            .ok_or_else(fail)?;
+        for entry in entries {
+            let path = entry["value"]
+                .as_str()
+                .filter(|path| valid_path(path))
+                .ok_or_else(fail)?;
+            let (list, value) = match entry["kind"].as_str() {
+                Some(ARCHIVE) => (&mut include, path.to_owned()),
+                Some(CLASS_FOLDER) => (&mut classes, path.to_owned()),
+                Some(JAR_DIRECTORY) => {
+                    let normalized = path.replace('\\', "/");
+                    let pattern = if jar_directory(&normalized).is_some() {
+                        path.to_owned()
+                    } else {
+                        let base = project_model::relative_inside(root, Path::new(path))
+                            .unwrap_or(normalized);
+                        format!("{}/*.jar", base.trim_end_matches('/'))
+                    };
+                    if !valid_path(&pattern) {
+                        return Err(fail());
+                    }
+                    (&mut include, pattern)
+                }
+                _ => return Err(fail()),
+            };
+            if !list.contains(&value) {
+                list.push(value);
+            }
+        }
+    }
+    let mut document = bytes.to_vec();
+    let implicit = [project_model::UPSTREAM_DEFAULT_LIBRARIES];
+    if entries.is_null() || !(original.libraries.is_none() && include == implicit) {
+        let libraries = if entries.is_null() {
+            Value::Null
+        } else {
+            json!(include)
+        };
+        if library_input(&settings) != libraries {
+            document = edit_json(&document, LIBRARY_KEY, &libraries)?;
+        }
+    }
+    let classes = if classes.is_empty() {
+        Value::Null
+    } else {
+        json!(classes)
+    };
+    if original.class_folders.unwrap_or(Value::Null) != classes {
+        document = edit_json(&document, project_model::CLASS_FOLDERS_KEY, &classes)?;
+    }
+    Ok(document)
+}
+
+/// Sets or (with null) removes `key`; a rich
 /// `referencedLibraries` object keeps its excludes and sources and only
 /// its `include` changes.
 fn edit_json(bytes: &[u8], key: &str, libraries: &Value) -> Result<Vec<u8>, FunctionError> {
@@ -785,17 +1048,21 @@ fn edit_json(bytes: &[u8], key: &str, libraries: &Value) -> Result<Vec<u8>, Func
             prop.remove();
         }
     } else {
-        let values = libraries
-            .as_array()
-            .ok_or_else(fail)?
-            .iter()
-            .map(|v| {
-                v.as_str()
-                    .map(|s| CstInputValue::String(s.to_owned()))
-                    .ok_or_else(fail)
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let input = CstInputValue::Array(values);
+        let input = if key == OUTPUT_KEY {
+            CstInputValue::String(libraries.as_str().ok_or_else(fail)?.to_owned())
+        } else {
+            let values = libraries
+                .as_array()
+                .ok_or_else(fail)?
+                .iter()
+                .map(|v| {
+                    v.as_str()
+                        .map(|s| CstInputValue::String(s.to_owned()))
+                        .ok_or_else(fail)
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            CstInputValue::Array(values)
+        };
         if let Some(prop) = target.get(key) {
             prop.set_value(input);
         } else {
@@ -989,6 +1256,24 @@ mod tests {
         }
     }
     #[test]
+    fn selecting_another_role_for_a_source_folder_replaces_the_previous_role() {
+        let directory = TestDirectory::new();
+        let root = dunce::canonicalize(&directory.0).unwrap();
+        fs::create_dir(root.join("src")).unwrap();
+        let values = json!({"roots":[{"kind":"folder","value":"src"},{"kind":"test","value":root.join("src")}]});
+        let updated = edit_settings(
+            &root,
+            b"{}",
+            values.as_object().unwrap(),
+            &ModelOptions::default(),
+        )
+        .unwrap();
+        let document = native_json(&updated).unwrap();
+        assert_eq!(document[SOURCE_PATHS_KEY], json!(["src"]));
+        assert_eq!(document["java.lithe.testSourceFolders"], json!(["src"]));
+    }
+
+    #[test]
     fn rich_library_configuration_keeps_excludes_sources_and_comments() {
         let source = br#"{ // private comment
           "java.project.referencedLibraries": {
@@ -997,9 +1282,17 @@ mod tests {
             "sources": {"old.jar": "old-sources.jar"}
           }, "privateToken": "untouched"
         }"#;
-        let updated = edit_json(source, LIBRARY_KEY, &json!(["new.jar"])).unwrap();
+        let updated = edit_workspace_dependencies(
+            Path::new("."),
+            source,
+            &json!([{"kind":"archive","value":"new.jar"},{"kind":"classes","value":"WebRoot/WEB-INF/classes"}]),
+        ).unwrap();
         let parsed = native_json(&updated).unwrap();
         assert_eq!(parsed[LIBRARY_KEY]["include"], json!(["new.jar"]));
+        assert_eq!(
+            parsed[project_model::CLASS_FOLDERS_KEY],
+            json!(["WebRoot/WEB-INF/classes"])
+        );
         assert_eq!(parsed[LIBRARY_KEY]["exclude"], json!(["secret/**/*.jar"]));
         assert_eq!(parsed[LIBRARY_KEY]["sources"]["old.jar"], "old-sources.jar");
         assert!(String::from_utf8(updated.clone())
@@ -1012,6 +1305,33 @@ mod tests {
             parsed[LIBRARY_KEY]["exclude"]
         );
         assert_eq!(reset["privateToken"], "untouched");
+    }
+
+    #[test]
+    fn editing_class_folders_keeps_the_default_jar_rule_until_it_is_removed() {
+        let source = br#"{"editor.tabSize":4}"#;
+        let entries = json!([
+            {"kind":"jar-directory","value":"lib/**"},
+            {"kind":"classes","value":"WEB-INF/classes"}
+        ]);
+        let source = edit_workspace_dependencies(Path::new("."), source, &entries).unwrap();
+        let parsed = native_json(&source).unwrap();
+        assert!(parsed.get(LIBRARY_KEY).is_none());
+        assert_eq!(
+            parsed[project_model::CLASS_FOLDERS_KEY],
+            json!(["WEB-INF/classes"])
+        );
+        let removed = edit_workspace_dependencies(Path::new("."), &source, &json!([])).unwrap();
+        let parsed = native_json(&removed).unwrap();
+        assert_eq!(parsed[LIBRARY_KEY], json!([]));
+        assert!(parsed.get(project_model::CLASS_FOLDERS_KEY).is_none());
+        assert_eq!(parsed["editor.tabSize"], 4);
+        assert!(edit_workspace_dependencies(
+            Path::new("."),
+            &removed,
+            &json!([{"kind":"unsupported","value":"lib"}])
+        )
+        .is_err());
     }
 
     #[test]
