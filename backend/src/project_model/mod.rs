@@ -18,6 +18,7 @@
 
 pub mod eclipse;
 mod idea;
+pub(crate) use idea::IdeaModule;
 mod scan;
 pub mod servlet;
 mod web;
@@ -25,6 +26,7 @@ mod xml;
 
 use serde_json::{json, Value};
 use servlet::{ServletEnvironment, ServletResolution};
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -36,6 +38,7 @@ pub const SERVLET_HOME_SETTING: &str = "servletContainerHome";
 /// The upstream default of `java.project.referencedLibraries`. Setting the key
 /// replaces the default, so an overlay without an explicit value keeps it.
 pub const UPSTREAM_DEFAULT_LIBRARIES: &str = "lib/**";
+pub const CLASS_FOLDERS_KEY: &str = "java.lithe.classFolders";
 /// Largest descriptor file read.
 pub const MAX_DESCRIPTOR_BYTES: u64 = 2 * 1024 * 1024;
 
@@ -126,8 +129,6 @@ pub enum UnresolvedKind {
     MissingLibrary,
     /// An IDEA application or global library, kept outside the project.
     IdeLibrary,
-    /// A class folder; JDT's referenced libraries accept only JAR files.
-    ClassFolder,
     /// A path variable whose value only the other IDE knows.
     UnknownMacro,
     /// A source folder outside the workspace folder.
@@ -150,6 +151,7 @@ pub struct ProjectModel {
     /// Workspace-relative descriptor that identifies the model, if any.
     pub descriptor: Option<String>,
     pub idea_modules: usize,
+    pub(crate) idea_module_details: Vec<IdeaModule>,
     pub eclipse_projects: usize,
     /// Libraries for the invisible project; empty for managed kinds.
     pub libraries: Vec<Detected>,
@@ -201,6 +203,7 @@ pub fn detect(root: &Path, options: &ModelOptions, environment: &Environment) ->
         enabled: options.detection,
         descriptor: None,
         idea_modules: 0,
+        idea_module_details: Vec::new(),
         eclipse_projects: found.eclipse_projects.len(),
         libraries: Vec::new(),
         source_paths: Vec::new(),
@@ -285,6 +288,7 @@ pub fn detect(root: &Path, options: &ModelOptions, environment: &Environment) ->
                 .chain(idea.test_source_paths)
                 .collect();
             model.libraries = idea.libraries;
+            model.idea_module_details = idea.module_details;
             model.unresolved = idea.unresolved;
             model.needs_servlet = idea.needs_servlet;
             model.truncated |= idea.truncated;
@@ -322,7 +326,16 @@ pub struct Explicit {
     pub libraries: Option<Value>,
     pub source_paths: Option<Value>,
     pub output_path: Option<Value>,
+    pub class_folders: Option<Value>,
+    pub source_roles: BTreeMap<&'static str, Vec<String>>,
 }
+
+pub(crate) const SOURCE_ROLE_KEYS: [(&str, &str); 4] = [
+    ("test", "java.lithe.testSourceFolders"),
+    ("resource", "java.lithe.resourceFolders"),
+    ("test-resource", "java.lithe.testResourceFolders"),
+    ("excluded", "java.lithe.excludedSourceFolders"),
+];
 
 impl Explicit {
     pub fn from_document(document: &Value) -> Self {
@@ -330,6 +343,14 @@ impl Explicit {
             libraries: document.get("java.project.referencedLibraries").cloned(),
             source_paths: document.get("java.project.sourcePaths").cloned(),
             output_path: document.get("java.project.outputPath").cloned(),
+            class_folders: document.get(CLASS_FOLDERS_KEY).cloned(),
+            source_roles: SOURCE_ROLE_KEYS
+                .into_iter()
+                .filter_map(|(kind, key)| {
+                    let paths = strings(document.get(key));
+                    (!paths.is_empty()).then_some((kind, paths))
+                })
+                .collect(),
         }
     }
 
@@ -405,7 +426,7 @@ pub fn effective_source_paths(model: &ProjectModel, explicit: &Explicit) -> Opti
 /// The `java` settings sections the plugin overlays for `model`:
 /// `{project: {...}, lithe: {projectModel: {...}}}`, each only with keys
 /// that differ from what JDT LS and the bundle assume when a key is absent.
-pub fn overlay(model: &ProjectModel, explicit: &Explicit) -> Value {
+pub fn overlay(root: &Path, model: &ProjectModel, explicit: &Explicit) -> Value {
     let mut project = json!({});
     if let Some(libraries) = effective_libraries(model, explicit) {
         project["referencedLibraries"] = libraries;
@@ -417,13 +438,71 @@ pub fn overlay(model: &ProjectModel, explicit: &Explicit) -> Value {
         project["outputPath"] = output.clone();
     }
     let runtime = model.servlet.runtime.as_ref();
-    if model.enabled && runtime.is_none() {
+    let mut seen = std::collections::BTreeSet::new();
+    let class_folders: Vec<_> = if model.kind.managed() {
+        Vec::new()
+    } else {
+        strings(explicit.class_folders.as_ref())
+            .into_iter()
+            .chain(model.idea_module_details.iter().flat_map(|module| {
+                module
+                    .class_folders
+                    .iter()
+                    .map(|folder| folder.pattern.clone())
+            }))
+            .filter(|path| !path.trim().is_empty() && path.len() <= 4096)
+            .map(|path| root.join(path))
+            .filter(|path| seen.insert(path.clone()))
+            .take(1024)
+            .collect()
+    };
+    let canonical_root = dunce::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    let roles = if matches!(model.kind, ModelKind::Plain | ModelKind::LegacyWeb) {
+        let mut roles = BTreeMap::new();
+        for (&kind, paths) in &explicit.source_roles {
+            let paths: Vec<_> = paths
+                .iter()
+                .take(256)
+                .filter(|path| crate::library_settings::valid_path(path))
+                .filter_map(|path| dunce::canonicalize(canonical_root.join(path)).ok())
+                .filter(|path| path.is_dir() && path.starts_with(&canonical_root))
+                .collect();
+            if !paths.is_empty() {
+                roles.insert(kind, paths);
+            }
+        }
+        roles
+    } else {
+        BTreeMap::new()
+    };
+    let workspace_module = matches!(model.kind, ModelKind::Plain | ModelKind::LegacyWeb);
+    let workspace_source_paths = workspace_module
+        .then_some(explicit.source_paths.as_ref())
+        .flatten()
+        .filter(|paths| {
+            paths
+                .as_array()
+                .is_some_and(|paths| !paths.is_empty() || roles.contains_key("excluded"))
+        });
+    let manages_workspace_paths =
+        workspace_module && (workspace_source_paths.is_some() || explicit.output_path.is_some());
+    if model.enabled
+        && runtime.is_none()
+        && class_folders.is_empty()
+        && roles.is_empty()
+        && !manages_workspace_paths
+    {
         return json!({"project": project});
     }
     json!({
         "project": project,
         "lithe": {"projectModel": {
             "enabled": model.enabled,
+            "classFolderWorkspace": root,
+            "classFolders": class_folders,
+            "sourceRoles": roles,
+            "workspaceSourcePaths": workspace_source_paths,
+            "workspaceOutputPath": workspace_module.then(|| explicit.output_path.as_ref().and_then(Value::as_str).unwrap_or("")),
             "serverRuntimeHome": runtime.map(|runtime| runtime.home.to_string_lossy().to_string()).unwrap_or_default(),
             "serverRuntimeLibraries": runtime.map(|runtime| runtime.libraries.iter().map(|path| path.to_string_lossy().to_string()).collect::<Vec<_>>()).unwrap_or_default(),
             "serverRuntimeName": runtime.map(|runtime| runtime.name.clone()).unwrap_or_default(),
@@ -557,7 +636,7 @@ pub(crate) mod tests {
             model.descriptor.as_deref(),
             Some("project/WebContent/WEB-INF/web.xml")
         );
-        let value = overlay(&model, &Explicit::default());
+        let value = overlay(&tree.root, &model, &Explicit::default());
         assert_eq!(
             value["project"]["referencedLibraries"],
             json!([
@@ -579,6 +658,24 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn excluding_the_only_source_root_overrides_jdt_with_an_empty_source_list() {
+        let tree = Tree::new(&[("src/Main.java", "")]);
+        let root = dunce::canonicalize(&tree.root).unwrap();
+        let model = detect(&root, &ModelOptions::default(), &environment(&tree));
+        let explicit = Explicit::from_document(&json!({
+            "java.project.sourcePaths": [],
+            "java.lithe.excludedSourceFolders": ["src"],
+        }));
+        let value = overlay(&root, &model, &explicit);
+        assert_eq!(
+            value["lithe"]["projectModel"]["workspaceSourcePaths"],
+            json!([])
+        );
+        let inherited = Explicit::from_document(&json!({"java.project.sourcePaths": []}));
+        assert!(overlay(&root, &model, &inherited).get("lithe").is_none());
+    }
+
+    #[test]
     fn explicit_values_stay_first_and_keep_excludes_and_sources() {
         let tree = Tree::new(&[("WebRoot/WEB-INF/lib/a.jar", "")]);
         let model = detect(&tree.root, &ModelOptions::default(), &environment(&tree));
@@ -587,7 +684,7 @@ pub(crate) mod tests {
             "java.project.sourcePaths": ["src/java"],
             "java.project.outputPath": "out",
         }));
-        let value = overlay(&model, &explicit);
+        let value = overlay(&tree.root, &model, &explicit);
         assert_eq!(
             value["project"]["referencedLibraries"]["include"],
             json!(["vendor/x.jar", "WebRoot/WEB-INF/lib/*.jar"])
@@ -602,8 +699,10 @@ pub(crate) mod tests {
         );
         assert_eq!(value["project"]["sourcePaths"], json!(["src/java"]));
         assert_eq!(value["project"]["outputPath"], "out");
-        // No servlet container is installed, so the bundle keeps its defaults.
-        assert!(value.get("lithe").is_none());
+        let bundle = &value["lithe"]["projectModel"];
+        assert_eq!(bundle["workspaceSourcePaths"], json!(["src/java"]));
+        assert_eq!(bundle["workspaceOutputPath"], "out");
+        assert_eq!(bundle["serverRuntimeLibraries"], json!([]));
     }
 
     #[test]
@@ -620,7 +719,7 @@ pub(crate) mod tests {
         ]);
         let model = detect(&tree.root, &ModelOptions::default(), &environment(&tree));
         assert_eq!(model.kind, ModelKind::Idea);
-        let value = overlay(&model, &Explicit::default());
+        let value = overlay(&tree.root, &model, &Explicit::default());
         assert_eq!(value["project"]["sourcePaths"], json!(["java", "tests"]));
         assert!(value["project"].get("referencedLibraries").is_none());
         assert!(value.get("lithe").is_none());
@@ -630,7 +729,10 @@ pub(crate) mod tests {
             (model.kind, model.descriptor.as_deref()),
             (ModelKind::Gradle, Some("module/build.gradle"))
         );
-        assert_eq!(overlay(&model, &Explicit::default())["project"], json!({}));
+        assert_eq!(
+            overlay(&tree.root, &model, &Explicit::default())["project"],
+            json!({})
+        );
     }
 
     #[test]
@@ -656,7 +758,7 @@ pub(crate) mod tests {
                 name: "Libs".into()
             }]
         );
-        let value = overlay(&model, &Explicit::default());
+        let value = overlay(&tree.root, &model, &Explicit::default());
         assert_eq!(value["project"], json!({}));
         assert_eq!(
             value["lithe"]["projectModel"]["serverRuntimeHome"],
@@ -674,7 +776,7 @@ pub(crate) mod tests {
         };
         let model = detect(&tree.root, &options, &environment(&tree));
         assert_eq!(model.kind, ModelKind::LegacyWeb);
-        let value = overlay(&model, &Explicit::default());
+        let value = overlay(&tree.root, &model, &Explicit::default());
         assert_eq!(value["project"], json!({}));
         assert_eq!(value["lithe"]["projectModel"]["enabled"], false);
     }

@@ -9,7 +9,7 @@ use super::{
     read_bounded, relative_inside, relative_or_absolute, xml, Detected, Origin, Unresolved,
     UnresolvedKind,
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use xmltree::Element;
@@ -34,10 +34,21 @@ pub struct IdeaFacts {
     /// Workspace-relative path of the descriptor that was read.
     pub descriptor: String,
     pub modules: usize,
+    pub module_details: Vec<IdeaModule>,
     /// Workspace-relative production source folders, then test ones.
     pub source_paths: Vec<String>,
     pub test_source_paths: Vec<String>,
+    pub content_roots: Vec<String>,
+    pub resources: Vec<String>,
+    pub test_resources: Vec<String>,
+    pub excluded: Vec<String>,
     pub libraries: Vec<Detected>,
+    pub class_folders: Vec<Detected>,
+    pub module_dependencies: Vec<String>,
+    pub output: Option<String>,
+    pub test_output: Option<String>,
+    pub inherits_output: bool,
+    pub sdk: Option<String>,
     pub unresolved: Vec<Unresolved>,
     /// Web roots declared by web facets.
     pub web_roots: Vec<PathBuf>,
@@ -47,10 +58,30 @@ pub struct IdeaFacts {
     pub truncated: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IdeaModule {
+    pub descriptor: String,
+    pub name: String,
+    pub sources: Vec<String>,
+    pub test_sources: Vec<String>,
+    pub content_roots: Vec<String>,
+    pub resources: Vec<String>,
+    pub test_resources: Vec<String>,
+    pub excluded: Vec<String>,
+    pub libraries: Vec<Detected>,
+    pub class_folders: Vec<Detected>,
+    pub module_dependencies: Vec<String>,
+    pub unresolved: Vec<Unresolved>,
+    pub output: Option<String>,
+    pub test_output: Option<String>,
+    pub inherits_output: bool,
+    pub sdk: Option<String>,
+}
+
 /// Reads the IDEA project at `root`, or None when there is none.
 pub fn read(root: &Path, ipr_files: &[PathBuf], macros: &Macros) -> Option<IdeaFacts> {
     let directory = root.join(".idea");
-    let (descriptor, modules_document, mut project_libraries) = if let Some(document) =
+    let (descriptor, modules_document, project_libraries) = if let Some(document) =
         read_bounded(&directory.join("modules.xml")).and_then(|bytes| xml::parse(&bytes))
     {
         (
@@ -70,6 +101,13 @@ pub fn read(root: &Path, ipr_files: &[PathBuf], macros: &Macros) -> Option<IdeaF
         descriptor,
         ..IdeaFacts::default()
     };
+    let misc = read_bounded(&directory.join("misc.xml")).and_then(|bytes| xml::parse(&bytes));
+    let project_output = component(
+        misc.as_ref().unwrap_or(&modules_document),
+        "ProjectRootManager",
+    )
+    .and_then(|manager| xml::children(manager, "output").next())
+    .and_then(|output| expand(xml::attribute(output, "url")?, macros, root));
     let mut module_files = Vec::new();
     if let Some(manager) = component(&modules_document, "ProjectModuleManager") {
         for module in xml::descendants(manager, "module") {
@@ -86,7 +124,11 @@ pub fn read(root: &Path, ipr_files: &[PathBuf], macros: &Macros) -> Option<IdeaF
         facts.truncated = true;
     }
     let mut roots = 0usize;
+    let mut seen = BTreeSet::new();
     for file in module_files {
+        if !seen.insert(file.clone()) {
+            continue;
+        }
         let Some(document) = read_bounded(&file).and_then(|bytes| xml::parse(&bytes)) else {
             facts.unresolved.push(Unresolved {
                 kind: UnresolvedKind::MissingFile,
@@ -97,6 +139,7 @@ pub fn read(root: &Path, ipr_files: &[PathBuf], macros: &Macros) -> Option<IdeaF
         facts.modules += 1;
         let module_dir = file
             .parent()
+            .filter(|path| *path != directory)
             .map(Path::to_path_buf)
             .unwrap_or_else(|| root.to_path_buf());
         let module_name = file
@@ -104,21 +147,57 @@ pub fn read(root: &Path, ipr_files: &[PathBuf], macros: &Macros) -> Option<IdeaF
             .and_then(|name| name.to_str())
             .unwrap_or("module")
             .to_string();
-        let module_macros = Macros {
-            project_dir: macros.project_dir.clone(),
-            user_home: macros.user_home.clone(),
-            maven_repository: macros.maven_repository.clone(),
-        };
+        let mut module = IdeaFacts::default();
         read_module(
             root,
             &document,
             &module_dir,
             &module_name,
-            &module_macros,
-            &mut project_libraries,
-            &mut facts,
+            macros,
+            &project_libraries,
+            &mut module,
             &mut roots,
         );
+        facts.needs_servlet |= module.needs_servlet;
+        facts.truncated |= module.truncated;
+        append_unique(&mut facts.hints, &module.hints);
+        append_unique(&mut facts.web_roots, &module.web_roots);
+        append_unique(&mut facts.source_paths, &module.source_paths);
+        append_unique(&mut facts.test_source_paths, &module.test_source_paths);
+        append_unique(&mut facts.unresolved, &module.unresolved);
+        for library in &module.libraries {
+            push(&mut facts.libraries, library.clone());
+        }
+        facts.module_details.push(IdeaModule {
+            descriptor: relative_or_absolute(root, &file),
+            output: if module.inherits_output {
+                project_output.as_ref().map(|base| {
+                    relative_or_absolute(root, &base.join("production").join(&module_name))
+                })
+            } else {
+                module.output
+            },
+            test_output: if module.inherits_output {
+                project_output
+                    .as_ref()
+                    .map(|base| relative_or_absolute(root, &base.join("test").join(&module_name)))
+            } else {
+                module.test_output
+            },
+            inherits_output: module.inherits_output,
+            name: module_name,
+            sources: module.source_paths,
+            test_sources: module.test_source_paths,
+            content_roots: module.content_roots,
+            resources: module.resources,
+            test_resources: module.test_resources,
+            excluded: module.excluded,
+            libraries: module.libraries,
+            class_folders: module.class_folders,
+            module_dependencies: module.module_dependencies,
+            unresolved: module.unresolved,
+            sdk: module.sdk,
+        });
     }
     Some(facts)
 }
@@ -130,7 +209,7 @@ fn read_module(
     module_dir: &Path,
     module_name: &str,
     macros: &Macros,
-    project_libraries: &mut BTreeMap<String, Element>,
+    project_libraries: &BTreeMap<String, Element>,
     facts: &mut IdeaFacts,
     roots: &mut usize,
 ) {
@@ -153,11 +232,35 @@ fn read_module(
     let Some(manager) = component(document, "NewModuleRootManager") else {
         return;
     };
+    let output = |tag| {
+        xml::children(manager, tag)
+            .next()
+            .and_then(|entry| expand(xml::attribute(entry, "url")?, macros, module_dir))
+            .map(|path| relative_or_absolute(root, &path))
+    };
+    facts.output = output("output");
+    facts.test_output = output("output-test");
+    facts.inherits_output = xml::attribute(manager, "inherit-compiler-output") == Some("true");
     for content in xml::children(manager, "content") {
-        for folder in xml::children(content, "sourceFolder") {
-            if xml::attribute(folder, "type").is_some_and(|kind| kind.contains("resource")) {
-                continue;
+        if let Some(path) =
+            xml::attribute(content, "url").and_then(|url| expand(url, macros, module_dir))
+        {
+            let path = relative_or_absolute(root, &path);
+            if !facts.content_roots.contains(&path) {
+                facts.content_roots.push(path);
             }
+        }
+        for folder in xml::children(content, "excludeFolder") {
+            if let Some(path) =
+                xml::attribute(folder, "url").and_then(|url| expand(url, macros, module_dir))
+            {
+                let path = relative_or_absolute(root, &path);
+                if !facts.excluded.contains(&path) {
+                    facts.excluded.push(path);
+                }
+            }
+        }
+        for folder in xml::children(content, "sourceFolder") {
             let Some(path) =
                 xml::attribute(folder, "url").and_then(|url| expand(url, macros, module_dir))
             else {
@@ -170,10 +273,15 @@ fn read_module(
                 });
                 continue;
             };
-            let target = if xml::attribute(folder, "isTestSource") == Some("true") {
-                &mut facts.test_source_paths
-            } else {
-                &mut facts.source_paths
+            let target = match xml::attribute(folder, "type") {
+                Some("java-resource") => &mut facts.resources,
+                Some("java-test-resource") => &mut facts.test_resources,
+                Some(kind) if kind.contains("resource") => continue,
+                Some("java-test-source") => &mut facts.test_source_paths,
+                _ if xml::attribute(folder, "isTestSource") == Some("true") => {
+                    &mut facts.test_source_paths
+                }
+                _ => &mut facts.source_paths,
             };
             if !target.contains(&relative) {
                 target.push(relative);
@@ -182,6 +290,12 @@ fn read_module(
     }
     for entry in xml::children(manager, "orderEntry") {
         match xml::attribute(entry, "type") {
+            Some("jdk") => facts.sdk = xml::attribute(entry, "jdkName").map(str::to_owned),
+            Some("module") => {
+                if let Some(name) = xml::attribute(entry, "module-name") {
+                    facts.module_dependencies.push(name.to_owned());
+                }
+            }
             Some("module-library") => {
                 if let Some(library) = xml::children(entry, "library").next() {
                     let name = xml::attribute(library, "name")
@@ -204,11 +318,11 @@ fn read_module(
                     .unwrap_or_default()
                     .to_string();
                 match xml::attribute(entry, "level") {
-                    Some("project") => match project_libraries.get(&name).cloned() {
+                    Some("project") => match project_libraries.get(&name) {
                         Some(library) => {
                             add_library(
                                 root,
-                                &library,
+                                library,
                                 &name,
                                 Origin::IdeaProjectLibrary,
                                 macros,
@@ -216,10 +330,7 @@ fn read_module(
                                 facts,
                                 roots,
                             );
-                            // A project library shared by many modules is imported once.
-                            project_libraries.remove(&name);
                         }
-                        None if facts.libraries.iter().any(|item| item.label == name) => {}
                         None => facts.unresolved.push(Unresolved {
                             kind: UnresolvedKind::MissingLibrary,
                             name,
@@ -257,6 +368,13 @@ fn add_library(
     facts: &mut IdeaFacts,
     roots: &mut usize,
 ) {
+    let jar_directories: Vec<_> = xml::children(library, "jarDirectory")
+        .filter(|entry| xml::attribute(entry, "type") != Some("SOURCES"))
+        .filter_map(|entry| {
+            let path = expand(xml::attribute(entry, "url")?, macros, base)?;
+            Some((path, xml::attribute(entry, "recursive") == Some("true")))
+        })
+        .collect();
     for classes in xml::children(library, "CLASSES") {
         for entry in xml::children(classes, "root") {
             if *roots >= MAX_LIBRARY_ROOTS {
@@ -273,10 +391,20 @@ fn add_library(
                 continue;
             };
             if path.is_dir() {
-                facts.unresolved.push(Unresolved {
-                    kind: UnresolvedKind::ClassFolder,
-                    name: relative_or_absolute(root, &path),
-                });
+                if !jar_directories
+                    .iter()
+                    .any(|(directory, _)| directory == &path)
+                {
+                    push(
+                        &mut facts.class_folders,
+                        Detected {
+                            pattern: relative_or_absolute(root, &path),
+                            origin,
+                            label: name.to_string(),
+                            count: 1,
+                        },
+                    );
+                }
                 continue;
             }
             if !path.is_file() {
@@ -286,44 +414,48 @@ fn add_library(
                 });
                 continue;
             }
-            push(facts, relative_or_absolute(root, &path), origin, name, 1);
+            push(
+                &mut facts.libraries,
+                Detected {
+                    pattern: relative_or_absolute(root, &path),
+                    origin,
+                    label: name.to_string(),
+                    count: 1,
+                },
+            );
         }
     }
-    for directory in xml::children(library, "jarDirectory") {
-        let Some(path) = xml::attribute(directory, "url").and_then(|url| expand(url, macros, base))
-        else {
-            continue;
-        };
+    for (path, recursive) in jar_directories {
         let count = super::web::count_libraries(&path);
-        if count == 0 && xml::attribute(directory, "recursive") != Some("true") {
+        if count == 0 && !recursive {
             continue;
         }
-        let glob = if xml::attribute(directory, "recursive") == Some("true") {
-            "**/*.jar"
-        } else {
-            "*.jar"
-        };
+        let glob = if recursive { "**/*.jar" } else { "*.jar" };
         push(
-            facts,
-            format!("{}/{glob}", relative_or_absolute(root, &path)),
-            origin,
-            name,
-            count.max(1),
+            &mut facts.libraries,
+            Detected {
+                pattern: format!("{}/{glob}", relative_or_absolute(root, &path)),
+                origin,
+                label: name.to_string(),
+                count: count.max(1),
+            },
         );
     }
 }
 
-fn push(facts: &mut IdeaFacts, pattern: String, origin: Origin, label: &str, count: usize) {
-    if !facts.libraries.iter().any(|item| item.pattern == pattern) {
-        facts.libraries.push(Detected {
-            pattern,
-            origin,
-            label: label.to_string(),
-            count,
-        });
+fn push(libraries: &mut Vec<Detected>, library: Detected) {
+    if !libraries.iter().any(|item| item.pattern == library.pattern) {
+        libraries.push(library);
     }
 }
 
+fn append_unique<T: Clone + PartialEq>(target: &mut Vec<T>, values: &[T]) {
+    for value in values {
+        if !target.contains(value) {
+            target.push(value.clone());
+        }
+    }
+}
 /// The `<component name="…">` of a module or project document.
 fn component<'a>(document: &'a Element, name: &str) -> Option<&'a Element> {
     xml::children(document, "component").find(|item| xml::attribute(item, "name") == Some(name))
@@ -419,15 +551,19 @@ mod tests {
     fn modules_source_folders_and_libraries_are_imported_read_only() {
         let tree = Tree::new(&[
             (
+                ".idea/misc.xml",
+                r#"<project><component name="ProjectRootManager"><output url="file://$PROJECT_DIR$/out"/></component></project>"#,
+            ),
+            (
                 ".idea/modules.xml",
                 r#"<project version="4"><component name="ProjectModuleManager"><modules>
-                    <module fileurl="file://$PROJECT_DIR$/app.iml" filepath="$PROJECT_DIR$/app.iml"/>
+                    <module fileurl="file://$PROJECT_DIR$/.idea/app.iml" filepath="$PROJECT_DIR$/.idea/app.iml"/>
                     <module fileurl="file://$PROJECT_DIR$/core/core.iml" filepath="$PROJECT_DIR$/core/core.iml"/>
                     <module fileurl="file://$PROJECT_DIR$/gone.iml" filepath="$PROJECT_DIR$/gone.iml"/>
                 </modules></component></project>"#,
             ),
             (
-                "app.iml",
+                ".idea/app.iml",
                 r#"<module type="JAVA_MODULE" version="4">
                   <component name="FacetManager"><facet type="web" name="Web"><configuration><webroots><root url="file://$MODULE_DIR$/web" relative="/"/></webroots></configuration></facet></component>
                   <component name="NewModuleRootManager" inherit-compiler-output="true">
@@ -435,6 +571,8 @@ mod tests {
                       <sourceFolder url="file://$MODULE_DIR$/src" isTestSource="false"/>
                       <sourceFolder url="file://$MODULE_DIR$/test" isTestSource="true"/>
                       <sourceFolder url="file://$MODULE_DIR$/resources" type="java-resource"/>
+                      <sourceFolder url="file://$MODULE_DIR$/test-resources" type="java-test-resource"/>
+                      <excludeFolder url="file://$MODULE_DIR$/generated"/>
                       <sourceFolder url="file://$MODULE_DIR$/../outside" isTestSource="false"/>
                     </content>
                     <orderEntry type="inheritedJdk"/>
@@ -475,6 +613,21 @@ mod tests {
         assert_eq!(facts.modules, 2);
         assert_eq!(facts.source_paths, vec!["src", "core/java"]);
         assert_eq!(facts.test_source_paths, vec!["test"]);
+        assert_eq!(facts.module_details[0].descriptor, ".idea/app.iml");
+        let app = &facts.module_details[0];
+        assert_eq!(app.content_roots, ["."]);
+        assert_eq!(app.resources, ["resources"]);
+        assert_eq!(app.test_resources, ["test-resources"]);
+        assert_eq!(app.excluded, ["generated"]);
+        assert_eq!(app.output.as_deref(), Some("out/production/app"));
+        assert_eq!(app.test_output.as_deref(), Some("out/test/app"));
+        assert!(app.inherits_output);
+        assert_eq!(facts.module_details[0].module_dependencies, vec!["core"]);
+        assert_eq!(
+            facts.module_details[0].class_folders[0].pattern,
+            "classes-folder"
+        );
+        assert_eq!(facts.module_details[1].libraries[0].label, "shared");
         let libraries: Vec<_> = facts
             .libraries
             .iter()
@@ -514,7 +667,6 @@ mod tests {
                         .unwrap()
                 ),
                 (UnresolvedKind::MissingFile, "lib/missing.jar"),
-                (UnresolvedKind::ClassFolder, "classes-folder"),
                 (UnresolvedKind::UnknownMacro, "jar://$TOOLS_DIR$/x.jar!/"),
                 (UnresolvedKind::IdeLibrary, "Global Utils"),
                 (UnresolvedKind::MissingLibrary, "absent"),

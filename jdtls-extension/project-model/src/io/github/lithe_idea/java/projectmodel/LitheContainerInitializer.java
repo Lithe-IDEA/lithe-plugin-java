@@ -16,6 +16,10 @@ public final class LitheContainerInitializer extends ClasspathContainerInitializ
 	@Override
 	public void initialize(IPath containerPath, IJavaProject project) throws CoreException {
 		ProjectModelSettings settings = ProjectModelSettings.current();
+		if (ClassFolderClasspath.ID.equals(containerPath)) {
+			ClassFolderClasspath.bind(project, settings, null);
+			return;
+		}
 		if (!settings.enabled || ContainerKind.of(containerPath) == null) {
 			return;
 		}
@@ -25,6 +29,9 @@ public final class LitheContainerInitializer extends ClasspathContainerInitializ
 
 	@Override
 	public String getDescription(IPath containerPath, IJavaProject project) {
+		if (ClassFolderClasspath.ID.equals(containerPath)) {
+			return ClassFolderClasspath.DESCRIPTION;
+		}
 		return ContainerResolver.description(containerPath, ContainerKind.of(containerPath), ProjectModelSettings.current());
 	}
 

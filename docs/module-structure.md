@@ -14,9 +14,10 @@
 | --- | --- | --- |
 | Eclipse 工程（有 `.classpath`） | 模块自己的 `.classpath` | 源文件夹（可标“测试”）、输出文件夹、JRE、依赖（JAR/ZIP、类文件夹、库容器、其他模块），每项可标“导出”“仅测试” |
 | Maven、Gradle 模块 | `pom.xml` / `build.gradle(.kts)` | 只读，显示 JDT 解析出的完整类路径（含测试依赖），请在构建文件里修改 |
-| 没有 `.classpath` 的普通文件夹 | `.vscode/settings.json` | 仍在“引用的库”分组里编辑引用的 JAR 和源码文件夹 |
+| IntelliJ IDEA 模块 | `.iml` 和项目的 `.idea/misc.xml` | 只读，显示内容根、目录标记、编译输出、SDK 和依赖。依赖行标明类型、来源和 JDT 是否加载 |
+| 没有构建描述符的普通 Java、Java EE 文件夹 | `.vscode/settings.json` | 可标记源码、测试源码、资源、测试资源和排除目录，可修改输出路径，并添加 JAR、JAR 库目录和类目录 |
 
-IntelliJ IDEA 工程、Eclipse 容器的解析结果仍在只读的“工程模型”分组里，见 [project-models.md](project-models.md)。
+IDEA 模块依赖的状态取自当前 JDT 工作区类路径。索引期间如果 JDT 未及时返回，页面仍显示 `.iml` 声明，并标记「JDT 类路径未确认」。索引结束后点「重新加载」可核对实际生效状态。展开式 JAR 和明确声明的 `WEB-INF/classes` 是类目录依赖；WAR/EAR 目录不会成为额外的源码模块。“引用的库”可在 `.vscode/settings.json` 补充 JAR、源码目录和类目录。Eclipse 容器的解析结果在“工程模型”中显示，见 [project-models.md](project-models.md)。
 
 ## 依赖怎么添加
 
@@ -31,7 +32,7 @@ JRE 下拉框可选“工作区默认 JRE”或 JavaSE-1.8/11/17/21/25 执行环
 
 ## 保存时保留什么
 
-只有点击“保存”才写文件，外部修改会要求重新读取。保存只改页面管理的条目，按种类和路径匹配已有条目，所以：
+只有点击“保存”才写文件，外部修改会提示冲突并要求重新读取。保存只改页面管理的条目，按种类和路径匹配已有条目，所以：
 
 - 源码附件（`sourcepath`）、Javadoc 位置、访问规则等页面不显示的属性原样保留；
 - 注释和页面不显示的条目留在原位置，新条目按页面顺序依次占用原来的位置；

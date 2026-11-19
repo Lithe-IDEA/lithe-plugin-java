@@ -65,12 +65,19 @@ const fixtures={
  },
  async idea(root,stage){
   write(join(root,'.idea/modules.xml'),'<?xml version="1.0" encoding="UTF-8"?><project version="4"><component name="ProjectModuleManager"><modules><module fileurl="file://$PROJECT_DIR$/app.iml" filepath="$PROJECT_DIR$/app.iml"/></modules></component></project>');
-  write(join(root,'app.iml'),'<?xml version="1.0" encoding="UTF-8"?><module type="JAVA_MODULE" version="4"><component name="NewModuleRootManager" inherit-compiler-output="true"><exclude-output/><content url="file://$MODULE_DIR$"><sourceFolder url="file://$MODULE_DIR$/java" isTestSource="false"/></content><orderEntry type="inheritedJdk"/><orderEntry type="sourceFolder" forTests="false"/><orderEntry type="module-library"><library><CLASSES><root url="jar://$MODULE_DIR$/third-party/util.jar!/"/></CLASSES><JAVADOC/><SOURCES/></library></orderEntry><orderEntry type="library" name="servlet" level="project"/></component></module>');
+  write(join(root,'app.iml'),'<?xml version="1.0" encoding="UTF-8"?><module type="JAVA_MODULE" version="4"><component name="NewModuleRootManager" inherit-compiler-output="true"><exclude-output/><content url="file://$MODULE_DIR$"><sourceFolder url="file://$MODULE_DIR$/java" isTestSource="false"/></content><orderEntry type="inheritedJdk"/><orderEntry type="sourceFolder" forTests="false"/><orderEntry type="module-library"><library><CLASSES><root url="jar://$MODULE_DIR$/third-party/util.jar!/"/></CLASSES><JAVADOC/><SOURCES/></library></orderEntry><orderEntry type="module-library"><library name="Maximo"><CLASSES><root url="file://$MODULE_DIR$/../MAXIMO.ear/businessobjects.jar"/><root url="file://$MODULE_DIR$/../MAXIMO.ear/web.war/WEB-INF/classes"/><root url="file://$MODULE_DIR$/third-party"/></CLASSES><jarDirectory url="file://$MODULE_DIR$/third-party" recursive="false"/></library></orderEntry><orderEntry type="library" name="servlet" level="project"/></component></module>');
   write(join(root,'.idea/libraries/servlet.xml'),'<component name="libraryTable"><library name="servlet"><CLASSES><root url="jar://$PROJECT_DIR$/vendor/servlet-api.jar!/"/></CLASSES><JAVADOC/><SOURCES/></library></component>');
   await jar(stage,'util',{'com/acme/Util.java':'package com.acme; public class Util { public static String value() { return "idea-ok"; } }'},join(root,'third-party/util.jar'));
   await jar(stage,'servlet-copy',{'javax/servlet/http/HttpServlet.java':'package javax.servlet.http; public abstract class HttpServlet { }'},join(root,'vendor/servlet-api.jar'));
-  write(join(root,'java/demo/Hello.java'),HELLO);
-  return {source:join(root,'java/demo/Hello.java'),project:root,descriptor:'.idea/modules.xml',model:'IntelliJ IDEA',library:'third-party/util.jar',sourcePath:'java',projectServlet:true};
+  const classFolders=['businessobjects.jar','web.war/WEB-INF/classes'].map(path=>join(stage,'MAXIMO.ear',path));
+  for(const [index,folder] of classFolders.entries()){
+   const name=`Legacy${index}`, source=join(stage,`${name}.java`);
+   write(source,`package acme.legacy; public class ${name} { public static void touch() {} }`);
+   mkdirSync(folder,{recursive:true});
+   await runTool(javac,['--release','8','-d',folder,source],{timeout:60000});
+  }
+  write(join(root,'java/demo/Hello.java'),HELLO.replace('System.out.print','acme.legacy.Legacy0.touch(); acme.legacy.Legacy1.touch(); System.out.print'));
+  return {source:join(root,'java/demo/Hello.java'),project:root,descriptor:'.idea/modules.xml',model:'IntelliJ IDEA',library:'third-party/util.jar',sourcePath:'java',projectServlet:true,classFolders};
  },
 };
 
@@ -90,11 +97,18 @@ async function scenario(name,report){
   const projectBaseline=projectFiles();
   const context={contextID:`ctx-${name}`,generation:1};let op=0;
   const folders=[{rootID:'root',name:'workspace',path:root,uri:pathToFileURL(root).href}];
+  let blockedRequests;
   const hostRequests={
    'lithe/host/workspace/getContext':()=>({context,...context,folders}),
    'lithe/host/workspace/getFolders':()=>({folders}),
    'lithe/host/functions/providers':()=>({providers:[]}),
-   'lithe/host/languageServer/request':async p=>({value:await server.request(p.method,p.params,p.timeoutMilliseconds??60000)}),
+   'lithe/host/languageServer/request':async p=>{
+    if(blockedRequests){
+     blockedRequests.push([p.params.command,p.timeoutMilliseconds]);
+     throw Error('JDT indexing: request timed out');
+    }
+    return {value:await server.request(p.method,p.params,p.timeoutMilliseconds??60000)};
+   },
    'lithe/host/languageServer/notify':p=>{if(p.method==='workspace/didChangeConfiguration')configuration=p.params.settings;server.notify(p.method,p.params);return {};},
   };
   backend=new Client(join(pkg,manifest.backend.launch.path),[],{hostRequests});
@@ -108,7 +122,10 @@ async function scenario(name,report){
    const model=configuration.java.lithe?.projectModel;
    // The IDEA fixture takes the servlet API from a project library, so it
    // needs no servlet container.
-   if(fixture.projectServlet)assert.equal(model,undefined);
+   if(fixture.projectServlet){
+    assert.deepEqual(model?.classFolders?.map(path=>resolve(path)),fixture.classFolders.map(path=>resolve(path)));
+    assert.equal(model.serverRuntimeHome,'');
+   }
    else assert.ok(model&&samePath(model.serverRuntimeHome,tomcat),JSON.stringify(configuration.java.lithe));
    if(fixture.library)assert.ok(JSON.stringify(configuration.java.project.referencedLibraries).includes(fixture.library),JSON.stringify(configuration.java.project));
    if(fixture.sourcePath)assert.deepEqual(configuration.java.project.sourcePaths,[fixture.sourcePath]);
@@ -129,7 +146,23 @@ async function scenario(name,report){
    await imported();
    if(fixture.library)await until(()=>execute('java.project.getSettings',[projectUri,['org.eclipse.jdt.ls.core.referencedLibraries']]),value=>(value['org.eclipse.jdt.ls.core.referencedLibraries']??[]).some(path=>path.endsWith('servlet-api.jar')),'JDT referenced libraries');
    if(fixture.sourcePath)await until(()=>execute('java.project.getSettings',[projectUri,['org.eclipse.jdt.ls.core.sourcePaths']]),value=>(value['org.eclipse.jdt.ls.core.sourcePaths']??[]).some(path=>samePath(path,join(root,fixture.sourcePath))),'JDT source paths');
+   if(fixture.classFolders)await until(()=>execute('java.project.getClasspaths',[projectUri,'{"scope":"test"}']),value=>fixture.classFolders.every(folder=>value.classpaths.some(path=>samePath(path,folder))),'JDT class folders');
    await compiles();
+  });
+  if(fixture.classFolders)await step('JDT completes and navigates to classes in both directories',async()=>{
+   const uri=pathToFileURL(fixture.source).href,text=readFileSync(fixture.source,'utf8');
+   const textDocument={uri};
+   server.notify('textDocument/didOpen',{textDocument:{uri,languageId:'java',version:1,text}});
+   const line=text.split('\n').findIndex(value=>value.includes('Legacy0'));
+   const use=text.split('\n')[line];
+   for(const index of [0,1]){
+    const name=`Legacy${index}`, character=use.indexOf(name);
+    await until(()=>server.request('textDocument/definition',{textDocument,position:{line,character:character+2}},15000),
+     value=>[value].flat().some(location=>(location?.uri??location?.targetUri??'').includes(name)),'JDT definition '+name);
+    await until(()=>server.request('textDocument/completion',{textDocument,position:{line,character:character+name.length+1}},15000),
+     value=>(value?.items??value??[]).some(item=>item.label.startsWith('touch')),'JDT completion '+name);
+   }
+   server.notify('textDocument/didClose',{textDocument});
   });
   if(name==='eclipse-wtp')await step('the bundle resolves the WTP containers and the TOMCAT_HOME variable',async()=>{
    const described=await execute('lithe.java.projectModel.describe');
@@ -140,8 +173,28 @@ async function scenario(name,report){
    assert.equal(entry('org.eclipse.jst.server.core.container').status,'resolved');
    assert.ok(samePath(entry('TOMCAT_HOME').resolvedPath,join(tomcat,'lib/jsp-api.jar')),JSON.stringify(entry('TOMCAT_HOME')));
   });
+  if(fixture.classFolders)await step('the IDEA structure opens while JDT cannot answer',async()=>{
+   blockedRequests=[];
+   try{
+    const page=await invoke('libraries.settings',{context:{language:'zh-CN',builds:[]}});
+    const module=page.sources.find(source=>source.group==='modules'&&source.path==='app.iml');
+    assert.equal(module?.writable,false);
+    const dependencies=module.fields.find(field=>field.id==='dependencies').value;
+    assert.ok(dependencies.some(row=>row.kind==='classes'&&row.detail.includes('JDT 状态未确认')));
+    assert.match(module.fields.find(field=>field.id==='jdt-status').value,/JDT 类路径未确认/);
+    assert.ok(page.sources.some(source=>source.path==='.vscode/settings.json'&&source.writable));
+    assert.deepEqual(blockedRequests.map(([command])=>command),['java.project.getClasspaths']);
+    assert.ok(blockedRequests[0][1]<=1500);
+   }finally{blockedRequests=undefined;}
+  });
   await step('the libraries page shows the model read-only',async()=>{
    const page=await invoke('libraries.settings',{context:{language:'zh-CN',builds:[]}});
+   for(const source of page.sources){
+    for(const field of source.fields){
+     assert.ok(Object.hasOwn(field,'value')&&Object.hasOwn(field,'effectiveValue')&&typeof field.effectiveSource==='string',
+      `Missing source-state field in ${source.path}: ${field.id}`);
+    }
+   }
    const model=page.sources.find(source=>source.group==='model'&&source.path===fixture.descriptor);
    assert.ok(model,JSON.stringify(page.sources.map(source=>[source.group,source.path])));
    assert.equal(model.writable,false);
@@ -151,27 +204,117 @@ async function scenario(name,report){
    else assert.match(value('servlet'),/Apache Tomcat 9\.0\.98/);
    if(fixture.sourcePath)assert.deepEqual(value('source-folders'),[fixture.sourcePath]);
    if(fixture.library)assert.ok(value('detected').some(line=>line.startsWith(fixture.library)),JSON.stringify(value('detected')));
+   if(fixture.classFolders){
+    const modules=page.sources.filter(source=>source.group==='modules');
+    assert.deepEqual(modules.map(source=>[source.title,source.path,source.writable]),[['app','app.iml',false]]);
+    const dependencies=modules[0].fields.find(field=>field.id==='dependencies').value;
+    assert.match(modules[0].fields.find(field=>field.id==='jdt-status').value,/JDT 已返回工作区类路径/);
+    for(const folder of fixture.classFolders){
+     const entry=dependencies.find(item=>item.kind==='classes'&&samePath(item.value,folder));
+     assert.match(entry?.detail??'',/JDT 已生效/);
+    }
+    const directory=dependencies.filter(item=>item.value==='third-party/*.jar');
+    assert.equal(directory.length,1);
+    assert.match(directory[0].detail,/JDT 已加载 1 个 JAR/);
+    assert.ok(page.sources.some(source=>source.path==='.vscode/settings.json'&&source.writable));
+   }
    if(name==='eclipse-wtp')assert.ok(value('containers')?.some(line=>line.startsWith('Web App Libraries')),JSON.stringify(model.fields));
    assert.deepEqual(projectFiles(),projectBaseline,'Detection and the libraries page must not write project files');
    // The public projection, rendered by the native host in scripts/compiler/visual.mjs.
    capture(`libraries-${name}-zh`,page);
    capture(`libraries-${name}-en`,await invoke('libraries.settings',{context:{language:'en',builds:[]}}));
   });
+  if(name==='eclipse-wtp')await step('saving an Eclipse module still writes its own .classpath',async()=>{
+   const page=await invoke('libraries.settings',{context:{language:'en',builds:[]}});
+   const module=page.sources.find(item=>item.group==='modules'&&item.path==='WebApp/.classpath');
+   assert.equal(module?.writable,true);
+   const stageFile=join(stage,'classpath-stage.xml');writeFileSync(stageFile,'');
+   const edit=await invoke('compiler.prepareSettings',{operation:'editSource',sourceID:module.id,revision:module.revision,values:{output:'build/verified'},outputFile:stageFile});
+   assert.equal(edit.changed,true);
+   const contents=readFileSync(stageFile,'utf8');
+   assert.match(contents,/kind="output" path="build\/verified"/);
+   assert.match(contents,/org\.eclipse\.jst\.j2ee\.internal\.web\.container/);
+   renameSync(stageFile,join(root,module.path));
+   const after=await invoke('libraries.settings',{operation:'readAfterSave',context:{language:'en',builds:[]}});
+   assert.equal(after.sources.find(item=>item.id===module.id).fields.find(field=>field.id==='output').value,'build/verified');
+   await compiles();
+   assert.ok(existsSync(join(fixture.project,'build/verified/demo/Hello.class')));
+  });
   if(name==='legacy-web')await step('saving the detected entries writes them and JDT builds from the file',async()=>{
    const page=await invoke('libraries.settings',{context:{language:'en',builds:[]}});
    const source=page.sources.find(item=>item.path==='.vscode/settings.json');assert.ok(source,JSON.stringify(page.sources));
+   assert.equal(source.group,'modules');
+   assert.equal(source.title,root.split(/[\\/]/).at(-1));
+   assert.deepEqual([...new Set(source.fields.map(field=>field.section))],['Sources','Paths','Dependencies']);
+   const initialOutput=source.fields.find(field=>field.id==='output');
+   assert.equal(initialOutput.value,null);
+   assert.ok(initialOutput.effectiveValue, 'JDT reports the default output location');
+   assert.equal(initialOutput.inheritedValue,initialOutput.effectiveValue);
+   assert.ok(source.fields.find(field=>field.id==='roots').inheritedValue.some(row=>row.value==='src'));
+   assert.deepEqual(source.fields.find(field=>field.id==='dependencies').entryKinds.map(kind=>[kind.id,kind.input]),
+    [['archive','file'],['jar-directory','directory'],['classes','directory']]);
    assert.equal(source.fields.find(field=>field.id==='store-detected')?.value,false);
+   await jar(stage,'manual',{'demo/manual/Extra.java':'package demo.manual; public class Extra {}'},join(stage,'manual.jar'));
+   const classFolder=join(stage,'jar-manual');
+   const resolved=()=>execute('java.project.getClasspaths',[projectUri,'{"scope":"test"}']);
+   const hasClassFolder=value=>value.classpaths.some(path=>samePath(path,classFolder));
    const stageFile=join(stage,'settings-stage.json');writeFileSync(stageFile,'');
-   const edit=await invoke('compiler.prepareSettings',{operation:'editSource',sourceID:source.id,revision:source.revision,values:{'store-detected':true},outputFile:stageFile});
+   const selectedLibrary=join(stage,'manual.jar');
+   const selectedDirectory=join(root,'WebRoot/WEB-INF/lib');
+   write(join(root,'test/demo/ExampleTest.java'),'package demo; public class ExampleTest {}');
+   write(join(root,'src/demo/excluded/Invalid.java'),'intentionally invalid Java');
+   write(join(root,'resources/verified.properties'),'verified=true');
+   write(join(root,'test-resources/verified-test.properties'),'verified=true');
+   write(join(root,'resources/NotJava.java'),'intentionally invalid Java');
+   const edit=await invoke('compiler.prepareSettings',{operation:'editSource',sourceID:source.id,revision:source.revision,values:{
+    'store-detected':true,output:'build/verified',
+    roots:[{kind:'folder',value:join(root,'src')},{kind:'test',value:join(root,'test')},
+     {kind:'excluded',value:join(root,'src/demo/excluded')},{kind:'resource',value:join(root,'resources')},
+     {kind:'test-resource',value:join(root,'test-resources')}],
+    dependencies:[{kind:'jar-directory',value:selectedDirectory},{kind:'archive',value:selectedLibrary},{kind:'classes',value:classFolder}]
+   },outputFile:stageFile});
    assert.equal(edit.changed,true);
    const saved=JSON.parse(readFileSync(stageFile,'utf8'));
-   assert.deepEqual(saved['java.project.referencedLibraries'],['lib/**',fixture.library],'Only portable entries are saved, never the machine\'s servlet container');
+   assert.deepEqual(saved['java.project.referencedLibraries'],[fixture.library,selectedLibrary],'The library directory stores a JAR pattern and the server libraries stay implicit');
+   assert.deepEqual(saved['java.lithe.classFolders'],[classFolder]);
+   assert.equal(saved['java.project.outputPath'],'build/verified');
+   assert.deepEqual(saved['java.project.sourcePaths'],['src','test','resources','test-resources']);
    mkdirSync(join(root,'.vscode'));renameSync(stageFile,join(root,source.path));
    const after=await invoke('libraries.settings',{operation:'readAfterSave',context:{language:'en',builds:[]}});
-   assert.equal(after.sources.find(item=>item.path==='.vscode/settings.json').fields.find(field=>field.id==='store-detected').value,true);
+   const savedSource=after.sources.find(item=>item.path==='.vscode/settings.json');
+   assert.equal(savedSource.fields.find(field=>field.id==='store-detected').value,true);
+   assert.equal(savedSource.fields.find(field=>field.id==='output').value,'build/verified');
+   await until(resolved,value=>hasClassFolder(value)&&value.classpaths.some(path=>samePath(path,selectedLibrary)),
+    'JDT loads the saved JAR and class folder');
+   const marked=await until(()=>execute('java.project.getSettings',[projectUri,['org.eclipse.jdt.ls.core.classpathEntries']]),
+    value=>JSON.stringify(value).includes('demo/excluded/')&&JSON.stringify(value).includes('**/*.java'),
+    'JDT applied the test and excluded folder markers');
+   assert.equal(await execute('java.project.isTestFile',[pathToFileURL(join(root,'test/demo/ExampleTest.java')).href]),true);
+   const current=await invoke('libraries.settings',{context:{language:'en',builds:[]}});
+   const rows=current.sources.find(item=>item.id===source.id).fields.find(field=>field.id==='dependencies').value;
+   assert.equal(rows.filter(row=>row.kind==='jar-directory').length,1);
+   assert.match(rows.find(row=>row.kind==='jar-directory').detail,/1 JARs? loaded by JDT/);
+   assert.match(rows.find(row=>row.kind==='classes').detail,/Loaded by JDT/);
+   capture('workspace-dependencies-en',current);
    await compiles();
+   const jdtOutput=(await execute('java.project.getSettings',[projectUri,['org.eclipse.jdt.ls.core.outputPath']]))['org.eclipse.jdt.ls.core.outputPath'];
+   assert.ok(samePath(jdtOutput,join(root,'build/verified')), 'JDT uses the configured production output');
+   assert.ok(existsSync(join(jdtOutput,'verified.properties')));
+   const testOutput=marked['org.eclipse.jdt.ls.core.classpathEntries'].find(entry=>samePath(entry.path,join(root,'test-resources'))).output;
+   assert.ok(testOutput&&!samePath(testOutput,jdtOutput));
+   assert.ok(existsSync(join(testOutput,'verified-test.properties')));
+   writeFileSync(stageFile,'');
+   await invoke('compiler.prepareSettings',{operation:'editSource',sourceID:savedSource.id,revision:savedSource.revision,values:{
+    dependencies:[{kind:'jar-directory',value:fixture.library}]
+   },outputFile:stageFile});
+   assert.deepEqual(JSON.parse(readFileSync(stageFile,'utf8'))['java.project.referencedLibraries'],[fixture.library]);
+   renameSync(stageFile,join(root,source.path));
+   await invoke('libraries.settings',{operation:'readAfterSave',context:{language:'en',builds:[]}});
+   await until(resolved,value=>!hasClassFolder(value)&&!value.classpaths.some(path=>samePath(path,selectedLibrary)),
+    'JDT drops the removed JAR and class folder');
   });
   await server.request('shutdown',null,30000);server.notify('exit',null);
+  await Promise.race([server.exited,delay(2000,undefined,{ref:false})]);
  }finally{
   try{if(server)await server.close();}finally{try{if(backend)await backend.close();}finally{rmSync(stage,{recursive:true,force:true});}}
  }

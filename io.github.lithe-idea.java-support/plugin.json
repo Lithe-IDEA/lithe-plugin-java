@@ -806,8 +806,8 @@
         "function": "java.resolveLaunch",
         "timeoutMilliseconds": 60000
       },
-      "requestMethods": ["java/classFileContents", "workspace/executeCommand"],
-      "commands": ["java.project.updateSettings", "vscode.java.buildWorkspace", "vscode.java.resolveClasspath", "vscode.java.resolveMainMethod", "vscode.java.test.findTestTypesAndMethods", "vscode.java.test.junit.argument"],
+      "requestMethods": ["java/classFileContents", "java/projectConfigurationsUpdate", "workspace/executeCommand"],
+      "commands": ["java.project.getAll", "java.project.getSettings", "java.project.getClasspaths", "lithe.java.projectModel.describe", "java.project.updateSettings", "vscode.java.buildWorkspace", "vscode.java.resolveClasspath", "vscode.java.resolveMainMethod", "vscode.java.test.findTestTypesAndMethods", "vscode.java.test.junit.argument"],
       "forwardNotifications": ["language/eventNotification", "language/progressReport", "language/status"],
       "state": {
         "scope": "workspace",

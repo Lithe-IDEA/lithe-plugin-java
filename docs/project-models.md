@@ -28,6 +28,7 @@ JDT LS 只认识 Maven、Gradle 和 Eclipse 的 `.project`，其余目录按“�
 | Eclipse `org.eclipse.jst.server.core.container`（Server Runtime）、MyEclipse J2EE 1.3/1.4、Java EE 5/6/7 库 | Servlet 容器的 `lib` 下的 JAR | 同上 |
 | Eclipse 类路径变量 `TOMCAT_HOME`、`CATALINA_HOME` | Servlet 容器的安装目录 | JDT 内存中的类路径变量 |
 | IntelliJ IDEA 模块 | 生产与测试源码文件夹（`java.project.sourcePaths`）、模块库、项目库（`.idea/libraries`）、`jarDirectory` | 推给 JDT 的设置，仅内存 |
+| IntelliJ IDEA 类目录 | 声明为编译库根的类目录，包括磁盘上实际为目录的展开式 JAR、`WEB-INF/classes` | 由插件扩展加入 JDT 内部工程的类路径容器 |
 | IDEA 应用服务器库、Web facet | Servlet 容器的 JAR | 同上 |
 | 传统 Web / EAR | `WEB-INF/lib/*.jar`、EAR 库目录、`MANIFEST.MF` 的 `Class-Path` | 同上 |
 
@@ -35,7 +36,7 @@ JDT LS 只认识 Maven、Gradle 和 Eclipse 的 `.project`，其余目录按“�
 始终优先：插件只在它们之后追加识别结果，保留其中的 `exclude` 和 `sources`；没有显式值时保留上游默认的 `lib/**`。
 
 无法自动补全的条目会在“Java 库”设置页的“工程模型 → 未能解析”中逐项列出原因：IDEA 的全局库或应用库、
-只有 IDEA 知道的路径变量、类文件夹（JDT 只接受 JAR）、工作区之外的源码文件夹、Eclipse 用户库（定义在 Eclipse 工作区里）、
+只有 IDEA 知道的路径变量、工作区之外的源码文件夹、Eclipse 用户库（定义在 Eclipse 工作区里）、
 不存在的文件。启动时同样以降级诊断计数记录：`launch.servlet_container_missing`、`launch.project_model_unresolved`、
 `launch.project_model_truncated`。
 
@@ -60,6 +61,7 @@ Servlet 容器及其来源、Eclipse 每个项目的容器与变量解析结果�
 普通文件夹的 `.vscode/settings.json` 来源新增：
 
 - “源码文件夹”：`java.project.sourcePaths`，留空时继承 IDEA 模块的源码文件夹。
+- “补充类目录”：`java.lithe.classFolders`，每行一个工作区相对路径或绝对路径，加入 JDT 编译类路径。
 - “将识别结果保存到此文件”：勾选并保存后，把识别出的库（不含本机 Servlet 容器路径）和 IDEA 源码文件夹写进
   `.vscode/settings.json`，供 VS Code 等其他编辑器和团队成员使用；取消勾选并保存则移除这些条目。
 
