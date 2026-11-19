@@ -30,6 +30,8 @@ const SOURCE_PATHS_KEY: &str = "java.project.sourcePaths";
 const OUTPUT_KEY: &str = "java.project.outputPath";
 const JDT_COMMAND_TIMEOUT_MS: u64 = 30_000;
 const WORKSPACE_CLASSPATH_TIMEOUT_MS: u64 = 1_500;
+const WORKSPACE_AFTER_SAVE_TIMEOUT_MS: u64 = 10_000;
+const WORKSPACE_CLASSPATH_UNAVAILABLE: &str = "java.workspaceSettings.classpathUnavailable";
 
 /// Bounded native read bindings; no configuration documents or tool models are cached.
 #[derive(Default)]
@@ -245,31 +247,52 @@ impl ProjectSettings {
             crate::library_settings::SOURCE_PATHS_FACT
         ]);
         // The workspace configuration is available while JDT waits for indexing.
+        let workspace_timeout = if params["operation"] == "readAfterSave" {
+            WORKSPACE_AFTER_SAVE_TIMEOUT_MS
+        } else {
+            WORKSPACE_CLASSPATH_TIMEOUT_MS
+        };
+        let mut workspace_degraded = false;
         let workspace_classpaths = workspace_uri.as_ref().and_then(|uri| {
-            resolved_classpaths(context, uri.as_str(), WORKSPACE_CLASSPATH_TIMEOUT_MS)
+            let resolved = resolved_classpaths(context, uri.as_str(), workspace_timeout);
+            if resolved.is_none() {
+                workspace_degraded = true;
+            }
+            resolved
         });
         let mut facts = Vec::new();
         if let Some(uri) = &workspace_uri {
-            let settings = workspace_classpaths
-                .as_ref()
-                .and_then(|_| {
-                    command_with_timeout(
-                        context,
-                        "java.project.getSettings",
-                        json!([
-                            uri.as_str(),
-                            [
-                                LIBRARIES_FACT,
-                                crate::library_settings::SOURCE_PATHS_FACT,
-                                crate::library_settings::OUTPUT_PATH_FACT
-                            ]
-                        ]),
-                        WORKSPACE_CLASSPATH_TIMEOUT_MS,
-                    )
-                    .ok()
-                })
-                .unwrap_or(Value::Null);
+            let settings = if workspace_classpaths.is_some() {
+                match command_with_timeout(
+                    context,
+                    "java.project.getSettings",
+                    json!([
+                        uri.as_str(),
+                        [
+                            LIBRARIES_FACT,
+                            crate::library_settings::SOURCE_PATHS_FACT,
+                            crate::library_settings::OUTPUT_PATH_FACT
+                        ]
+                    ]),
+                    workspace_timeout,
+                ) {
+                    Ok(value) => value,
+                    Err(_) => {
+                        workspace_degraded = true;
+                        Value::Null
+                    }
+                }
+            } else {
+                Value::Null
+            };
             facts.push((root.clone(), settings));
+        }
+        if workspace_degraded {
+            let _ = context.diagnostics().degraded(
+                context.function_id(),
+                WORKSPACE_CLASSPATH_UNAVAILABLE,
+                Some(1),
+            );
         }
         context.check_cancelled()?;
         // Maven and Gradle projects: shown read-only on the structure page.
@@ -426,7 +449,16 @@ impl ProjectSettings {
             if writable {
                 bindings.insert(id.clone(), source_path);
             }
-            sources.push(json!({"id":id,"group":if libraries && !workspace_module{"libraries"}else{"modules"},"title":crate::module_structure::project_name(&path),"path":rel,"revision":revision,"writable":writable,"fields":fields}));
+            let title = crate::module_structure::clean_text(
+                &crate::module_structure::project_name(&path),
+                256,
+            );
+            let title = if title.trim().is_empty() {
+                "Java".to_owned()
+            } else {
+                title
+            };
+            sources.push(json!({"id":id,"group":if libraries && !workspace_module{"libraries"}else{"modules"},"title":title,"path":rel,"revision":revision,"writable":writable,"fields":fields}));
         }
         let mut module_sources = if libraries {
             self.module_sources(
@@ -444,10 +476,15 @@ impl ProjectSettings {
         if let Some(page) = &page {
             if !page.model.idea_module_details.is_empty() {
                 for module in &page.model.idea_module_details {
-                    let file = root.join(&module.descriptor);
+                    let Ok(file) = dunce::canonicalize(root.join(&module.descriptor)) else {
+                        continue;
+                    };
                     let Some(rel) = project_model::relative_inside(&root, &file) else {
                         continue;
                     };
+                    if rel == "." || rel.split('/').any(|part| part == "." || part == "..") {
+                        continue;
+                    }
                     if !paths.insert(file.clone()) {
                         continue;
                     }
@@ -459,7 +496,13 @@ impl ProjectSettings {
                         module,
                         workspace_classpaths.as_deref(),
                     );
-                    module_sources.push(json!({"id":id,"group":"modules","title":module.name,"path":rel,"revision":revision,"writable":false,"fields":fields}));
+                    let title = crate::module_structure::clean_text(&module.name, 256);
+                    let title = if title.trim().is_empty() {
+                        "IDEA".to_owned()
+                    } else {
+                        title
+                    };
+                    module_sources.push(json!({"id":id,"group":"modules","title":title,"path":rel,"revision":revision,"writable":false,"fields":fields}));
                 }
             }
         }
@@ -843,6 +886,31 @@ fn edit_settings(
         document = edit_json(&document, SOURCE_PATHS_KEY, paths)?;
     }
     if let Some(roots) = values.get(crate::module_structure::ROOTS_FIELD) {
+        let existing_explicit = Explicit::from_document(&native_json(&document)?);
+        let normalize_existing = |path: &str| -> String {
+            let normalized = path.replace('\\', "/");
+            if normalized == "." {
+                normalized
+            } else {
+                normalized.trim_end_matches('/').to_owned()
+            }
+        };
+        let existing_known: BTreeSet<String> = existing_explicit
+            .source_paths
+            .as_ref()
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .chain(
+                existing_explicit
+                    .source_roles
+                    .values()
+                    .flat_map(|paths| paths.iter().map(String::as_str)),
+            )
+            .map(normalize_existing)
+            .collect();
+        let canonical_root = dunce::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
         let mut roles = BTreeMap::<&str, Vec<String>>::new();
         let paths = match roots {
             Value::Null => Value::Null,
@@ -858,22 +926,41 @@ fn edit_settings(
                                     .any(|(role, _)| role == kind)
                         })
                         .ok_or_else(fail)?;
-                    let path = entry["value"]
+                    let raw_path = entry["value"]
                         .as_str()
                         .filter(|path| crate::library_settings::valid_path(path))
                         .ok_or_else(fail)?;
-                    let path = Path::new(path);
+                    let path = Path::new(raw_path);
                     let candidate = if path.is_absolute() {
                         path.to_path_buf()
                     } else {
-                        root.join(path)
+                        canonical_root.join(path)
                     };
-                    let resolved = dunce::canonicalize(candidate).map_err(|_| fail())?;
-                    if !resolved.is_dir() {
-                        return Err(fail());
-                    }
-                    let relative =
-                        project_model::relative_inside(root, &resolved).ok_or_else(fail)?;
+                    let relative = match dunce::canonicalize(&candidate) {
+                        Ok(resolved) => {
+                            if !resolved.is_dir() {
+                                return Err(fail());
+                            }
+                            project_model::relative_inside(&canonical_root, &resolved)
+                                .ok_or_else(fail)?
+                        }
+                        Err(_) => {
+                            let normalized = normalize_existing(raw_path);
+                            let safe_relative = !normalized.is_empty()
+                                && !Path::new(&normalized).is_absolute()
+                                && Path::new(&normalized).components().all(|part| {
+                                    matches!(
+                                        part,
+                                        std::path::Component::Normal(_)
+                                            | std::path::Component::CurDir
+                                    )
+                                });
+                            if !safe_relative || !existing_known.contains(&normalized) {
+                                return Err(fail());
+                            }
+                            normalized
+                        }
+                    };
                     if relative.contains(['*', '?', '|']) || (kind == "excluded" && relative == ".")
                     {
                         return Err(fail());
@@ -992,7 +1079,18 @@ fn edit_workspace_dependencies(
                     let pattern = if jar_directory(&normalized).is_some() {
                         path.to_owned()
                     } else {
-                        let base = project_model::relative_inside(root, Path::new(path))
+                        let canonical_root =
+                            dunce::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+                        let input_path = Path::new(path);
+                        let candidate = if input_path.is_absolute() {
+                            dunce::canonicalize(input_path)
+                                .unwrap_or_else(|_| input_path.to_path_buf())
+                        } else {
+                            dunce::canonicalize(canonical_root.join(input_path))
+                                .unwrap_or_else(|_| input_path.to_path_buf())
+                        };
+                        let base = project_model::relative_inside(&canonical_root, &candidate)
+                            .or_else(|| project_model::relative_inside(root, input_path))
                             .unwrap_or(normalized);
                         format!("{}/*.jar", base.trim_end_matches('/'))
                     };
@@ -1271,6 +1369,47 @@ mod tests {
         let document = native_json(&updated).unwrap();
         assert_eq!(document[SOURCE_PATHS_KEY], json!(["src"]));
         assert_eq!(document["java.lithe.testSourceFolders"], json!(["src"]));
+    }
+
+    #[test]
+    fn jar_directory_with_uncanonicalized_root_writes_relative_glob() {
+        let directory = TestDirectory::new();
+        let lib_dir = directory.0.join("WebRoot/WEB-INF/lib");
+        fs::create_dir_all(&lib_dir).unwrap();
+        let canonical_root = dunce::canonicalize(&directory.0).unwrap();
+        let entries = json!([{"kind":"jar-directory","value":lib_dir}]);
+        let updated = edit_workspace_dependencies(&canonical_root, b"{}", &entries).unwrap();
+        let parsed = native_json(&updated).unwrap();
+        assert_eq!(parsed[LIBRARY_KEY], json!(["WebRoot/WEB-INF/lib/*.jar"]));
+    }
+
+    #[test]
+    fn editing_roots_preserves_existing_missing_folder_but_rejects_new_missing_folder() {
+        let directory = TestDirectory::new();
+        let root = dunce::canonicalize(&directory.0).unwrap();
+        fs::create_dir(root.join("test")).unwrap();
+        let initial = br#"{"java.project.sourcePaths":["missing-src"]}"#;
+        let updated = edit_settings(
+            &root,
+            initial,
+            json!({"roots":[{"kind":"folder","value":"missing-src"},{"kind":"test","value":"test"}]})
+                .as_object()
+                .unwrap(),
+            &ModelOptions::default(),
+        )
+        .unwrap();
+        let parsed = native_json(&updated).unwrap();
+        assert_eq!(parsed[SOURCE_PATHS_KEY], json!(["missing-src", "test"]));
+        assert_eq!(parsed["java.lithe.testSourceFolders"], json!(["test"]));
+        assert!(edit_settings(
+            &root,
+            initial,
+            json!({"roots":[{"kind":"folder","value":"never-existed"}]})
+                .as_object()
+                .unwrap(),
+            &ModelOptions::default(),
+        )
+        .is_err());
     }
 
     #[test]

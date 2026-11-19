@@ -1,6 +1,9 @@
 package io.github.lithe_idea.java.projectmodel;
 
 import java.io.File;
+import java.io.IOException;
+import java.nio.file.InvalidPathException;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -118,6 +121,30 @@ final class ProjectModelSettings {
 			current = map.get(key);
 		}
 		return current;
+	}
+
+	static Path realPath(Path path) {
+		try {
+			return path.toRealPath();
+		} catch (IOException e) {
+			return path.toAbsolutePath().normalize();
+		}
+	}
+
+	static Path realPath(String path) {
+		try {
+			return realPath(Path.of(path));
+		} catch (InvalidPathException e) {
+			return null;
+		}
+	}
+
+	static boolean sameDirectory(org.eclipse.core.runtime.IPath folder, String other) {
+		if (folder == null || other == null || other.isEmpty()) {
+			return false;
+		}
+		Path otherPath = realPath(other);
+		return otherPath != null && realPath(folder.toFile().toPath()).equals(otherPath);
 	}
 
 	@Override

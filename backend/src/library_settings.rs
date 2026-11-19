@@ -139,6 +139,19 @@ impl Page<'_> {
             "effectiveSource": effective_source,
         }));
         if !self.model.kind.managed() {
+            let class_folders_value = self
+                .explicit
+                .class_folders
+                .as_ref()
+                .and_then(Value::as_array)
+                .map(|items| {
+                    json!(items
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .filter(|path| valid_path(path))
+                        .take(MAX_LINES)
+                        .collect::<Vec<_>>())
+                });
             fields.push(json!({
                 "id": CLASS_FOLDERS_FIELD,
                 "title":text(zh,"Additional class folders","补充类目录"),
@@ -146,7 +159,7 @@ impl Page<'_> {
                     "Folders containing compiled classes. Add an absolute path or a workspace-relative path, one per line. Saved under java.lithe.classFolders in .vscode/settings.json.",
                     "包含已编译类的目录。每行填写一个绝对路径或相对于工作区的路径，保存到 .vscode/settings.json 的 java.lithe.classFolders。"),
                 "kind":"stringList",
-                "value":self.explicit.class_folders.as_ref().filter(|value| value.is_array()),
+                "value":class_folders_value,
                 "effectiveValue":Value::Null,
                 "effectiveSource":".vscode/settings.json",
             }));
@@ -186,6 +199,8 @@ impl Page<'_> {
             value.as_array().is_some_and(|paths| !paths.is_empty())
                 || (value.is_array() && !self.explicit.source_roles.is_empty())
         });
+        let has_roles = !self.explicit.source_roles.is_empty();
+        let has_declared_roots = configured_roots.is_some() || has_roles;
         let jdt_roots = relative_list(self.root, &fact[SOURCE_PATHS_FACT]);
         let kinds = [
             ("folder", text(zh, "Source folder", "源码文件夹")),
@@ -206,10 +221,14 @@ impl Page<'_> {
             json!(rows)
         })
         };
-        let mut declared = entries(configured_roots);
-        let excluded = self.explicit.source_roles.get("excluded");
+        let mut declared = entries(configured_roots).or_else(|| has_roles.then(|| json!([])));
+        let mut roots_truncated = false;
         if let Some(rows) = declared.as_mut().and_then(Value::as_array_mut) {
+            let mut seen_paths = BTreeSet::new();
             for row in rows.iter_mut() {
+                if let Some(path) = row["value"].as_str() {
+                    seen_paths.insert(path.to_owned());
+                }
                 if let Some((kind, label)) = kinds.iter().skip(1).take(3).find(|(kind, _)| {
                     self.explicit
                         .source_roles
@@ -220,26 +239,67 @@ impl Page<'_> {
                     row["detail"] = json!(label);
                 }
             }
-            if let Some(paths) = excluded {
-                let mut seen = BTreeSet::new();
-                let capacity = MAX_LINES.saturating_sub(rows.len());
-                rows.extend(paths.iter().filter(|path| valid_path(path) && seen.insert(*path)).take(capacity)
-                    .map(|path| json!({"kind":"excluded","value":path,"title":truncate(path.to_owned(),256),"detail":kinds[4].1})));
+            for (kind, label) in kinds.iter().skip(1).take(3) {
+                if let Some(paths) = self.explicit.source_roles.get(kind) {
+                    for path in paths {
+                        if !valid_path(path) {
+                            roots_truncated = true;
+                            continue;
+                        }
+                        if seen_paths.insert(path.clone()) {
+                            if rows.len() >= MAX_LINES {
+                                roots_truncated = true;
+                            } else {
+                                rows.push(json!({"kind":kind,"value":path,"title":truncate(path.clone(),256),"detail":label}));
+                            }
+                        }
+                    }
+                }
+            }
+            if let Some(paths) = self.explicit.source_roles.get("excluded") {
+                let mut seen_excluded = BTreeSet::new();
+                for path in paths {
+                    if !valid_path(path) {
+                        roots_truncated = true;
+                        continue;
+                    }
+                    if seen_excluded.insert(path.as_str()) {
+                        if rows.len() >= MAX_LINES {
+                            roots_truncated = true;
+                        } else {
+                            rows.push(json!({"kind":"excluded","value":path,"title":truncate(path.clone(),256),"detail":kinds[4].1}));
+                        }
+                    }
+                }
             }
         }
-        let roots_complete = configured_roots
+        let configured_valid = configured_roots
             .and_then(Value::as_array)
             .is_none_or(|paths| {
-                paths.len() + excluded.map_or(0, Vec::len) <= MAX_LINES
-                    && paths
-                        .iter()
-                        .all(|path| path.as_str().is_some_and(valid_path))
+                let mut seen = BTreeSet::new();
+                let mut unique = 0usize;
+                for path in paths {
+                    let Some(path) = path.as_str().filter(|path| valid_path(path)) else {
+                        return false;
+                    };
+                    if seen.insert(path) {
+                        unique += 1;
+                    }
+                }
+                unique <= MAX_LINES
             });
+        let roles_valid = self
+            .explicit
+            .source_roles
+            .values()
+            .flatten()
+            .all(|path| valid_path(path));
+        let roots_complete = configured_valid && roles_valid && !roots_truncated;
         fields.insert(0, json!({"id":ROOTS_FIELD,"title":text(zh,"Source folders","源码文件夹"),
             "section":text(zh,"Sources","源"),"kind":"entryList",
             "value":declared,"effectiveValue":entries(Some(&jdt_roots)),
-            "inheritedValue":if configured_roots.is_none() { entries(Some(&jdt_roots)) } else { None },
-            "effectiveSource":if configured_roots.is_some() { origin.to_owned() } else { text(zh,"JDT inference","JDT 推断") },
+            "inheritedValue":if !has_declared_roots { entries(Some(&jdt_roots)) } else { None },
+            "effectiveSource":if has_declared_roots { origin.to_owned() } else { text(zh,"JDT inference","JDT 推断") },
             "description":text(zh, "Choose each folder's role. Exclusions apply within source roots. Resource folders copy non-Java files to the compiler output.", "可按用途添加目录。排除目录作用于其所在的源码根。资源目录中的非 Java 文件会复制到编译输出。"),
             "entryKinds":entry_kinds}));
         let output = self.explicit.output_path.as_ref().and_then(Value::as_str);
@@ -889,6 +949,66 @@ mod tests {
         assert!(field("output")["value"].is_null());
         assert_eq!(field("output")["inheritedValue"], "bin");
         assert_eq!(field("output")["effectiveValue"], "bin");
+    }
+
+    #[test]
+    fn settings_fields_sanitizes_invalid_class_folders() {
+        let model = model(ModelKind::Idea);
+        let mut items = vec![json!(42), json!(""), json!("bad\npath")];
+        for index in 0..(MAX_LINES + 10) {
+            items.push(json!(format!("classes-{index}")));
+        }
+        let explicit = Explicit::from_document(&json!({
+            "java.lithe.classFolders": items,
+        }));
+        let fields = Page {
+            zh: false,
+            root: Path::new("workspace"),
+            model: &model,
+            explicit: &explicit,
+            described: None,
+        }
+        .settings_fields(&json!({}), Value::Null);
+        let class_folders = fields
+            .iter()
+            .find(|field| field["id"] == CLASS_FOLDERS_FIELD)
+            .unwrap()["value"]
+            .as_array()
+            .unwrap();
+        assert_eq!(class_folders.len(), MAX_LINES);
+        assert_eq!(class_folders[0], "classes-0");
+        assert!(class_folders
+            .iter()
+            .all(|item| item.as_str().is_some_and(valid_path)));
+    }
+
+    #[test]
+    fn workspace_fields_shows_source_roles_without_explicit_source_paths() {
+        let model = model(ModelKind::Plain);
+        let explicit = Explicit::from_document(&json!({
+            "java.lithe.excludedSourceFolders": ["src/generated"],
+            "java.lithe.testSourceFolders": ["test"],
+        }));
+        let root = Path::new("workspace");
+        let (fields, complete) = Page {
+            zh: false,
+            root,
+            model: &model,
+            explicit: &explicit,
+            described: None,
+        }
+        .workspace_fields(&json!({ (SOURCE_PATHS_FACT): [root.join("src")] }), None);
+        assert!(complete);
+        let roots = fields.iter().find(|field| field["id"] == "roots").unwrap();
+        assert_eq!(roots["effectiveSource"], ".vscode/settings.json");
+        assert!(roots["inheritedValue"].is_null());
+        assert_eq!(
+            roots["value"],
+            json!([
+                {"kind":"test","value":"test","title":"test","detail":"Test source"},
+                {"kind":"excluded","value":"src/generated","title":"src/generated","detail":"Excluded folder"}
+            ])
+        );
     }
 
     fn model(kind: ModelKind) -> ProjectModel {

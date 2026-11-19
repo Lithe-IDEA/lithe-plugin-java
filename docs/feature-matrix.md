@@ -1,5 +1,13 @@
 # 功能验证矩阵
 
+## 传统工程项目结构与目录标记
+
+| 能力 | macOS | Windows | Linux | 证据 |
+| --- | --- | --- | --- | --- |
+| 普通 Java 与传统 Java EE 工作区按模块展示源码根、输出目录与依赖（统一维护 JAR、JAR 库目录与类目录并显示 JDT 类路径状态）；支持源码/测试源码/资源/测试资源/排除目录标记及独立测试输出，确认保存后写回 `.vscode/settings.json` 并更新 JDT 类路径 | implemented / verified | implemented / pending | implemented / pending | `backend/src/library_settings.rs`、`backend/src/project_settings.rs`、`jdtls-extension/project-model/src/.../SourceFolderClasspath.java`、`ClassFolderClasspath.java`；单元测试及 macOS arm64 本机用 JDT LS 1.61.0 运行 `scripts/compiler/test-project-models.mjs`（`legacy-web` 场景）、`scripts/compiler/visual.mjs`（2026-11-19）；原作者另称在 Windows 隔离工程用 JDT LS 1.61.0 验证过，本仓 Windows/Linux CI 与实机待补 |
+| IDEA 模块只读展示内容根、目录标记、继承后生产/测试输出、SDK 与类路径状态，并将类目录注入 JDT 容器支持导航与补全 | implemented / verified | implemented / pending | implemented / pending | `backend/src/project_model/idea.rs`、`backend/src/module_structure.rs`、`jdtls-extension/project-model/src/.../ClassFolderClasspath.java`；单元测试及 macOS arm64 本机运行 `scripts/compiler/test-project-models.mjs`（`idea` 场景，含双类目录跳转/补全及 JDT 阻断降级）与 `scripts/compiler/visual.mjs`（2026-11-19） |
+| 工作区与 IDEA 项目结构投影经宿主 Core `ReadSourceSettings` 校验与 Viva 无头截图渲染（中英文、明暗主题） | implemented / verified | — | — | `scripts/compiler/visual.mjs`，截图见 `docs/assets/project-models/`（2026-11-19 macOS arm64） |
+
 ## 工具链分组与设置搜索关键词（本次改动）
 
 | 能力 | macOS | Windows | Linux | 证据 |

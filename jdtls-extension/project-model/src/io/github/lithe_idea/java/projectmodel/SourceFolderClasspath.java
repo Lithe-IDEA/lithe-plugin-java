@@ -1,6 +1,5 @@
 package io.github.lithe_idea.java.projectmodel;
 
-import java.io.File;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
@@ -37,7 +36,7 @@ final class SourceFolderClasspath {
 				continue;
 			}
 			IPath workspace = ProjectUtils.getProjectRealFolder(project.getProject());
-			boolean matches = workspace != null && workspace.toFile().equals(new File(settings.classFolderWorkspace));
+			boolean matches = ProjectModelSettings.sameDirectory(workspace, settings.classFolderWorkspace);
 			Map<String, List<String>> roles = matches ? settings.sourceRoles : Map.of();
 			try {
 				IClasspathEntry[] before = project.getRawClasspath();
@@ -74,7 +73,7 @@ final class SourceFolderClasspath {
 		}
 		for (String path : paths == null ? List.<String>of() : paths) {
 			IPath relative = Path.fromPortableString(path);
-			if (!relative.isEmpty() && !relative.isAbsolute() && relative.getDevice() == null
+			if (!relative.isEmpty() && relative.segmentCount() > 0 && !relative.isAbsolute() && relative.getDevice() == null
 					&& !Arrays.asList(relative.segments()).contains("..")) {
 				IFolder folder = link.getFolder(relative);
 				if (!folder.exists()) {
@@ -116,9 +115,10 @@ final class SourceFolderClasspath {
 				attributes.remove(attribute);
 			}
 		}
-		if (folder != null && !roles.isEmpty()) {
-			boolean testResource = contains(roles, "test-resource", folder);
-			boolean test = testResource || contains(roles, "test", folder);
+		java.nio.file.Path folderPath = folder == null ? null : ProjectModelSettings.realPath(folder.toFile().toPath());
+		if (folderPath != null && !roles.isEmpty()) {
+			boolean testResource = contains(roles, "test-resource", folderPath);
+			boolean test = testResource || contains(roles, "test", folderPath);
 			if (test
 					&& attributes.stream().noneMatch(attribute -> IClasspathAttribute.TEST.equals(attribute.getName()))) {
 				attributes.add(JavaCore.newClasspathAttribute(IClasspathAttribute.TEST, "true"));
@@ -129,13 +129,23 @@ final class SourceFolderClasspath {
 				output = testOutput;
 			}
 			List<String> added = new ArrayList<>();
-			if (testResource || contains(roles, "resource", folder)) {
+			if (testResource || contains(roles, "resource", folderPath)) {
 				addExclusion(exclusions, added, "**/*.java");
 			}
 			for (String path : roles.getOrDefault("excluded", List.of())) {
-				IPath excluded = Path.fromOSString(path);
-				if (folder.isPrefixOf(excluded) && !folder.equals(excluded)) {
-					addExclusion(exclusions, added, excluded.makeRelativeTo(folder).toPortableString() + "/");
+				java.nio.file.Path excluded = ProjectModelSettings.realPath(path);
+				if (excluded != null && excluded.startsWith(folderPath) && !excluded.equals(folderPath)) {
+					java.nio.file.Path relative = folderPath.relativize(excluded);
+					StringBuilder portable = new StringBuilder();
+					for (int i = 0; i < relative.getNameCount(); i++) {
+						if (i > 0) {
+							portable.append('/');
+						}
+						portable.append(relative.getName(i).toString());
+					}
+					if (portable.length() > 0) {
+						addExclusion(exclusions, added, portable.append('/').toString());
+					}
 				}
 			}
 			if (!added.isEmpty()) {
@@ -151,8 +161,10 @@ final class SourceFolderClasspath {
 				exclusions.toArray(IPath[]::new), output, attributes.toArray(IClasspathAttribute[]::new));
 	}
 
-	private static boolean contains(Map<String, List<String>> roles, String role, IPath folder) {
-		return roles.getOrDefault(role, List.of()).stream().map(Path::fromOSString).anyMatch(folder::equals);
+	private static boolean contains(Map<String, List<String>> roles, String role, java.nio.file.Path folderPath) {
+		return roles.getOrDefault(role, List.of()).stream()
+				.map(ProjectModelSettings::realPath)
+				.anyMatch(folderPath::equals);
 	}
 
 	private static void addExclusion(Set<IPath> exclusions, List<String> added, String pattern) {

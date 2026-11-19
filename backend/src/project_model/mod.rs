@@ -456,6 +456,7 @@ pub fn overlay(root: &Path, model: &ProjectModel, explicit: &Explicit) -> Value 
             .take(1024)
             .collect()
     };
+    let canonical_root = dunce::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
     let roles = if matches!(model.kind, ModelKind::Plain | ModelKind::LegacyWeb) {
         let mut roles = BTreeMap::new();
         for (&kind, paths) in &explicit.source_roles {
@@ -463,8 +464,8 @@ pub fn overlay(root: &Path, model: &ProjectModel, explicit: &Explicit) -> Value 
                 .iter()
                 .take(256)
                 .filter(|path| crate::library_settings::valid_path(path))
-                .filter_map(|path| dunce::canonicalize(root.join(path)).ok())
-                .filter(|path| path.is_dir() && path.starts_with(root))
+                .filter_map(|path| dunce::canonicalize(canonical_root.join(path)).ok())
+                .filter(|path| path.is_dir() && path.starts_with(&canonical_root))
                 .collect();
             if !paths.is_empty() {
                 roles.insert(kind, paths);

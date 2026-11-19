@@ -72,8 +72,8 @@ final class ClassFolderClasspath {
 
 	private static boolean applies(IJavaProject project, ProjectModelSettings settings) {
 		IPath folder = ProjectUtils.getProjectRealFolder(project.getProject());
-		return !settings.classFolders.isEmpty() && folder != null
-				&& folder.toFile().equals(new File(settings.classFolderWorkspace));
+		return !settings.classFolders.isEmpty()
+				&& ProjectModelSettings.sameDirectory(folder, settings.classFolderWorkspace);
 	}
 
 	private static boolean isOwned(IClasspathEntry entry) {

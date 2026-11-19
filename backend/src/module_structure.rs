@@ -186,6 +186,11 @@ fn truncate(text: &str, bytes: usize) -> String {
     text[..end].to_owned()
 }
 
+pub(crate) fn clean_text(text: &str, bytes: usize) -> String {
+    let cleaned: String = text.chars().filter(|ch| !ch.is_control()).collect();
+    truncate(&cleaned, bytes)
+}
+
 /// The last segment of a slash or backslash separated path, and what precedes it.
 fn split_path(path: &str) -> (&str, &str) {
     let trimmed = path.trim_end_matches(['/', '\\']);
@@ -691,18 +696,26 @@ pub(crate) fn idea_fields(
     classpaths: Option<&[String]>,
 ) -> Vec<Value> {
     use crate::project_model::Origin;
+    use std::collections::BTreeSet;
 
     let source_section = local(zh, "Sources", "源");
     let paths_section = local(zh, "Paths", "路径");
     let dependencies_section = local(zh, "Dependencies", "依赖");
     let declared = local(zh, "IDEA declaration", "IDEA 声明");
-    let effective: Option<std::collections::BTreeSet<_>> = classpaths.map(|paths| {
+    let effective: Option<BTreeSet<_>> = classpaths.map(|paths| {
         paths
             .iter()
             .map(|path| classpath_key(Path::new(path)))
             .collect()
     });
-    let row = |kind: &str, value: &str, title: &str, detail: String| json!({"kind":kind,"value":truncate(value,MAX_VALUE),"title":truncate(title,256),"detail":truncate(&detail,1024)});
+    let row = |kind: &str, value: &str, title: &str, detail: &str| {
+        json!({
+            "kind": kind,
+            "value": clean_text(value, MAX_VALUE),
+            "title": clean_text(title, 256),
+            "detail": clean_text(detail, 1024),
+        })
+    };
     let kinds = [
         (FOLDER, "Source folder", "源码文件夹", &module.sources),
         ("test", "Test source", "测试源码", &module.test_sources),
@@ -715,15 +728,21 @@ pub(crate) fn idea_fields(
         ),
         ("excluded", "Excluded", "排除", &module.excluded),
     ];
-    let roots: Vec<_> = kinds
-        .iter()
-        .flat_map(|(kind, en, cn, paths)| {
-            paths
-                .iter()
-                .map(|path| row(kind, path, path, local(zh, en, cn)))
-        })
-        .take(MAX_ENTRIES)
-        .collect();
+    let mut seen_roots = BTreeSet::new();
+    let mut roots = Vec::new();
+    for (kind, en, cn, paths) in &kinds {
+        let detail = local(zh, en, cn);
+        for raw in *paths {
+            if roots.len() == MAX_ENTRIES {
+                break;
+            }
+            let value = clean_text(raw, MAX_VALUE);
+            if value.trim().is_empty() || !seen_roots.insert((*kind, value.clone())) {
+                continue;
+            }
+            roots.push(row(kind, &value, &value, &detail));
+        }
+    }
     let root_kinds: Vec<_> = kinds
         .iter()
         .map(|(kind, en, cn, _)| json!({"id":kind,"title":local(zh,en,cn),"input":"directory"}))
@@ -731,25 +750,32 @@ pub(crate) fn idea_fields(
     let content_roots: Vec<_> = module
         .content_roots
         .iter()
-        .take(MAX_ENTRIES)
-        .map(|path| {
+        .filter_map(|path| {
             let path = if path == "." {
                 root.to_path_buf()
             } else {
                 root.join(path)
             };
-            truncate(&path.display().to_string(), MAX_VALUE)
+            let cleaned = clean_text(&path.display().to_string(), MAX_VALUE);
+            (!cleaned.trim().is_empty()).then_some(cleaned)
         })
+        .take(MAX_ENTRIES)
         .collect();
+    let mut seen_deps = BTreeSet::<(&str, String)>::new();
     let mut dependencies = Vec::new();
     for (entry, directory) in module
         .libraries
         .iter()
         .map(|item| (item, false))
         .chain(module.class_folders.iter().map(|item| (item, true)))
-        .take(MAX_ENTRIES)
     {
-        let pattern = entry.pattern.as_str();
+        if dependencies.len() == MAX_ENTRIES {
+            break;
+        }
+        let pattern = clean_text(entry.pattern.as_str(), MAX_VALUE);
+        if pattern.trim().is_empty() {
+            continue;
+        }
         let glob = pattern
             .strip_suffix("/**/*.jar")
             .map(|base| (base, true))
@@ -764,11 +790,18 @@ pub(crate) fn idea_fields(
             (
                 CLASSES,
                 local(zh, "Class folder", "类目录"),
-                split_path(pattern).0,
+                split_path(&pattern).0,
             )
         } else {
-            (ARCHIVE, local(zh, "Archive", "归档"), split_path(pattern).0)
+            (
+                ARCHIVE,
+                local(zh, "Archive", "归档"),
+                split_path(&pattern).0,
+            )
         };
+        if !seen_deps.insert((kind, pattern.clone())) {
+            continue;
+        }
         let source = if entry.origin == Origin::IdeaProjectLibrary {
             local(zh, "IDEA project library", "IDEA 项目库")
         } else {
@@ -784,7 +817,8 @@ pub(crate) fn idea_fields(
                         .iter()
                         .filter(|path| {
                             path.strip_prefix(&prefix).is_some_and(|tail| {
-                                tail.ends_with(".jar") && (recursive || !tail.contains('/'))
+                                tail.to_ascii_lowercase().ends_with(".jar")
+                                    && (recursive || !tail.contains('/'))
                             })
                         })
                         .count();
@@ -795,36 +829,32 @@ pub(crate) fn idea_fields(
                             format!("{matches} JARs loaded by JDT")
                         };
                     }
-                } else if paths.contains(&classpath_key(&root.join(pattern))) {
+                } else if paths.contains(&classpath_key(&root.join(&pattern))) {
                     return local(zh, "Loaded by JDT", "JDT 已生效");
                 }
                 local(zh, "Not on JDT classpath", "未进入 JDT 类路径")
             },
         );
-        dependencies.push(row(
-            kind,
-            pattern,
-            title,
-            format!(
-                "{type_name} · {source} ({}) · {status} · {pattern}",
-                entry.label
-            ),
-        ));
+        let detail = format!(
+            "{type_name} · {source} ({}) · {status} · {pattern}",
+            entry.label
+        );
+        dependencies.push(row(kind, &pattern, title, &detail));
     }
+    let module_detail = local(
+        zh,
+        "IDEA module dependency (declared)",
+        "IDEA 模块依赖（原工程声明）",
+    );
     for name in &module.module_dependencies {
         if dependencies.len() == MAX_ENTRIES {
             break;
         }
-        dependencies.push(row(
-            MODULE,
-            name,
-            name,
-            local(
-                zh,
-                "IDEA module dependency (declared)",
-                "IDEA 模块依赖（原工程声明）",
-            ),
-        ));
+        let value = clean_text(name, MAX_VALUE);
+        if value.trim().is_empty() || !seen_deps.insert((MODULE, value.clone())) {
+            continue;
+        }
+        dependencies.push(row(MODULE, &value, &value, &module_detail));
     }
     for item in &module.unresolved {
         if dependencies.len() == MAX_ENTRIES {
@@ -845,17 +875,36 @@ pub(crate) fn idea_fields(
             UnresolvedKind::OutsideWorkspace => continue,
             UnresolvedKind::UserLibrary => continue,
         };
-        dependencies.push(row(LIBRARY, &item.name, &item.name, reason));
+        let value = clean_text(&item.name, MAX_VALUE);
+        if value.trim().is_empty() || !seen_deps.insert((LIBRARY, value.clone())) {
+            continue;
+        }
+        dependencies.push(row(LIBRARY, &value, &value, &reason));
     }
     let output_source = if module.inherits_output {
         local(zh, "Inherited from IDEA project", "继承 IDEA 项目输出")
     } else {
         declared.clone()
     };
-    let sdk = module
-        .sdk
-        .clone()
-        .unwrap_or_else(|| local(zh, "Inherited from IDEA project", "继承 IDEA 项目 SDK"));
+    let output = module
+        .output
+        .as_deref()
+        .map(|path| clean_text(path, MAX_VALUE))
+        .filter(|path| !path.trim().is_empty());
+    let test_output = module
+        .test_output
+        .as_deref()
+        .map(|path| clean_text(path, MAX_VALUE))
+        .filter(|path| !path.trim().is_empty());
+    let sdk = clean_text(
+        module.sdk.as_deref().unwrap_or(&local(
+            zh,
+            "Inherited from IDEA project",
+            "继承 IDEA 项目 SDK",
+        )),
+        MAX_VALUE,
+    );
+    let descriptor = clean_text(&module.descriptor, 1024);
     let classpath_status = if effective.is_some() {
         local(
             zh,
@@ -876,17 +925,17 @@ pub(crate) fn idea_fields(
             "value":roots,"effectiveValue":roots,"effectiveSource":declared,
             "entryKinds":root_kinds}),
         json!({"id":OUTPUT_FIELD,"title":local(zh,"IDEA output","IDEA 输出目录"),"section":paths_section,"kind":"text",
-            "value":module.output,"effectiveValue":Value::Null,"effectiveSource":output_source}),
+            "value":output,"effectiveValue":Value::Null,"effectiveSource":output_source}),
         json!({"id":"test-output","title":local(zh,"IDEA test output","IDEA 测试输出目录"),"section":paths_section,"kind":"text",
-            "value":module.test_output,"effectiveValue":Value::Null,"effectiveSource":output_source}),
+            "value":test_output,"effectiveValue":Value::Null,"effectiveSource":output_source}),
         json!({"id":JRE_FIELD,"title":local(zh,"IDEA SDK","IDEA SDK"),"section":dependencies_section,"kind":"text",
-            "value":truncate(&sdk,MAX_VALUE),"effectiveValue":Value::Null,"effectiveSource":declared}),
+            "value":sdk,"effectiveValue":Value::Null,"effectiveSource":declared}),
         json!({"id":"jdt-status","title":local(zh,"JDT classpath status","JDT 类路径状态"),"section":dependencies_section,"kind":"text",
             "value":classpath_status,"effectiveValue":classpath_status,"effectiveSource":"JDT"}),
         json!({"id":DEPENDENCIES_FIELD,"title":dependencies_section,"section":dependencies_section,"kind":"entryList",
         "description":local(zh,"Read from the IDEA module. JDT status refers to the workspace compile classpath. Edit in IDEA or add workspace libraries in Referenced libraries (.vscode/settings.json).",
             "读取 IDEA 模块声明。生效状态以 JDT 工作区类路径为准。可在 IDEA 修改原配置，或在「引用的库」补充工作区配置（.vscode/settings.json）。"),
-        "value":dependencies,"effectiveValue":dependencies,"effectiveSource":module.descriptor,
+        "value":dependencies,"effectiveValue":dependencies,"effectiveSource":descriptor,
         "entryKinds":[
             {"id":ARCHIVE,"title":local(zh,"Archive","归档"),"input":"file"},
             {"id":CLASSES,"title":local(zh,"Class folder","类目录"),"input":"directory"},
@@ -896,8 +945,31 @@ pub(crate) fn idea_fields(
     ]
 }
 
+fn normalize_lexical(path: &Path) -> std::path::PathBuf {
+    use std::path::Component;
+    let mut parts = Vec::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if matches!(parts.last(), Some(Component::Normal(_))) {
+                    parts.pop();
+                } else if !matches!(
+                    parts.last(),
+                    Some(Component::RootDir | Component::Prefix(_))
+                ) {
+                    parts.push(component);
+                }
+            }
+            other => parts.push(other),
+        }
+    }
+    parts.into_iter().collect()
+}
+
 pub(crate) fn classpath_key(path: &Path) -> String {
-    let path = path.to_string_lossy().replace('\\', "/");
+    let resolved = dunce::canonicalize(path).unwrap_or_else(|_| normalize_lexical(path));
+    let path = resolved.to_string_lossy().replace('\\', "/");
     if cfg!(windows) {
         path.to_lowercase()
     } else {
@@ -1112,5 +1184,69 @@ mod tests {
             fields[0]["value"],
             json!([{"kind":"archive","value":"/repo/a/1/a-1.jar","title":"a-1.jar","detail":"/repo/a/1"},{"kind":"classes","value":classes.to_string_lossy(),"title":"core/target/classes"}])
         );
+    }
+
+    #[test]
+    fn idea_fields_deduplicates_entries_and_strips_invalid_values() {
+        use crate::project_model::{Detected, IdeaModule, Origin, Unresolved, UnresolvedKind};
+        let module = IdeaModule {
+            descriptor: "app\n.iml".into(),
+            name: "app".into(),
+            sources: vec!["src".into(), "src".into(), "".into(), "\t".into()],
+            test_sources: vec!["test".into()],
+            content_roots: vec![".".into(), "  ".into()],
+            resources: vec![],
+            test_resources: vec![],
+            excluded: vec![],
+            libraries: vec![Detected {
+                pattern: "lib/*.jar".into(),
+                origin: Origin::IdeaModuleLibrary,
+                label: "libs".into(),
+                count: 1,
+            }],
+            class_folders: vec![],
+            module_dependencies: vec!["core".into(), "core".into(), "".into()],
+            unresolved: vec![
+                Unresolved {
+                    kind: UnresolvedKind::MissingLibrary,
+                    name: "lib/*.jar".into(),
+                },
+                Unresolved {
+                    kind: UnresolvedKind::MissingFile,
+                    name: "missing.jar".into(),
+                },
+                Unresolved {
+                    kind: UnresolvedKind::MissingFile,
+                    name: "missing.jar".into(),
+                },
+                Unresolved {
+                    kind: UnresolvedKind::MissingFile,
+                    name: "  ".into(),
+                },
+            ],
+            output: Some("out\0".into()),
+            test_output: Some("  ".into()),
+            inherits_output: false,
+            sdk: None,
+        };
+        let fields = idea_fields(false, Path::new("/workspace"), &module, None);
+        let field = |id| fields.iter().find(|item| item["id"] == id).unwrap();
+        let roots = field(ROOTS_FIELD)["value"].as_array().unwrap();
+        assert_eq!(roots.len(), 2);
+        let deps = field(DEPENDENCIES_FIELD)["value"].as_array().unwrap();
+        let keys: std::collections::BTreeSet<_> = deps
+            .iter()
+            .map(|item| {
+                (
+                    item["kind"].as_str().unwrap().to_owned(),
+                    item["value"].as_str().unwrap().to_owned(),
+                )
+            })
+            .collect();
+        assert_eq!(deps.len(), 3);
+        assert_eq!(keys.len(), 3);
+        assert_eq!(field(OUTPUT_FIELD)["value"], "out");
+        assert!(field("test-output")["value"].is_null());
+        assert_eq!(field(DEPENDENCIES_FIELD)["effectiveSource"], "app.iml");
     }
 }
