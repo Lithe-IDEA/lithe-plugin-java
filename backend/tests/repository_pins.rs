@@ -12,6 +12,7 @@ use lithe_java_backend::launch::{
     SERVER_RUNTIME_TOOL,
 };
 use lithe_java_backend::managed_runtimes::{JDK_VERSION, RESOLVE_FUNCTION_ID};
+use lithe_java_backend::settings_view::SETTINGS_VIEW_FUNCTION_ID;
 use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -405,6 +406,13 @@ fn assert_sha256(value: &str, label: &str) {
 #[test]
 fn manifest_and_zh_hans_declare_setting_regions() {
     let manifest = read_json(&format!("{PLUGIN_ID}/plugin.json"));
+    assert_eq!(manifest["requires"]["ui"], 0);
+    assert!(
+        manifest["permissions"]
+            .as_array()
+            .is_some_and(|items| items.iter().any(|item| item == "ui.contribute")),
+        "permissions must include ui.contribute"
+    );
     let regions = manifest["settingRegions"]
         .as_array()
         .expect("settingRegions must be an array");
@@ -413,6 +421,10 @@ fn manifest_and_zh_hans_declare_setting_regions() {
         .find(|region| region["id"] == "language")
         .expect("language settingRegion must exist");
     assert_eq!(text(&language["page"], "languageID"), "java");
+    assert_eq!(
+        text(&language["view"], "function"),
+        SETTINGS_VIEW_FUNCTION_ID
+    );
     assert!(
         language["keywords"]
             .as_array()
@@ -425,6 +437,10 @@ fn manifest_and_zh_hans_declare_setting_regions() {
         .find(|region| region["id"] == "compiler")
         .expect("compiler settingRegion must exist");
     assert_eq!(text(&compiler["page"], "compilerID"), "java");
+    assert_eq!(
+        text(&compiler["view"], "function"),
+        SETTINGS_VIEW_FUNCTION_ID
+    );
     assert!(
         compiler["keywords"]
             .as_array()
