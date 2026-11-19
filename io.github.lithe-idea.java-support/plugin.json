@@ -4,7 +4,7 @@
   "displayName": "Java Support",
   "version": "4.2.0",
   "pluginAPIVersion": 0,
-  "requires": {"backend": 0, "debugAdapters": 0, "languages": 0, "languageServers": 0, "pluginFunctions": 0, "settings": 0, "projectGenerators": 0, "toolDefinitions": 0, "sourceSettings": 1, "managedRuntimes": 1},
+  "requires": {"backend": 0, "debugAdapters": 0, "languages": 0, "languageServers": 0, "pluginFunctions": 0, "settings": 0, "projectGenerators": 0, "toolDefinitions": 1, "sourceSettings": 1, "managedRuntimes": 1},
   "managedRuntimes": {
     "resolve": {
       "function": "java.resolveRuntimes",
@@ -169,6 +169,8 @@
       "icon": {
         "host": "plugin"
       },
+      "category": "runtime",
+      "audience": "user",
       "executableLayouts": [
         {
           "path": "bin/java",
@@ -429,6 +431,8 @@
       "icon": {
         "host": "plugin"
       },
+      "category": "runtime",
+      "audience": "plugin",
       "executableLayouts": [
         {
           "path": "bin/java",
@@ -1058,5 +1062,42 @@
       ]
     }
   ],
-  "settingActions": [{"id": "compiler", "title": "Read compiler settings", "description": "Read actual Eclipse JDT project settings. Save writes the displayed native preferences or library configuration files.", "function": "compiler.settings", "sourceEditor": {"editFunction": "compiler.prepareSettings", "languageID": "java"}, "page": {"compilerID": "java"}}, {"id": "libraries", "title": "Read project structure", "description": "Read each module's source folders, output folder, JRE and dependencies. Save writes Eclipse .classpath files and the library configuration files shown; Maven and Gradle modules are read-only.", "function": "libraries.settings", "sourceEditor": {"editFunction": "compiler.prepareSettings", "languageID": "java"}, "page": {"languageID": "java"}}]
+  "settingActions": [{"id": "compiler", "title": "Read compiler settings", "description": "Read actual Eclipse JDT project settings. Save writes the displayed native preferences or library configuration files.", "function": "compiler.settings", "sourceEditor": {"editFunction": "compiler.prepareSettings", "languageID": "java"}, "page": {"compilerID": "java"}}, {"id": "libraries", "title": "Read project structure", "description": "Read each module's source folders, output folder, JRE and dependencies. Save writes Eclipse .classpath files and the library configuration files shown; Maven and Gradle modules are read-only.", "function": "libraries.settings", "sourceEditor": {"editFunction": "compiler.prepareSettings", "languageID": "java"}, "page": {"languageID": "java"}}],
+  "settingRegions": [
+    {
+      "id": "language",
+      "page": {
+        "languageID": "java"
+      },
+      "keywords": [
+        "JDK",
+        "JRE",
+        "JDT",
+        "JDT LS",
+        "JVM",
+        "heap",
+        "classpath",
+        "Eclipse",
+        "WTP",
+        "Servlet",
+        "Tomcat",
+        "Jetty",
+        "WEB-INF"
+      ]
+    },
+    {
+      "id": "compiler",
+      "page": {
+        "compilerID": "java"
+      },
+      "keywords": [
+        "javac",
+        "bytecode",
+        "target",
+        "source level",
+        "JDT compiler",
+        "compliance"
+      ]
+    }
+  ]
 }
