@@ -24,7 +24,7 @@ pub const JDTLS_ID: &str = "jdtls";
 /// The Java feature release verified with the pinned JDT LS and extensions.
 pub const JAVA_FEATURE: u64 = 25;
 /// Version of the full Microsoft Build of OpenJDK installed when none qualifies.
-pub const JDK_VERSION: &str = "25.0.5.0.2";
+pub const JDK_VERSION: &str = "25.0.5+8";
 /// The request does not match the plugin's declared dependency contract.
 pub const INVALID_PARAMS: &str = "runtime.invalid_params";
 /// An explicitly selected server is not the verified upstream distribution.

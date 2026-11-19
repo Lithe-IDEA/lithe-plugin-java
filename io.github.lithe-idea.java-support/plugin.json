@@ -2,9 +2,9 @@
   "schemaVersion": 0,
   "id": "io.github.lithe-idea.java-support",
   "displayName": "Java Support",
-  "version": "4.1.0",
+  "version": "4.2.0",
   "pluginAPIVersion": 0,
-  "requires": {"backend": 0, "debugAdapters": 0, "languages": 0, "languageServers": 0, "pluginFunctions": 0, "settings": 0, "projectGenerators": 0, "toolDefinitions": 0, "sourceSettings": 1, "managedRuntimes": 0},
+  "requires": {"backend": 0, "debugAdapters": 0, "languages": 0, "languageServers": 0, "pluginFunctions": 0, "settings": 0, "projectGenerators": 0, "toolDefinitions": 0, "sourceSettings": 1, "managedRuntimes": 1},
   "managedRuntimes": {
     "resolve": {
       "function": "java.resolveRuntimes",
@@ -13,46 +13,62 @@
     "dependencies": [
       {
         "id": "jdk",
-        "version": "25.0.5.0.2",
+        "version": "25.0.5+8",
         "tool": "jdtls-runtime",
         "artifacts": [
           {
             "os": "linux",
             "arch": "arm64",
-            "url": "https://download.visualstudio.microsoft.com/download/pr/14450a49-85cd-4a91-aae1-73533f29b50f/da3e0632472c574335f779d20fa96bda/microsoft-jdk-25.0.5.0.2-linux-aarch64.tar.gz",
-            "sha256": "c0551fe6c3ea5b3244b74a275562bff128ae96563b0e13303597ccba72d15fa5",
+            "url": "https://github.com/adoptium/temurin25-binaries/releases/download/jdk-25.0.5%2B8/OpenJDK25U-jdk_aarch64_linux_hotspot_25.0.5_8.tar.gz",
+            "mirrors": [
+              "https://mirror.nju.edu.cn/adoptium/25/jdk/aarch64/linux/OpenJDK25U-jdk_aarch64_linux_hotspot_25.0.5_8.tar.gz",
+              "https://mirrors.tuna.tsinghua.edu.cn/Adoptium/25/jdk/aarch64/linux/OpenJDK25U-jdk_aarch64_linux_hotspot_25.0.5_8.tar.gz"
+            ],
+            "sha256": "bb5b2ded252f21c6090cf780b0a408ad0d83bbb557e702955643557f13231880",
             "archive": "tar.gz",
-            "stripPrefix": "jdk-25.0.5.0.2+1",
+            "stripPrefix": "jdk-25.0.5+8",
             "home": "",
             "executable": "bin/java"
           },
           {
             "os": "linux",
             "arch": "x86_64",
-            "url": "https://download.visualstudio.microsoft.com/download/pr/14450a49-85cd-4a91-aae1-73533f29b50f/fc1ef3012ee520e0c6c9663e30c9dc34/microsoft-jdk-25.0.5.0.2-linux-x64.tar.gz",
-            "sha256": "173e8e4286289335b422b591c88a1f553fc44c701a876a7c8dd29037a598fc14",
+            "url": "https://github.com/adoptium/temurin25-binaries/releases/download/jdk-25.0.5%2B8/OpenJDK25U-jdk_x64_linux_hotspot_25.0.5_8.tar.gz",
+            "mirrors": [
+              "https://mirror.nju.edu.cn/adoptium/25/jdk/x64/linux/OpenJDK25U-jdk_x64_linux_hotspot_25.0.5_8.tar.gz",
+              "https://mirrors.tuna.tsinghua.edu.cn/Adoptium/25/jdk/x64/linux/OpenJDK25U-jdk_x64_linux_hotspot_25.0.5_8.tar.gz"
+            ],
+            "sha256": "68982529869257d0ee6b824ec5aa270ff8b118bb438670da0b97ebdab178d7fb",
             "archive": "tar.gz",
-            "stripPrefix": "jdk-25.0.5.0.2+1",
+            "stripPrefix": "jdk-25.0.5+8",
             "home": "",
             "executable": "bin/java"
           },
           {
             "os": "macos",
             "arch": "arm64",
-            "url": "https://download.visualstudio.microsoft.com/download/pr/14450a49-85cd-4a91-aae1-73533f29b50f/9664b951f4e9f908d29d89bb749e453d/microsoft-jdk-25.0.5.0.2-macos-aarch64.tar.gz",
-            "sha256": "c9cf199844411c8bafd05722d2547538300523a63ff6207a440c71b175ff7873",
+            "url": "https://github.com/adoptium/temurin25-binaries/releases/download/jdk-25.0.5%2B8/OpenJDK25U-jdk_aarch64_mac_hotspot_25.0.5_8.tar.gz",
+            "mirrors": [
+              "https://mirror.nju.edu.cn/adoptium/25/jdk/aarch64/mac/OpenJDK25U-jdk_aarch64_mac_hotspot_25.0.5_8.tar.gz",
+              "https://mirrors.tuna.tsinghua.edu.cn/Adoptium/25/jdk/aarch64/mac/OpenJDK25U-jdk_aarch64_mac_hotspot_25.0.5_8.tar.gz"
+            ],
+            "sha256": "36dc14d797aaff6d89aab302cd053fdba6207dfdcf772052fa7b023a94b0e857",
             "archive": "tar.gz",
-            "stripPrefix": "jdk-25.0.5.0.2+1",
+            "stripPrefix": "jdk-25.0.5+8",
             "home": "Contents/Home",
             "executable": "bin/java"
           },
           {
             "os": "macos",
             "arch": "x86_64",
-            "url": "https://download.visualstudio.microsoft.com/download/pr/14450a49-85cd-4a91-aae1-73533f29b50f/146488b930fd4721e6553826415e3d50/microsoft-jdk-25.0.5.0.2-macos-x64.tar.gz",
-            "sha256": "e92259d25beacd96b6446edbf769f1d96beca706d486ddd34a25c9166befa05b",
+            "url": "https://github.com/adoptium/temurin25-binaries/releases/download/jdk-25.0.5%2B8/OpenJDK25U-jdk_x64_mac_hotspot_25.0.5_8.tar.gz",
+            "mirrors": [
+              "https://mirror.nju.edu.cn/adoptium/25/jdk/x64/mac/OpenJDK25U-jdk_x64_mac_hotspot_25.0.5_8.tar.gz",
+              "https://mirrors.tuna.tsinghua.edu.cn/Adoptium/25/jdk/x64/mac/OpenJDK25U-jdk_x64_mac_hotspot_25.0.5_8.tar.gz"
+            ],
+            "sha256": "32cd4d2151c91aa00d0fc911edfd05245ed40fa6b1aa894d5f35c928cd67a59d",
             "archive": "tar.gz",
-            "stripPrefix": "jdk-25.0.5.0.2+1",
+            "stripPrefix": "jdk-25.0.5+8",
             "home": "Contents/Home",
             "executable": "bin/java"
           },
@@ -69,10 +85,14 @@
           {
             "os": "windows",
             "arch": "x86_64",
-            "url": "https://download.visualstudio.microsoft.com/download/pr/d3500af4-89c2-41c0-9a46-fae21d52f60b/dbca35c699765b2a740ca73973a92715/microsoft-jdk-25.0.5.0.2-windows-x64.zip",
-            "sha256": "5da7525c8268a10a66bd76a39f4e9af24d4ebc974d42800a609852c498a68460",
+            "url": "https://github.com/adoptium/temurin25-binaries/releases/download/jdk-25.0.5%2B8/OpenJDK25U-jdk_x64_windows_hotspot_25.0.5_8.zip",
+            "mirrors": [
+              "https://mirror.nju.edu.cn/adoptium/25/jdk/x64/windows/OpenJDK25U-jdk_x64_windows_hotspot_25.0.5_8.zip",
+              "https://mirrors.tuna.tsinghua.edu.cn/Adoptium/25/jdk/x64/windows/OpenJDK25U-jdk_x64_windows_hotspot_25.0.5_8.zip"
+            ],
+            "sha256": "636bdc13dc649ddc7d5921c5c7d23cca6e44fd19d662b45cc9c02135a6c96c42",
             "archive": "zip",
-            "stripPrefix": "jdk-25.0.5.0.2+1",
+            "stripPrefix": "jdk-25.0.5+8",
             "home": "",
             "executable": "bin/java.exe"
           }

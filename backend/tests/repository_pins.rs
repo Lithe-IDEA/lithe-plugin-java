@@ -258,7 +258,7 @@ fn the_language_service_jdk_is_separate_from_the_project_jdk() {
 #[test]
 fn managed_dependencies_pin_all_six_platforms_and_bind_only_the_service_tool() {
     let manifest = read_json(&format!("{PLUGIN_ID}/plugin.json"));
-    assert_eq!(manifest["requires"]["managedRuntimes"], 0);
+    assert_eq!(manifest["requires"]["managedRuntimes"], 1);
     assert!(manifest["permissions"]
         .as_array()
         .unwrap()
@@ -282,7 +282,12 @@ fn managed_dependencies_pin_all_six_platforms_and_bind_only_the_service_tool() {
             if dependency["id"] == "jdk" {
                 assert_eq!(dependency["tool"], SERVER_RUNTIME_TOOL);
                 assert_eq!(dependency["version"], JDK_VERSION);
-                assert_eq!(artifact["stripPrefix"], "jdk-25.0.5.0.2+1");
+                let expected_prefix = if artifact["os"] == "windows" && artifact["arch"] == "arm64" {
+                    "jdk-25.0.5.0.2+1"
+                } else {
+                    "jdk-25.0.5+8"
+                };
+                assert_eq!(artifact["stripPrefix"], expected_prefix);
                 let windows = artifact["os"] == "windows";
                 assert_eq!(artifact["archive"], if windows { "zip" } else { "tar.gz" });
                 assert_eq!(
