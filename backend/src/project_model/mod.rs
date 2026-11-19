@@ -461,10 +461,10 @@ pub fn overlay(root: &Path, model: &ProjectModel, explicit: &Explicit) -> Value 
         for (&kind, paths) in &explicit.source_roles {
             let paths: Vec<_> = paths
                 .iter()
+                .take(256)
                 .filter(|path| crate::library_settings::valid_path(path))
                 .filter_map(|path| dunce::canonicalize(root.join(path)).ok())
                 .filter(|path| path.is_dir() && path.starts_with(root))
-                .take(256)
                 .collect();
             if !paths.is_empty() {
                 roles.insert(kind, paths);
@@ -478,7 +478,11 @@ pub fn overlay(root: &Path, model: &ProjectModel, explicit: &Explicit) -> Value 
     let workspace_source_paths = workspace_module
         .then_some(explicit.source_paths.as_ref())
         .flatten()
-        .filter(|paths| paths.as_array().is_some_and(|paths| !paths.is_empty()));
+        .filter(|paths| {
+            paths
+                .as_array()
+                .is_some_and(|paths| !paths.is_empty() || roles.contains_key("excluded"))
+        });
     let manages_workspace_paths =
         workspace_module && (workspace_source_paths.is_some() || explicit.output_path.is_some());
     if model.enabled
@@ -650,6 +654,24 @@ pub(crate) mod tests {
             value["lithe"]["projectModel"]["serverRuntimeHome"],
             home.to_str().unwrap()
         );
+    }
+
+    #[test]
+    fn excluding_the_only_source_root_overrides_jdt_with_an_empty_source_list() {
+        let tree = Tree::new(&[("src/Main.java", "")]);
+        let root = dunce::canonicalize(&tree.root).unwrap();
+        let model = detect(&root, &ModelOptions::default(), &environment(&tree));
+        let explicit = Explicit::from_document(&json!({
+            "java.project.sourcePaths": [],
+            "java.lithe.excludedSourceFolders": ["src"],
+        }));
+        let value = overlay(&root, &model, &explicit);
+        assert_eq!(
+            value["lithe"]["projectModel"]["workspaceSourcePaths"],
+            json!([])
+        );
+        let inherited = Explicit::from_document(&json!({"java.project.sourcePaths": []}));
+        assert!(overlay(&root, &model, &inherited).get("lithe").is_none());
     }
 
     #[test]
