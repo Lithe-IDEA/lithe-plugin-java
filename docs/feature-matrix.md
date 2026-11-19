@@ -1,6 +1,13 @@
 # 功能验证矩阵
 
-## 自动准备语言服务环境（本次改动）
+## 工具链分组与设置搜索关键词（本次改动）
+
+| 能力 | macOS | Windows | Linux | 证据 |
+| --- | --- | --- | --- | --- |
+| `toolDefinitions` 升至版本 `1`：项目 `JDK`（`java`）标为 `category: "runtime"`、`audience: "user"`，服务运行环境 `JDK for JDT LS`（`jdtls-runtime`）标为 `category: "runtime"`、`audience: "plugin"`，在宿主工具链设置页归入“插件运行环境”折叠区 | implemented / verified | implemented / pending | implemented / pending | `io.github.lithe-idea.java-support/plugin.json`、`backend/tests/repository_pins.rs`（`the_language_service_jdk_is_separate_from_the_project_jdk`）、`scripts/verify-contract.py`（针对 Core `9dea6aa6eaaf830c3568b647aa7daae5018b9727`）及宿主 Viva 无头窗口渲染验证（2026-11-18 macOS arm64） |
+| 声明 `settingRegions`（`language` 与 `compiler`）中英文设置搜索关键词，支持在设置侧栏检索 `jdtls`、`javac`、`字节码`、`类路径`、`Java 编译器` 等直达 Java 语言与编译器设置页 | implemented / verified | implemented / pending | implemented / pending | `io.github.lithe-idea.java-support/plugin.json`、`io.github.lithe-idea.java-support/l10n/zh-Hans.json`、`backend/tests/repository_pins.rs`（`manifest_and_zh_hans_declare_setting_regions`）、`scripts/verify-contract.py`（针对 Core `9dea6aa6eaaf830c3568b647aa7daae5018b9727`）及宿主 Viva 无头搜索定位验证（2026-11-18 macOS arm64） |
+
+## 自动准备语言服务环境
 
 | 能力 | macOS | Windows | Linux | 证据 |
 | --- | --- | --- | --- | --- |
