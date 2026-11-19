@@ -1,6 +1,6 @@
 {
   "repository": "https://github.com/1lck/Lithe-IDEA",
-  "revision": "b46e26ad20f9d9dcca569afe3a894358b3a7a15b",
-  "coreRevision": "545ca11fb971795a9937f0f60bcc29afebe3b8be",
+  "revision": "d87f1142ae5d9b6196e324409730fba4aad27664",
+  "coreRevision": "9dea6aa6eaaf830c3568b647aa7daae5018b9727",
   "package": "io.github.lithe-idea.java-support"
 }

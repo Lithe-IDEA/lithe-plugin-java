@@ -31,7 +31,7 @@ def main():
     registry = Registry()
     for record in lock["schemas"]:
         name = record["path"]
-        assert name in {"plugin-manifest.schema.json", "native-ui.schema.json", "plugin-l10n.schema.json"}
+        assert name in {"plugin-manifest.schema.json", "native-ui.schema.json", "plugin-ui.schema.json", "plugin-l10n.schema.json"}
         path = cache / name
         if not path.exists():
             if not args.download:
