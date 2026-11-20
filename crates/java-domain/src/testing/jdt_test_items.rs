@@ -53,7 +53,7 @@ pub struct JavaTestItem {
     pub full_name: String,
     /// JDT project that owns the test.
     pub project_name: String,
-    /// Framework kind: 0 JUnit 4, 1 JUnit 5, 2 TestNG.
+    /// Framework kind: 0 JUnit 4, 1 JUnit 5, 2 TestNG, 3 JUnit 6.
     #[serde(rename = "testKind")]
     pub kind: i64,
     /// Item level: [`CLASS_LEVEL`] or [`METHOD_LEVEL`].
@@ -321,7 +321,7 @@ pub fn plan_debug_launch(
         ));
     }
     let framework = match first.kind {
-        0 | 1 => JavaTestFramework::Junit,
+        0 | 1 | 3 => JavaTestFramework::Junit,
         2 => JavaTestFramework::Testng,
         _ => {
             return Err(unavailable(
@@ -800,5 +800,17 @@ mod tests {
             error.message,
             "The Java language service returned no JUnit runner main class."
         );
+    }
+
+    #[test]
+    fn junit_6_test_kind_plans_a_junit_launch() {
+        let mut items = user_service_test();
+        items[0].kind = 3;
+        for child in &mut items[0].children {
+            child.kind = 3;
+        }
+        let plan = plan_debug_launch(&items, "UserServiceTest.java", None).unwrap();
+        assert_eq!(plan.framework, JavaTestFramework::Junit);
+        assert_eq!(plan.kind, 3);
     }
 }
