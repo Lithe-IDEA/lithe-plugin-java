@@ -36,7 +36,7 @@
 use crate::launch::{self, TEST_RUNNER};
 use crate::settings_session::{SettingsSession, EXECUTE_COMMAND, REQUEST_METHOD, SERVER_ID};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
-use lithe_java_domain::debug::java_test_launch;
+use lithe_java_domain::debug::{java_test_process_launch, JavaTestProcessLaunch};
 use lithe_java_domain::execution::{
     plan_manifest_classpath_launch, ClasspathJarPlan, ClasspathJarRequest, ClasspathStyle,
 };
@@ -55,7 +55,7 @@ use lithe_plugin_sdk::{
     BackendHandle, Context, FunctionError, Host, PluginError, SdkError, Subscription, Value,
     WorkspaceContext,
 };
-use serde_json::{json, Map};
+use serde_json::json;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{BufRead, BufReader, Cursor, Write};
 use std::net::TcpListener;
@@ -117,9 +117,9 @@ const BUILD_SUCCEEDED: i64 = 1;
 /// a while on a first run.
 const LAUNCH_REQUEST_TIMEOUT_MILLISECONDS: u64 = 120_000;
 
-/// Timeout of the JDT LS requests collection makes; the host bounds the whole
-/// collection to eight seconds.
-const COLLECT_REQUEST_TIMEOUT_MILLISECONDS: u64 = 6_000;
+/// Timeout of each JDT LS request collection makes; main-method and test
+/// discovery run sequentially inside the host's eight-second budget.
+const COLLECT_REQUEST_TIMEOUT_MILLISECONDS: u64 = 3_500;
 
 /// Most actions one answer carries; the contract refuses more.
 const MAX_ACTIONS: usize = 1000;
@@ -686,34 +686,22 @@ pub fn collect_actions_function(
     let uri = file_uri(&root.join(path))?;
     let host = context.host();
     let ticket = session.query_started(reference);
-    let main_methods = match execute_command(
+    let main_outcome = execute_command(
         host,
         reference,
         java_main_methods_command(&uri),
         COLLECT_REQUEST_TIMEOUT_MILLISECONDS,
-    ) {
-        Ok(value) => value,
-        Err(error) if is_transient(&error) => {
-            session.query_finished(reference, ticket, true);
-            return Ok(json!({"actions": []}));
-        }
-        Err(error) => return Err(language_server_failed(error)),
-    };
+    );
     context.check_cancelled()?;
-    let test_items = match execute_command(
+    let test_outcome = execute_command(
         host,
         reference,
         java_test_items_command(&uri),
         COLLECT_REQUEST_TIMEOUT_MILLISECONDS,
-    ) {
-        Ok(value) => value,
-        Err(error) if is_transient(&error) => {
-            session.query_finished(reference, ticket, true);
-            return Ok(json!({"actions": []}));
-        }
-        Err(error) => return Err(language_server_failed(error)),
-    };
-    session.query_finished(reference, ticket, false);
+    );
+    let (main_methods, test_items, deferred) =
+        combine_collection_outcomes(main_outcome, test_outcome)?;
+    session.query_finished(reference, ticket, deferred);
     let methods = normalize_java_main_methods(&main_methods)
         .map(|methods| methods.methods)
         .unwrap_or_default();
@@ -972,6 +960,34 @@ fn manifest_jar(manifest: &str) -> Result<Vec<u8>, zip::result::ZipError> {
     Ok(archive.finish()?.into_inner())
 }
 
+/// Builds the project before resolving main-class or test runner classpaths.
+fn build_workspace(
+    host: &Host,
+    reference: &WorkspaceContext,
+    file_path: &Path,
+    project_name: Option<&str>,
+    main_class: Option<&str>,
+) -> Result<(), FunctionError> {
+    let mut build_request = json!({
+        "filePath": file_path.to_string_lossy(),
+        "isFullBuild": false,
+    });
+    if let Some(main_class) = main_class.filter(|class| !class.is_empty()) {
+        build_request["mainClass"] = json!(main_class);
+    }
+    if let Some(project) = project_name.filter(|project| !project.is_empty()) {
+        build_request["projectName"] = json!(project);
+    }
+    let build = execute_command(
+        host,
+        reference,
+        json!({"command": BUILD_WORKSPACE_COMMAND, "arguments": [build_request.to_string()]}),
+        LAUNCH_REQUEST_TIMEOUT_MILLISECONDS,
+    )
+    .map_err(language_server_failed)?;
+    require_successful_build(&build)
+}
+
 /// Builds the workspace and resolves the classpath of a main class.
 fn main_process(
     host: &Host,
@@ -984,22 +1000,14 @@ fn main_process(
         .as_deref()
         .filter(|class| !class.is_empty())
         .ok_or_else(|| failure(RUN_INVALID_PARAMS, "The action names no main class."))?;
-    let mut build_request = json!({
-        "mainClass": main_class,
-        "filePath": root.join(&target.path).to_string_lossy(),
-        "isFullBuild": false,
-    });
-    if let Some(project) = &target.project_name {
-        build_request["projectName"] = json!(project);
-    }
-    let build = execute_command(
+    let file_path = root.join(&target.path);
+    build_workspace(
         host,
         reference,
-        json!({"command": BUILD_WORKSPACE_COMMAND, "arguments": [build_request.to_string()]}),
-        LAUNCH_REQUEST_TIMEOUT_MILLISECONDS,
-    )
-    .map_err(language_server_failed)?;
-    require_successful_build(&build)?;
+        &file_path,
+        target.project_name.as_deref(),
+        Some(main_class),
+    )?;
     let classpath = execute_command(
         host,
         reference,
@@ -1081,6 +1089,13 @@ fn test_process(
     let plan =
         jdt_test_items::plan_debug_launch(&items, &file_name, target.test_identifier.as_deref())
             .map_err(|error| failure(RUN_NO_TESTS, error.message))?;
+    build_workspace(
+        host,
+        reference,
+        &file_path,
+        Some(plan.project_name.as_str()),
+        None,
+    )?;
     let launch = execute_command(
         host,
         reference,
@@ -1105,9 +1120,9 @@ fn test_process(
         reference.clone(),
         target.label.clone(),
     )?;
-    let configuration = java_test_launch(debug_target.launch_request(listener.port))
+    let launch = java_test_process_launch(debug_target.launch_request(listener.port))
         .map_err(|error| failure(RUN_INVALID_PARAMS, error.message))?;
-    let arguments = launch_arguments(&configuration.arguments);
+    let arguments = process_launch_arguments(&launch);
     Ok((
         Process {
             arguments,
@@ -1117,39 +1132,21 @@ fn test_process(
     ))
 }
 
-/// Turns the DAP-style launch arguments the domain produces into `java`
+/// Turns the typed launch parameters the domain produces into `java`
 /// arguments: VM arguments, module path, classpath, main class, program
 /// arguments.
-fn launch_arguments(configuration: &Map<String, Value>) -> Vec<String> {
-    let strings = |key: &str| -> Vec<String> {
-        configuration
-            .get(key)
-            .and_then(Value::as_array)
-            .map(|values| {
-                values
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .filter(|value| !value.is_empty())
-                    .map(str::to_owned)
-                    .collect()
-            })
-            .unwrap_or_default()
-    };
-    let mut arguments = strings("vmArgs");
-    let module_paths = strings("modulePaths");
-    if !module_paths.is_empty() {
+fn process_launch_arguments(launch: &JavaTestProcessLaunch) -> Vec<String> {
+    let mut arguments = launch.vm_arguments.clone();
+    if !launch.module_paths.is_empty() {
         arguments.push("--module-path".to_owned());
-        arguments.push(module_paths.join(PATH_SEPARATOR));
+        arguments.push(launch.module_paths.join(PATH_SEPARATOR));
     }
-    let class_paths = strings("classPaths");
-    if !class_paths.is_empty() {
+    if !launch.class_paths.is_empty() {
         arguments.push("-cp".to_owned());
-        arguments.push(class_paths.join(PATH_SEPARATOR));
+        arguments.push(launch.class_paths.join(PATH_SEPARATOR));
     }
-    if let Some(main_class) = configuration.get("mainClass").and_then(Value::as_str) {
-        arguments.push(main_class.to_owned());
-    }
-    arguments.extend(strings("args"));
+    arguments.push(launch.main_class.clone());
+    arguments.extend(launch.program_arguments.iter().cloned());
     arguments
 }
 
@@ -1362,15 +1359,76 @@ fn execute_command(
 
 /// A host failure collection should answer with no actions rather than fail:
 /// the server is not running yet, is busy, or the request timed out.
-fn is_transient(error: &SdkError) -> bool {
+fn is_transient_code(code: &str) -> bool {
     matches!(
-        error.code(),
+        code,
         "plugin.host.languageServerUnavailable"
             | "plugin.host.busy"
             | "plugin.host.timeout"
             | "plugin.host.cancelled"
             | "plugin.host.languageServerError"
     )
+}
+
+/// Combines independent `resolveMainMethod` and `findTestTypesAndMethods`
+/// outcomes so a transient warm-up error on one query does not suppress markers
+/// already discovered by the other.
+fn combine_collection_outcomes(
+    main_outcome: Result<Value, SdkError>,
+    test_outcome: Result<Value, SdkError>,
+) -> Result<(Value, Value, bool), FunctionError> {
+    combine_collection_outcomes_with(
+        main_outcome,
+        test_outcome,
+        SdkError::code,
+        language_server_failed,
+    )
+}
+
+fn combine_collection_outcomes_with<E>(
+    main_outcome: Result<Value, E>,
+    test_outcome: Result<Value, E>,
+    code_of: impl Fn(&E) -> &str,
+    map_error: impl FnOnce(E) -> FunctionError,
+) -> Result<(Value, Value, bool), FunctionError> {
+    let mut deferred = false;
+    let mut first_error = None;
+    let mut main_ok = false;
+    let mut test_ok = false;
+    let main_value = match main_outcome {
+        Ok(value) => {
+            main_ok = true;
+            value
+        }
+        Err(error) if is_transient_code(code_of(&error)) => {
+            deferred = true;
+            Value::Null
+        }
+        Err(error) => {
+            first_error.get_or_insert(error);
+            Value::Null
+        }
+    };
+    let test_value = match test_outcome {
+        Ok(value) => {
+            test_ok = true;
+            value
+        }
+        Err(error) if is_transient_code(code_of(&error)) => {
+            deferred = true;
+            Value::Null
+        }
+        Err(error) => {
+            first_error.get_or_insert(error);
+            Value::Null
+        }
+    };
+    if !main_ok && !test_ok {
+        if let Some(error) = first_error {
+            return Err(map_error(error));
+        }
+    }
+    Ok((main_value, test_value, deferred))
 }
 
 fn language_server_failed(error: SdkError) -> FunctionError {
@@ -1710,27 +1768,75 @@ mod tests {
     }
 
     #[test]
-    fn launch_arguments_follow_the_java_command_line_order() {
-        let configuration = json!({
-            "vmArgs": ["-ea"],
-            "modulePaths": [],
-            "classPaths": ["/a.jar", "/classes"],
-            "mainClass": "org.eclipse.jdt.internal.junit.runner.RemoteTestRunner",
-            "args": ["-port", "5000"],
-        });
-        let arguments = launch_arguments(configuration.as_object().unwrap());
+    fn process_launch_arguments_keep_domain_vm_and_runner_arguments() {
+        use lithe_java_domain::debug::{JavaTestFramework, JavaTestLaunchRequest};
+
+        let launch = java_test_process_launch(JavaTestLaunchRequest {
+            name: "UserServiceTest".to_owned(),
+            framework: JavaTestFramework::Junit,
+            working_directory: "/work".to_owned(),
+            main_class: "org.eclipse.jdt.internal.junit.runner.RemoteTestRunner".to_owned(),
+            project_name: Some("shop".to_owned()),
+            class_paths: vec!["/a.jar".to_owned(), "/classes".to_owned()],
+            module_paths: vec!["/mods".to_owned()],
+            vm_arguments: vec!["-ea".to_owned(), "-Dmode=test".to_owned()],
+            program_arguments: vec![
+                "-version".to_owned(),
+                "3".to_owned(),
+                "-port".to_owned(),
+                "-1".to_owned(),
+                "-classNames".to_owned(),
+                "example.UserServiceTest".to_owned(),
+            ],
+            result_port: 5000,
+            testng_runner_path: None,
+            testng_test_names: Vec::new(),
+        })
+        .expect("test process launch should resolve");
+        let arguments = process_launch_arguments(&launch);
         let expected_classpath = format!("/a.jar{PATH_SEPARATOR}/classes");
         assert_eq!(
             arguments,
             vec![
                 "-ea",
+                "-Dmode=test",
+                "--module-path",
+                "/mods",
                 "-cp",
                 expected_classpath.as_str(),
                 "org.eclipse.jdt.internal.junit.runner.RemoteTestRunner",
+                "-version",
+                "3",
                 "-port",
                 "5000",
+                "-classNames",
+                "example.UserServiceTest",
             ]
         );
+    }
+
+    #[test]
+    fn transient_main_method_failure_does_not_suppress_discovered_tests() {
+        let test_payload = json!([{"id": "t1"}]);
+        let (main, test, deferred) = combine_collection_outcomes_with(
+            Err("plugin.host.busy"),
+            Ok(test_payload.clone()),
+            |code| *code,
+            |code| failure(RUN_LANGUAGE_SERVER_FAILED, code),
+        )
+        .expect("discovered test items should survive transient main failure");
+        assert_eq!(main, Value::Null);
+        assert_eq!(test, test_payload);
+        assert!(deferred);
+
+        let err = combine_collection_outcomes_with(
+            Err("plugin.host.invalidParams"),
+            Err("plugin.host.busy"),
+            |code| *code,
+            |code| failure(RUN_LANGUAGE_SERVER_FAILED, code),
+        )
+        .expect_err("non-transient failure should surface when nothing succeeded");
+        assert!(!err.to_string().is_empty());
     }
 
     #[test]
