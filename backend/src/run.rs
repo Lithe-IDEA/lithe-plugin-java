@@ -825,6 +825,7 @@ fn start(session: &RunSession, target: &Target, context: &Context) -> Result<Val
         }
     };
     context.check_cancelled()?;
+    process.arguments = with_utf8_encoding(std::mem::take(&mut process.arguments));
     if let Some(port) = debug_port {
         // The agent goes first so it applies before any other VM argument;
         // Spring DevTools restarts would detach the debugger, so they are off.
@@ -1530,10 +1531,72 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+/// The text encodings every launch fixes to UTF-8, as IntelliJ IDEA does.
+///
+/// Before Java 18 the JVM reads files with the platform charset, which on a
+/// Chinese Windows is GBK: a Spring application then fails to parse its UTF-8
+/// YAML (`MalformedInputException`) although it starts from IDEA. The host's
+/// Run window decodes the process output as UTF-8, so the console streams are
+/// fixed as well. A property the launch already sets is left alone.
+const UTF8_ENCODING_PROPERTIES: [&str; 3] =
+    ["file.encoding", "sun.stdout.encoding", "sun.stderr.encoding"];
+
+/// Puts the UTF-8 encoding properties ahead of the launch's own arguments,
+/// skipping any the arguments already define.
+fn with_utf8_encoding(arguments: Vec<String>) -> Vec<String> {
+    let mut prepared: Vec<String> = UTF8_ENCODING_PROPERTIES
+        .iter()
+        .filter(|property| {
+            let prefix = format!("-D{property}=");
+            !arguments.iter().any(|argument| argument.starts_with(&prefix))
+        })
+        .map(|property| format!("-D{property}=UTF-8"))
+        .collect();
+    prepared.extend(arguments);
+    prepared
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use lithe_java_domain::lsp::languages::JavaRunMarkerStatus;
+
+    #[test]
+    fn launches_read_and_print_text_as_utf8_before_the_main_class() {
+        let arguments = with_utf8_encoding(vec![
+            "-cp".to_owned(),
+            "classes".to_owned(),
+            "example.Main".to_owned(),
+        ]);
+        assert_eq!(
+            arguments,
+            [
+                "-Dfile.encoding=UTF-8",
+                "-Dsun.stdout.encoding=UTF-8",
+                "-Dsun.stderr.encoding=UTF-8",
+                "-cp",
+                "classes",
+                "example.Main",
+            ]
+        );
+    }
+
+    #[test]
+    fn an_encoding_the_launch_already_sets_is_kept() {
+        let arguments = with_utf8_encoding(vec![
+            "-Dfile.encoding=GBK".to_owned(),
+            "example.Main".to_owned(),
+        ]);
+        assert_eq!(
+            arguments,
+            [
+                "-Dsun.stdout.encoding=UTF-8",
+                "-Dsun.stderr.encoding=UTF-8",
+                "-Dfile.encoding=GBK",
+                "example.Main",
+            ]
+        );
+    }
 
     #[test]
     fn a_deferred_query_retries_at_a_work_boundary_in_either_order() {
