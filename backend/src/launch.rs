@@ -67,8 +67,8 @@ use lithe_plugin_sdk::{
 use serde_json::json;
 use std::collections::VecDeque;
 use std::ffi::OsString;
-use std::io;
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -770,7 +770,10 @@ fn scan_trigger_files<E: TriggerEntry>(
                     if depth < TRIGGER_SCAN_DEPTH && !skipped {
                         subdirectories.push((entry.path(), depth + 1));
                     }
-                } else if kind == TriggerKind::File && name.ends_with(".java") && !name.starts_with('.') {
+                } else if kind == TriggerKind::File
+                    && name.ends_with(".java")
+                    && !name.starts_with('.')
+                {
                     scan.files.push(file_uri(&entry.path())?);
                     if scan.files.len() >= TRIGGER_FILE_LIMIT {
                         return Ok(scan);
@@ -1412,7 +1415,6 @@ mod tests {
         assert!(lithe_plugin_sdk::is_function_id(LAUNCH_FUNCTION_ID));
     }
 
-
     // The injected reader models errors that cannot reliably be produced with
     // chmod on Windows or when a test process has elevated permissions.
     struct TriggerFixtureEntry {
@@ -1438,17 +1440,19 @@ mod tests {
     fn trigger_scan_treats_disappeared_directories_as_optional_but_counts_io_denial() {
         let fixture = Fixture::new();
         let roots = vec![fixture.root.join("workspace")];
-        let vanished = scan_trigger_files::<TriggerFixtureEntry>(
-            &roots, TRIGGER_SCAN_ENTRY_BUDGET,
-            |_| Err(io::Error::from(io::ErrorKind::NotFound)),
-        ).unwrap();
+        let vanished =
+            scan_trigger_files::<TriggerFixtureEntry>(&roots, TRIGGER_SCAN_ENTRY_BUDGET, |_| {
+                Err(io::Error::from(io::ErrorKind::NotFound))
+            })
+            .unwrap();
         assert!(vanished.files.is_empty());
         assert_eq!(vanished.unreadable, 0);
 
-        let denied = scan_trigger_files::<TriggerFixtureEntry>(
-            &roots, TRIGGER_SCAN_ENTRY_BUDGET,
-            |_| Err(io::Error::from(io::ErrorKind::PermissionDenied)),
-        ).unwrap();
+        let denied =
+            scan_trigger_files::<TriggerFixtureEntry>(&roots, TRIGGER_SCAN_ENTRY_BUDGET, |_| {
+                Err(io::Error::from(io::ErrorKind::PermissionDenied))
+            })
+            .unwrap();
         assert!(denied.files.is_empty());
         assert_eq!(denied.unreadable, 1);
         let calls = std::cell::Cell::new(0);
@@ -1469,24 +1473,34 @@ mod tests {
         let unreadable = root.join("Unreadable.java");
         let child = root.join("src");
         let scan = scan_trigger_files::<TriggerFixtureEntry>(
-            &[root.clone()], TRIGGER_SCAN_ENTRY_BUDGET,
+            &[root.clone()],
+            TRIGGER_SCAN_ENTRY_BUDGET,
             |directory| {
                 if directory == root {
                     return Ok(vec![
-                        Ok(TriggerFixtureEntry { path: child.clone(), kind: Ok(TriggerKind::Directory) }),
-                        Ok(TriggerFixtureEntry { path: java.clone(), kind: Ok(TriggerKind::File) }),
-                        Err(io::Error::from(io::ErrorKind::PermissionDenied)),
                         Ok(TriggerFixtureEntry {
-                            path: unreadable.clone(), kind: Err(io::ErrorKind::PermissionDenied),
+                            path: child.clone(),
+                            kind: Ok(TriggerKind::Directory),
                         }),
                         Ok(TriggerFixtureEntry {
-                            path: root.join("Link.java"), kind: Ok(TriggerKind::Other),
+                            path: java.clone(),
+                            kind: Ok(TriggerKind::File),
+                        }),
+                        Err(io::Error::from(io::ErrorKind::PermissionDenied)),
+                        Ok(TriggerFixtureEntry {
+                            path: unreadable.clone(),
+                            kind: Err(io::ErrorKind::PermissionDenied),
+                        }),
+                        Ok(TriggerFixtureEntry {
+                            path: root.join("Link.java"),
+                            kind: Ok(TriggerKind::Other),
                         }),
                     ]);
                 }
                 Err(io::Error::from(io::ErrorKind::PermissionDenied))
             },
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(scan.files, vec![file_uri(&java).unwrap()]);
         assert_eq!(scan.unreadable, 3);
         let calls = std::cell::Cell::new(0);
@@ -1507,12 +1521,25 @@ mod tests {
         let third = root.join("C.java");
         let scan = scan_trigger_files::<TriggerFixtureEntry>(&[root.clone()], 2, |_| {
             Ok(vec![
-                Ok(TriggerFixtureEntry { path: third.clone(), kind: Ok(TriggerKind::File) }),
-                Ok(TriggerFixtureEntry { path: first.clone(), kind: Ok(TriggerKind::File) }),
-                Ok(TriggerFixtureEntry { path: second.clone(), kind: Ok(TriggerKind::File) }),
+                Ok(TriggerFixtureEntry {
+                    path: third.clone(),
+                    kind: Ok(TriggerKind::File),
+                }),
+                Ok(TriggerFixtureEntry {
+                    path: first.clone(),
+                    kind: Ok(TriggerKind::File),
+                }),
+                Ok(TriggerFixtureEntry {
+                    path: second.clone(),
+                    kind: Ok(TriggerKind::File),
+                }),
             ])
-        }).unwrap();
-        assert_eq!(scan.files, vec![file_uri(&first).unwrap(), file_uri(&second).unwrap()]);
+        })
+        .unwrap();
+        assert_eq!(
+            scan.files,
+            vec![file_uri(&first).unwrap(), file_uri(&second).unwrap()]
+        );
         assert_eq!(scan.unreadable, 0);
     }
 
