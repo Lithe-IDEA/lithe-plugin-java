@@ -25,6 +25,7 @@ sha2.workspace = true
 java-properties = "2.0.0"
 xmltree = { version = "0.12.0", features = ["attribute-order"] }
 jsonc-parser = { version = "0.34.0", features = ["cst", "serde"] }
+[target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
 [dev-dependencies]
