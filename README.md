@@ -252,6 +252,7 @@ Spring/MyBatis 等既有能力不属于本轮 Maven 验收范围。
 | JDT 启动规划失败 | ERROR | SDK 自动 | `launch.invalid_params`、`launch.package_unavailable`、`launch.resource_missing`、`launch.configuration_failed`、`launch.runtime_too_old`（语言服务 JDK 低于本插件要求的 25）；运行环境问题使用下行类别 |
 | 运行环境准备失败 | ERROR | SDK 自动 | `runtime.invalid_params`、`runtime.server_incompatible`、`runtime.jdk_invalid`、`runtime.not_prepared`、`runtime.profile_invalid`；缺少自动准备的依赖属于正常计划，不记录错误，成功读取不记录 INFO；恢复提示随界面语言中英切换 |
 | JDT 配置清理或工作区读取降级 | WARN | SDK `degraded` | `launch.configuration_cleanup_failed`、`launch.workspace_folders_unavailable` |
+| JDT LS 的可选触发文件扫描中发生目录读取、条目迭代或文件类型读取错误 | WARN（`degraded`） | `backend/src/launch.rs`（`LAUNCH_TRIGGER_SCAN_UNREADABLE`） | `launch.trigger_scan_unreadable`，仅一次类别和失败项计数；正常缺失不告警，不包含路径与原始错误 |
 | 取消 | 不记录 | SDK | — |
 | 列出 `languageImport.settings` 提供方失败、单个提供方失败或超时、答复不可用、答复含越界键、提供方导出的函数版本不符 | WARN（`degraded`） | `backend/src/plugin_functions.rs` | 类别 `relay.providers_unavailable`、`relay.provider_failed`、`relay.provider_timed_out`、`relay.settings_rejected`、`relay.keys_rejected`、`relay.provider_version_mismatch`，计数；不含提供方 ID |
 | 取不到工作区根目录、设置推给 JDT LS 失败、单个工程的 profiles 更新失败、语言服务器状态通知格式不对 | WARN（`degraded`） | `backend/src/settings_session.rs` | 类别 `session.root_unavailable`、`session.push_failed`、`session.project_update_failed`、`session.state_invalid`，计数；操作 ID 为 `notification`（状态通知触发）或 `languageImport.settingsChanged` |

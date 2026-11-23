@@ -66,7 +66,9 @@ use lithe_plugin_sdk::{
 };
 use serde_json::json;
 use std::collections::VecDeque;
+use std::ffi::OsString;
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -141,6 +143,9 @@ pub const LAUNCH_SERVLET_CONTAINER_MISSING: &str = "launch.servlet_container_mis
 pub const LAUNCH_PROJECT_MODEL_UNRESOLVED: &str = "launch.project_model_unresolved";
 /// The project model scan stopped at its budget; deeper layouts were not read.
 pub const LAUNCH_PROJECT_MODEL_TRUNCATED: &str = "launch.project_model_truncated";
+/// Directory scanning lost some optional trigger-file hints to I/O errors.
+/// Missing files and directories during concurrent editing are not failures.
+pub const LAUNCH_TRIGGER_SCAN_UNREADABLE: &str = "launch.trigger_scan_unreadable";
 /// Every degraded-diagnostic category `java.resolveLaunch` reports.
 pub const LAUNCH_CATEGORIES: &[&str] = &[
     LAUNCH_CONFIGURATION_CLEANUP_FAILED,
@@ -148,6 +153,7 @@ pub const LAUNCH_CATEGORIES: &[&str] = &[
     LAUNCH_SERVLET_CONTAINER_MISSING,
     LAUNCH_PROJECT_MODEL_UNRESOLVED,
     LAUNCH_PROJECT_MODEL_TRUNCATED,
+    LAUNCH_TRIGGER_SCAN_UNREADABLE,
 ];
 
 /// Most `.java` files named as `triggerFiles`. JDT LS uses the first one
@@ -642,60 +648,153 @@ fn workspace_folders(host: &Host, workspace: &WorkspaceContext) -> Result<Vec<Pa
         .unwrap_or_default())
 }
 
-/// The `triggerFiles` of a launch: `file:` URIs of up to
-/// [`TRIGGER_FILE_LIMIT`] `.java` files found under `folders`, folders and
-/// entries in sorted order so the same workspace always names the same files.
-/// The scan stops at [`TRIGGER_SCAN_DEPTH`] levels, skips hidden directories
-/// and [`TRIGGER_SCAN_SKIPPED_DIRECTORIES`], does not follow symbolic links,
-/// and reads at most [`TRIGGER_SCAN_ENTRY_BUDGET`] entries. A folder that
-/// cannot be read contributes nothing; JDT LS treats a missing list as
-/// "nothing to import".
-pub fn trigger_files(folders: &[PathBuf]) -> Result<Vec<String>, PluginError> {
-    let mut files = Vec::new();
-    let mut budget = TRIGGER_SCAN_ENTRY_BUDGET;
+// A native DirEntry is intentionally classified only after the per-entry budget
+// check. Tests can substitute entries and failures without changing permissions
+// or relying on host-specific directory iteration behavior.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TriggerKind {
+    Directory,
+    File,
+    Other,
+}
+
+trait TriggerEntry {
+    fn name(&self) -> OsString;
+    fn path(&self) -> PathBuf;
+    fn kind(&self) -> io::Result<TriggerKind>;
+}
+
+impl TriggerEntry for fs::DirEntry {
+    fn name(&self) -> OsString {
+        self.file_name()
+    }
+
+    fn path(&self) -> PathBuf {
+        self.path()
+    }
+
+    fn kind(&self) -> io::Result<TriggerKind> {
+        let kind = self.file_type()?;
+        Ok(if kind.is_dir() {
+            TriggerKind::Directory
+        } else if kind.is_file() {
+            TriggerKind::File
+        } else {
+            // In particular, do not follow links into a different source tree.
+            TriggerKind::Other
+        })
+    }
+}
+
+#[derive(Default)]
+struct TriggerScan {
+    files: Vec<String>,
+    unreadable: u64,
+}
+
+impl TriggerScan {
+    fn note_error(&mut self, error: &io::Error) {
+        // Optional source trees are allowed to disappear while the scan runs.
+        if error.kind() != io::ErrorKind::NotFound {
+            self.unreadable = self.unreadable.saturating_add(1);
+        }
+    }
+}
+
+fn native_trigger_entries(directory: &Path) -> io::Result<Vec<io::Result<fs::DirEntry>>> {
+    Ok(fs::read_dir(directory)?.collect())
+}
+
+// Only this iterator owns the scan rules. It uses a substitute directory
+// reader in tests to cover failed open, failed iteration and failed stat.
+fn scan_trigger_files<E: TriggerEntry>(
+    folders: &[PathBuf],
+    max_entries: usize,
+    mut read_directory: impl FnMut(&Path) -> io::Result<Vec<io::Result<E>>>,
+) -> Result<TriggerScan, PluginError> {
+    let mut scan = TriggerScan::default();
+    let mut budget = max_entries;
     let mut roots: Vec<&PathBuf> = folders.iter().collect();
     roots.sort();
     roots.dedup();
     for root in roots {
-        // Breadth first, so the files nearest the folder come first and a
-        // deep tree cannot use up the limit before a shallow source root.
+        // Breadth first, so nearby sources precede deep source trees.
         let mut pending = VecDeque::from([(root.clone(), 0usize)]);
         while let Some((directory, depth)) = pending.pop_front() {
-            let Ok(entries) = fs::read_dir(&directory) else {
-                continue;
+            if budget == 0 {
+                return Ok(scan);
+            }
+            let entries = match read_directory(&directory) {
+                Ok(entries) => entries,
+                Err(error) => {
+                    scan.note_error(&error);
+                    continue;
+                }
             };
-            let mut entries: Vec<_> = entries.filter_map(Result::ok).collect();
-            entries.sort_by_key(|entry| entry.file_name());
-            let mut subdirectories = Vec::new();
+            let mut sorted = Vec::new();
             for entry in entries {
+                match entry {
+                    Ok(entry) => sorted.push(entry),
+                    Err(error) => scan.note_error(&error),
+                }
+            }
+            sorted.sort_by_key(TriggerEntry::name);
+            let mut subdirectories = Vec::new();
+            for entry in sorted {
                 if budget == 0 {
-                    return Ok(files);
+                    return Ok(scan);
                 }
                 budget -= 1;
-                let name = entry.file_name();
+                let name = entry.name();
                 let Some(name) = name.to_str() else {
                     continue;
                 };
-                let Ok(kind) = entry.file_type() else {
-                    continue;
+                let kind = match entry.kind() {
+                    Ok(kind) => kind,
+                    Err(error) => {
+                        scan.note_error(&error);
+                        continue;
+                    }
                 };
-                if kind.is_dir() {
+                if kind == TriggerKind::Directory {
                     let skipped =
                         name.starts_with('.') || TRIGGER_SCAN_SKIPPED_DIRECTORIES.contains(&name);
                     if depth < TRIGGER_SCAN_DEPTH && !skipped {
                         subdirectories.push((entry.path(), depth + 1));
                     }
-                } else if kind.is_file() && name.ends_with(".java") && !name.starts_with('.') {
-                    files.push(file_uri(&entry.path())?);
-                    if files.len() >= TRIGGER_FILE_LIMIT {
-                        return Ok(files);
+                } else if kind == TriggerKind::File
+                    && name.ends_with(".java")
+                    && !name.starts_with('.')
+                {
+                    scan.files.push(file_uri(&entry.path())?);
+                    if scan.files.len() >= TRIGGER_FILE_LIMIT {
+                        return Ok(scan);
                     }
                 }
             }
             pending.extend(subdirectories);
         }
     }
-    Ok(files)
+    Ok(scan)
+}
+
+fn report_trigger_scan(scan: &TriggerScan, report: &dyn Fn(&str, u64)) {
+    if scan.unreadable != 0 {
+        report(LAUNCH_TRIGGER_SCAN_UNREADABLE, scan.unreadable);
+    }
+}
+
+/// The `triggerFiles` of a launch: `file:` URIs of up to
+/// [`TRIGGER_FILE_LIMIT`] `.java` files found under `folders`, folders and
+/// entries in sorted order so the same workspace always names the same files.
+/// The scan stops at [`TRIGGER_SCAN_DEPTH`] levels, skips hidden directories
+/// and [`TRIGGER_SCAN_SKIPPED_DIRECTORIES`], does not follow symbolic links,
+/// and reads at most [`TRIGGER_SCAN_ENTRY_BUDGET`] entries. Optional missing
+/// folders contribute nothing; other I/O failures preserve partial results and
+/// are counted once at the launch boundary without including file paths. Only
+/// a launch reports diagnostic degradation, not this helper.
+pub fn trigger_files(folders: &[PathBuf]) -> Result<Vec<String>, PluginError> {
+    Ok(scan_trigger_files(folders, TRIGGER_SCAN_ENTRY_BUDGET, native_trigger_entries)?.files)
 }
 
 /// Seconds since the Unix epoch; a clock before 1970 counts as 0, which only
@@ -772,14 +871,15 @@ pub fn resolve_launch_function(
         }
         None => (Vec::new(), Vec::new()),
     };
-    let trigger_files = trigger_files(&folders)?;
+    let scan = scan_trigger_files(&folders, TRIGGER_SCAN_ENTRY_BUDGET, native_trigger_entries)?;
     context.check_cancelled()?;
+    report_trigger_scan(&scan, &report);
     let mut answer = resolve(
         &request,
         &server,
         &package_root,
         &fragments,
-        &trigger_files,
+        &scan.files,
         now_unix_seconds(),
         &report,
     )?;
@@ -1314,6 +1414,149 @@ mod tests {
         assert!(lithe_plugin_sdk::is_function_id(LAUNCH_FUNCTION_ID));
     }
 
+    // The injected reader models errors that cannot reliably be produced with
+    // chmod on Windows or when a test process has elevated permissions.
+    struct TriggerFixtureEntry {
+        path: PathBuf,
+        kind: Result<TriggerKind, io::ErrorKind>,
+    }
+
+    impl TriggerEntry for TriggerFixtureEntry {
+        fn name(&self) -> OsString {
+            self.path.file_name().unwrap().to_os_string()
+        }
+
+        fn path(&self) -> PathBuf {
+            self.path.clone()
+        }
+
+        fn kind(&self) -> io::Result<TriggerKind> {
+            self.kind.map_err(io::Error::from)
+        }
+    }
+
+    #[test]
+    fn trigger_scan_treats_disappeared_directories_as_optional_but_counts_io_denial() {
+        let fixture = Fixture::new();
+        let roots = vec![fixture.root.join("workspace")];
+        let vanished =
+            scan_trigger_files::<TriggerFixtureEntry>(&roots, TRIGGER_SCAN_ENTRY_BUDGET, |_| {
+                Err(io::Error::from(io::ErrorKind::NotFound))
+            })
+            .unwrap();
+        assert!(vanished.files.is_empty());
+        assert_eq!(vanished.unreadable, 0);
+
+        let denied =
+            scan_trigger_files::<TriggerFixtureEntry>(&roots, TRIGGER_SCAN_ENTRY_BUDGET, |_| {
+                Err(io::Error::from(io::ErrorKind::PermissionDenied))
+            })
+            .unwrap();
+        assert!(denied.files.is_empty());
+        assert_eq!(denied.unreadable, 1);
+        let calls = std::cell::Cell::new(0);
+        report_trigger_scan(&denied, &|code, count| {
+            assert_eq!(code, LAUNCH_TRIGGER_SCAN_UNREADABLE);
+            assert_eq!(count, 1);
+            calls.set(calls.get() + 1);
+        });
+        assert_eq!(calls.get(), 1);
+        report_trigger_scan(&vanished, &|_, _| panic!("missing folders are normal"));
+
+        let disappeared_entries =
+            scan_trigger_files::<TriggerFixtureEntry>(&roots, TRIGGER_SCAN_ENTRY_BUDGET, |_| {
+                Ok(vec![
+                    Err(io::Error::from(io::ErrorKind::NotFound)),
+                    Ok(TriggerFixtureEntry {
+                        path: roots[0].join("Gone.java"),
+                        kind: Err(io::ErrorKind::NotFound),
+                    }),
+                ])
+            })
+            .unwrap();
+        assert!(disappeared_entries.files.is_empty());
+        assert_eq!(disappeared_entries.unreadable, 0);
+    }
+
+    #[test]
+    fn trigger_scan_retains_partial_results_and_reports_one_redacted_summary() {
+        let fixture = Fixture::new();
+        let root = fixture.root.join("workspace");
+        let java = root.join("Main.java");
+        let unreadable = root.join("Unreadable.java");
+        let child = root.join("src");
+        let scan = scan_trigger_files::<TriggerFixtureEntry>(
+            std::slice::from_ref(&root),
+            TRIGGER_SCAN_ENTRY_BUDGET,
+            |directory| {
+                if directory == root {
+                    return Ok(vec![
+                        Ok(TriggerFixtureEntry {
+                            path: child.clone(),
+                            kind: Ok(TriggerKind::Directory),
+                        }),
+                        Ok(TriggerFixtureEntry {
+                            path: java.clone(),
+                            kind: Ok(TriggerKind::File),
+                        }),
+                        Err(io::Error::from(io::ErrorKind::PermissionDenied)),
+                        Ok(TriggerFixtureEntry {
+                            path: unreadable.clone(),
+                            kind: Err(io::ErrorKind::PermissionDenied),
+                        }),
+                        Ok(TriggerFixtureEntry {
+                            path: root.join("Link.java"),
+                            kind: Ok(TriggerKind::Other),
+                        }),
+                    ]);
+                }
+                Err(io::Error::from(io::ErrorKind::PermissionDenied))
+            },
+        )
+        .unwrap();
+        assert_eq!(scan.files, vec![file_uri(&java).unwrap()]);
+        assert_eq!(scan.unreadable, 3);
+        let calls = std::cell::Cell::new(0);
+        report_trigger_scan(&scan, &|code, count| {
+            assert_eq!(code, LAUNCH_TRIGGER_SCAN_UNREADABLE);
+            assert_eq!(count, 3);
+            calls.set(calls.get() + 1);
+        });
+        assert_eq!(calls.get(), 1);
+    }
+
+    #[test]
+    fn trigger_scan_keeps_the_entry_budget_when_reading_fixture_directories() {
+        let fixture = Fixture::new();
+        let root = fixture.root.join("workspace");
+        let first = root.join("A.java");
+        let second = root.join("B.java");
+        let third = root.join("C.java");
+        let scan =
+            scan_trigger_files::<TriggerFixtureEntry>(std::slice::from_ref(&root), 2, |_| {
+                Ok(vec![
+                    Ok(TriggerFixtureEntry {
+                        path: third.clone(),
+                        kind: Ok(TriggerKind::File),
+                    }),
+                    Ok(TriggerFixtureEntry {
+                        path: first.clone(),
+                        kind: Ok(TriggerKind::File),
+                    }),
+                    Ok(TriggerFixtureEntry {
+                        path: second.clone(),
+                        kind: Ok(TriggerKind::File),
+                    }),
+                ])
+            })
+            .unwrap();
+        assert_eq!(
+            scan.files,
+            vec![file_uri(&first).unwrap(), file_uri(&second).unwrap()]
+        );
+        assert_eq!(scan.unreadable, 0);
+    }
+
     #[test]
     fn trigger_files_name_java_files_in_order_and_skip_hidden_and_build_trees() {
         let fixture = Fixture::new();
@@ -1352,6 +1595,31 @@ mod tests {
             .unwrap()
             .is_empty());
         assert!(trigger_files(&[]).unwrap().is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn trigger_scan_does_not_follow_symlinks_or_report_them_unreadable() {
+        let fixture = Fixture::new();
+        let workspace = fixture.root.join("workspace");
+        let outside = fixture.root.join("outside");
+        fs::create_dir_all(&workspace).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        let real = workspace.join("Real.java");
+        let outside_file = outside.join("Outside.java");
+        fs::write(&real, b"").unwrap();
+        fs::write(&outside_file, b"").unwrap();
+        std::os::unix::fs::symlink(&outside_file, workspace.join("Link.java")).unwrap();
+        std::os::unix::fs::symlink(&outside, workspace.join("linked_dir")).unwrap();
+
+        let scan = scan_trigger_files(
+            std::slice::from_ref(&workspace),
+            TRIGGER_SCAN_ENTRY_BUDGET,
+            native_trigger_entries,
+        )
+        .unwrap();
+        assert_eq!(scan.files, vec![file_uri(&real).unwrap()]);
+        assert_eq!(scan.unreadable, 0);
     }
 
     #[test]
