@@ -648,14 +648,6 @@ fn workspace_folders(host: &Host, workspace: &WorkspaceContext) -> Result<Vec<Pa
         .unwrap_or_default())
 }
 
-/// The `triggerFiles` of a launch: `file:` URIs of up to
-/// [`TRIGGER_FILE_LIMIT`] `.java` files found under `folders`, folders and
-/// entries in sorted order so the same workspace always names the same files.
-/// The scan stops at [`TRIGGER_SCAN_DEPTH`] levels, skips hidden directories
-/// and [`TRIGGER_SCAN_SKIPPED_DIRECTORIES`], does not follow symbolic links,
-/// and reads at most [`TRIGGER_SCAN_ENTRY_BUDGET`] entries. Optional missing
-/// folders contribute nothing; other I/O failures preserve partial results and
-/// are counted once at the launch boundary without including file paths.
 // A native DirEntry is intentionally classified only after the per-entry budget
 // check. Tests can substitute entries and failures without changing permissions
 // or relying on host-specific directory iteration behavior.
@@ -792,8 +784,15 @@ fn report_trigger_scan(scan: &TriggerScan, report: &dyn Fn(&str, u64)) {
     }
 }
 
-/// Collects optional JDT LS trigger files with the same scan boundaries as a
-/// launch. Only a launch reports diagnostic degradation, not this helper.
+/// The `triggerFiles` of a launch: `file:` URIs of up to
+/// [`TRIGGER_FILE_LIMIT`] `.java` files found under `folders`, folders and
+/// entries in sorted order so the same workspace always names the same files.
+/// The scan stops at [`TRIGGER_SCAN_DEPTH`] levels, skips hidden directories
+/// and [`TRIGGER_SCAN_SKIPPED_DIRECTORIES`], does not follow symbolic links,
+/// and reads at most [`TRIGGER_SCAN_ENTRY_BUDGET`] entries. Optional missing
+/// folders contribute nothing; other I/O failures preserve partial results and
+/// are counted once at the launch boundary without including file paths. Only
+/// a launch reports diagnostic degradation, not this helper.
 pub fn trigger_files(folders: &[PathBuf]) -> Result<Vec<String>, PluginError> {
     Ok(scan_trigger_files(folders, TRIGGER_SCAN_ENTRY_BUDGET, native_trigger_entries)?.files)
 }
@@ -873,8 +872,8 @@ pub fn resolve_launch_function(
         None => (Vec::new(), Vec::new()),
     };
     let scan = scan_trigger_files(&folders, TRIGGER_SCAN_ENTRY_BUDGET, native_trigger_entries)?;
-    report_trigger_scan(&scan, &report);
     context.check_cancelled()?;
+    report_trigger_scan(&scan, &report);
     let mut answer = resolve(
         &request,
         &server,
@@ -1463,6 +1462,20 @@ mod tests {
         });
         assert_eq!(calls.get(), 1);
         report_trigger_scan(&vanished, &|_, _| panic!("missing folders are normal"));
+
+        let disappeared_entries =
+            scan_trigger_files::<TriggerFixtureEntry>(&roots, TRIGGER_SCAN_ENTRY_BUDGET, |_| {
+                Ok(vec![
+                    Err(io::Error::from(io::ErrorKind::NotFound)),
+                    Ok(TriggerFixtureEntry {
+                        path: roots[0].join("Gone.java"),
+                        kind: Err(io::ErrorKind::NotFound),
+                    }),
+                ])
+            })
+            .unwrap();
+        assert!(disappeared_entries.files.is_empty());
+        assert_eq!(disappeared_entries.unreadable, 0);
     }
 
     #[test]
@@ -1582,6 +1595,31 @@ mod tests {
             .unwrap()
             .is_empty());
         assert!(trigger_files(&[]).unwrap().is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn trigger_scan_does_not_follow_symlinks_or_report_them_unreadable() {
+        let fixture = Fixture::new();
+        let workspace = fixture.root.join("workspace");
+        let outside = fixture.root.join("outside");
+        fs::create_dir_all(&workspace).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        let real = workspace.join("Real.java");
+        let outside_file = outside.join("Outside.java");
+        fs::write(&real, b"").unwrap();
+        fs::write(&outside_file, b"").unwrap();
+        std::os::unix::fs::symlink(&outside_file, workspace.join("Link.java")).unwrap();
+        std::os::unix::fs::symlink(&outside, workspace.join("linked_dir")).unwrap();
+
+        let scan = scan_trigger_files(
+            std::slice::from_ref(&workspace),
+            TRIGGER_SCAN_ENTRY_BUDGET,
+            native_trigger_entries,
+        )
+        .unwrap();
+        assert_eq!(scan.files, vec![file_uri(&real).unwrap()]);
+        assert_eq!(scan.unreadable, 0);
     }
 
     #[test]
