@@ -1473,7 +1473,7 @@ mod tests {
         let unreadable = root.join("Unreadable.java");
         let child = root.join("src");
         let scan = scan_trigger_files::<TriggerFixtureEntry>(
-            &[root.clone()],
+            std::slice::from_ref(&root),
             TRIGGER_SCAN_ENTRY_BUDGET,
             |directory| {
                 if directory == root {
@@ -1519,7 +1519,7 @@ mod tests {
         let first = root.join("A.java");
         let second = root.join("B.java");
         let third = root.join("C.java");
-        let scan = scan_trigger_files::<TriggerFixtureEntry>(&[root.clone()], 2, |_| {
+        let scan = scan_trigger_files::<TriggerFixtureEntry>(std::slice::from_ref(&root), 2, |_| {
             Ok(vec![
                 Ok(TriggerFixtureEntry {
                     path: third.clone(),
