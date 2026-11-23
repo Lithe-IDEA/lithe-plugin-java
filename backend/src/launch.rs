@@ -1519,23 +1519,24 @@ mod tests {
         let first = root.join("A.java");
         let second = root.join("B.java");
         let third = root.join("C.java");
-        let scan = scan_trigger_files::<TriggerFixtureEntry>(std::slice::from_ref(&root), 2, |_| {
-            Ok(vec![
-                Ok(TriggerFixtureEntry {
-                    path: third.clone(),
-                    kind: Ok(TriggerKind::File),
-                }),
-                Ok(TriggerFixtureEntry {
-                    path: first.clone(),
-                    kind: Ok(TriggerKind::File),
-                }),
-                Ok(TriggerFixtureEntry {
-                    path: second.clone(),
-                    kind: Ok(TriggerKind::File),
-                }),
-            ])
-        })
-        .unwrap();
+        let scan =
+            scan_trigger_files::<TriggerFixtureEntry>(std::slice::from_ref(&root), 2, |_| {
+                Ok(vec![
+                    Ok(TriggerFixtureEntry {
+                        path: third.clone(),
+                        kind: Ok(TriggerKind::File),
+                    }),
+                    Ok(TriggerFixtureEntry {
+                        path: first.clone(),
+                        kind: Ok(TriggerKind::File),
+                    }),
+                    Ok(TriggerFixtureEntry {
+                        path: second.clone(),
+                        kind: Ok(TriggerKind::File),
+                    }),
+                ])
+            })
+            .unwrap();
         assert_eq!(
             scan.files,
             vec![file_uri(&first).unwrap(), file_uri(&second).unwrap()]
