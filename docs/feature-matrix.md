@@ -82,3 +82,10 @@
 | --- | --- | --- | --- | --- |
 | JSP/JSPF/Tag/Tagf 识别；在宿主 HTML 语法之上注入 JSP 指令、脚本片段、注释、EL 和标签库标签着色；注释与括号设置 | implemented / verified | implemented / verified | implemented / verified | `grammars/jsp.tmLanguage.json`；`scripts/grammar/host-jsp.mjs` 用宿主 TextMate 分词器（宿主 commit 见 `grammar-host.json`）逐项检查 24 处着色，2026-11-18 macOS arm64 本机与 CI Linux 通过。分词器与平台无关；原生编辑器窗口内的实际显示待实机验收 |
 | JSP/EL 语义补全、诊断、页面断点 | not-implemented | not-implemented | not-implemented | JDT LS 仅为 Java 服务，未来需 JSP 专属语言服务 |
+
+## 双向继承/实现跳转与左侧行首导航图标
+
+| 能力 | macOS | Windows | Linux | 证据 |
+| --- | --- | --- | --- | --- |
+| 声明 `textDocument/codeLens`、`codeLens/resolve`、`textDocument/implementation`、`textDocument/definition`、`java/findLinks` 会话请求方法 | implemented / pending | implemented / pending | implemented / pending | `io.github.lithe-idea.java-support/plugin.json`、`backend/tests/repository_pins.rs` |
+| 后端 `java.navigation.collect` / `java.navigation.invoke` 与三态 JDT 返回规范化：按宿主 `actionIcons` 协商渲染 `navigate-implemented`/`navigate-implementing`（绿 I）与 `navigate-overridden`/`navigate-overriding`（蓝 O），点击返回 `reveal.locations` | implemented / pending | implemented / pending | implemented / pending | `crates/java-domain/src/lsp/languages/java_navigation_syntax.rs`、`jdt_navigation.rs`、`backend/src/navigation.rs`、`backend/tests/session.rs`（`cargo clippy --workspace --all-targets` 与 `cargo test --workspace` 通过；真实 JDT LS 与原生桌面端联调待补） |
