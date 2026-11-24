@@ -339,6 +339,19 @@ fn navigation_collect_and_invoke_round_trip_with_quiet_collect_logging() {
     assert!(encoded.contains("java.navigation.collect"), "{encoded}");
     assert!(encoded.contains("java.navigation.invoke"), "{encoded}");
 
+    let (workspace_root, greeter_uri, impl_uri) = if cfg!(windows) {
+        (
+            r"C:\workspace\nav",
+            "file:///C:/workspace/nav/src/Greeter.java",
+            "file:///C:/workspace/nav/src/Impl.java",
+        )
+    } else {
+        (
+            "/workspace/nav",
+            "file:///workspace/nav/src/Greeter.java",
+            "file:///workspace/nav/src/Impl.java",
+        )
+    };
     let context_ref = json!({
         "contextID": "ctx-nav",
         "generation": 1
@@ -346,7 +359,7 @@ fn navigation_collect_and_invoke_round_trip_with_quiet_collect_logging() {
     let full_context = json!({
         "contextID": "ctx-nav",
         "generation": 1,
-        "folders": [{"rootID": "r1", "path": "/workspace/nav"}]
+        "folders": [{"rootID": "r1", "path": workspace_root}]
     });
     host.notify("initialized", json!({}));
     host.notify(
@@ -415,13 +428,13 @@ fn navigation_collect_and_invoke_round_trip_with_quiet_collect_logging() {
                 match params.get("method").and_then(Value::as_str) {
                     Some("textDocument/definition") => json!({
                         "value": [{
-                            "uri": "file:///workspace/nav/src/Greeter.java",
+                            "uri": greeter_uri,
                             "range": {"start": {"line": 0, "character": 10}, "end": {"line": 0, "character": 17}}
                         }]
                     }),
                     Some("textDocument/implementation") => json!({
                         "value": [{
-                            "uri": "file:///workspace/nav/src/Impl.java",
+                            "uri": impl_uri,
                             "range": {"start": {"line": 1, "character": 6}, "end": {"line": 1, "character": 10}}
                         }]
                     }),
@@ -429,7 +442,7 @@ fn navigation_collect_and_invoke_round_trip_with_quiet_collect_logging() {
                         "value": [{
                             "displayName": "Greeter.greet()",
                             "location": {
-                                "uri": "file:///workspace/nav/src/Greeter.java",
+                                "uri": greeter_uri,
                                 "range": {"start": {"line": 0, "character": 25}, "end": {"line": 0, "character": 30}}
                             }
                         }]
@@ -486,7 +499,7 @@ fn navigation_collect_and_invoke_round_trip_with_quiet_collect_logging() {
         {
             json!({
                 "value": [{
-                    "uri": "file:///workspace/nav/src/Greeter.java",
+                    "uri": greeter_uri,
                     "range": {"start": {"line": 0, "character": 10}, "end": {"line": 0, "character": 17}}
                 }]
             })
@@ -495,7 +508,7 @@ fn navigation_collect_and_invoke_round_trip_with_quiet_collect_logging() {
             "value": [{
                 "displayName": "Greeter.greet()",
                 "location": {
-                    "uri": "file:///workspace/nav/src/Greeter.java",
+                    "uri": greeter_uri,
                     "range": {"start": {"line": 0, "character": 25}, "end": {"line": 0, "character": 30}}
                 }
             }]
@@ -507,10 +520,7 @@ fn navigation_collect_and_invoke_round_trip_with_quiet_collect_logging() {
         .as_array()
         .expect("reveal locations");
     assert_eq!(locations.len(), 1, "{invoke_resp}");
-    assert_eq!(
-        locations[0]["uri"],
-        "file:///workspace/nav/src/Greeter.java"
-    );
+    assert_eq!(locations[0]["uri"], greeter_uri);
     assert!(
         invoke_logs
             .iter()
