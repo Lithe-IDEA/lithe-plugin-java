@@ -669,8 +669,7 @@ Java 一侧的中转已经实现并在清单里声明（第 5 节、第 5.7 节�
 
 - 阶段 J2：语言服务器由后端启动（第 5.8 节），设置中转（API-25 / API-35）与运行/调试/测试（第 5.9 节）都在后端实现。
   仍未接：`java.configuration.runtimes` 只含 `tools.java` 这一个默认运行时，列出全机 JDK 等 API-23 `toolchains.list`；
-  argfile 规划（`execution/launch_command.rs`）没有接到 `run/start`；TestNG 结果协议不解析；导航标记（父类/实现）与 CodeLens
-  没有宿主 API；测试结果摘要是英文（等 API-37）；三个会话命令仍只回答 `NotSupported`。
+  argfile 规划（`execution/launch_command.rs`）没有接到 `run/start`；TestNG 结果协议不解析；双向继承/实现导航标记已接入 `editor/registerActions`（`backend/src/navigation.rs`，配合 JDT LS `textDocument/implementation`、`textDocument/definition`、`java/findLinks` 与 4 枚语义图标）；CodeLens 其余入口仍待接通；测试结果摘要是英文（等 API-37）；三个会话命令仍只回答 `NotSupported`。
 - 运行/调试/测试的接管只由后端单元测试和 Core 清单校验验证，还要对着真实宿主（主仓库 Java 拆分分支）跑通：
   打开 Java 工程后出现行内 Run/Debug 标记、点击能启动并在 Run 窗口看到输出、调试能在断点停下、JUnit 测试结束后弹出摘要、
   堆栈行可点击跳转。

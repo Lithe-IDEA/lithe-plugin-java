@@ -2,7 +2,7 @@
   "schemaVersion": 0,
   "id": "io.github.lithe-idea.java-support",
   "displayName": "Java Support",
-  "version": "4.2.2",
+  "version": "4.3.0",
   "pluginAPIVersion": 0,
   "requires": {"backend": 0, "debugAdapters": 0, "languages": 0, "languageServers": 0, "pluginFunctions": 0, "settings": 0, "projectGenerators": 0, "toolDefinitions": 1, "sourceSettings": 1, "managedRuntimes": 1, "ui": 0},
   "managedRuntimes": {
@@ -806,7 +806,16 @@
         "function": "java.resolveLaunch",
         "timeoutMilliseconds": 60000
       },
-      "requestMethods": ["java/classFileContents", "java/projectConfigurationsUpdate", "workspace/executeCommand"],
+      "requestMethods": [
+        "java/classFileContents",
+        "java/projectConfigurationsUpdate",
+        "workspace/executeCommand",
+        "textDocument/codeLens",
+        "codeLens/resolve",
+        "textDocument/implementation",
+        "textDocument/definition",
+        "java/findLinks"
+      ],
       "commands": ["java.project.getAll", "java.project.getSettings", "java.project.getClasspaths", "lithe.java.projectModel.describe", "java.project.updateSettings", "vscode.java.buildWorkspace", "vscode.java.resolveClasspath", "vscode.java.resolveMainMethod", "vscode.java.test.findTestTypesAndMethods", "vscode.java.test.junit.argument"],
       "forwardNotifications": ["language/eventNotification", "language/progressReport", "language/status"],
       "state": {

@@ -245,8 +245,8 @@ Spring/MyBatis 等既有能力不属于本轮 Maven 验收范围。
 
 | 事实 | 级别 | 来源 | 内容 |
 | --- | --- | --- | --- |
-| 关键操作成功：`runConfig.selectJava`、`debug.javaTestLaunch`、`execution.planLaunchCommand`、`java.prepareLaunch`、`java.resolveLaunch`、`java.runAction`、`java.rerun`、`languageImport.settingsChanged`（`backend/src/lib.rs` 的 `KEY_OPERATIONS`） | INFO | SDK 自动 | 操作 ID、耗时 |
-| 其余函数成功（编辑器驱动或启动时的读取，如 `java.runMarkers`、`java.codeVision`、`spring.index`、`settings.view`） | 不记录 | `suppress_success_diagnostics`（`backend/src/lib.rs`） | — |
+| 关键操作成功：`runConfig.selectJava`、`debug.javaTestLaunch`、`execution.planLaunchCommand`、`java.prepareLaunch`、`java.resolveLaunch`、`java.runAction`、`java.rerun`、`java.navigation.invoke`、`languageImport.settingsChanged`（`backend/src/lib.rs` 的 `KEY_OPERATIONS`） | INFO | SDK 自动 | 操作 ID、耗时 |
+| 其余函数成功（编辑器驱动或启动时的读取，如 `java.runMarkers`、`java.codeVision`、`java.navigation.collect`、`spring.index`、`settings.view`） | 不记录 | `suppress_success_diagnostics`（`backend/src/lib.rs`） | — |
 | 任一函数失败 | ERROR | SDK 自动 | 类别为 `pluginErrorCode`（如 `java.invalidRequest`；`languageImport.settingsChanged` 的 `relay.caller_missing`、`relay.context_missing`、`relay.invalid_params`）、耗时；不含消息与 `details` |
 | 领域命令失败类别 | ERROR | `plugin_error_code` | `java.invalidRequest`、`java.workspaceNotFound`、`java.permissionDenied`、`java.notSupported`、`java.runtimeMissing`、`java.processStartFailed`、`java.processFailed`、`java.parseFailed`、`java.cancelled`、`java.timedOut`、`java.connectionClosed`、`java.unknown`；SDK 识别的取消不记录 |
 | JDT 启动规划失败 | ERROR | SDK 自动 | `launch.invalid_params`、`launch.package_unavailable`、`launch.resource_missing`、`launch.configuration_failed`、`launch.runtime_too_old`（语言服务 JDK 低于本插件要求的 25）；运行环境问题使用下行类别 |
@@ -259,6 +259,8 @@ Spring/MyBatis 等既有能力不属于本轮 Maven 验收范围。
 | 插件存储清理失败 | WARN（`degraded`） | `crates/java-domain/src/host/diagnostics.rs`（`host::diagnostics`） | 类别 `storage.cleanup_failed.<阶段>`（阶段为 `jdt-configuration`、`jdt-settings`、`java-argfile-remove`），计数 |
 | 运行动作失败 | ERROR | SDK 自动 | `backend/src/run.rs` 的 `RUN_ERROR_CODES`：`run.invalid_params`、`run.context_missing`、`run.workspace_unavailable`、`run.language_server_failed`、`run.build_failed`、`run.no_tests`、`run.port_unavailable`、`run.host_rejected`、`run.classpath_failed` |
 | 动作注册、上下文读取或测试结果摘要降级 | WARN | SDK `degraded` | `RUN_CATEGORIES`：`run.actions_registration_failed`、`run.contexts_unavailable`、`run.result_summary_failed` |
+| 双向导航动作失败 | ERROR | SDK 自动 | `backend/src/navigation.rs` 的 `NAV_ERROR_CODES`：`nav.invalid_params`、`nav.context_missing`、`nav.workspace_unavailable`、`nav.language_server_failed` |
+| 导航动作注册或上下文读取降级 | WARN | SDK `degraded` | `NAV_CATEGORIES`：`nav.actions_registration_failed`、`nav.contexts_unavailable` |
 | 冷索引动作查询延迟/恢复、自动刷新耗尽 | WARN | SDK `degraded` / `recovered` | `run.actions_query_deferred`、`run.actions_query_exhausted`、`run.actions_progress_limit`，每个失败周期记录延迟及恢复/耗尽，不含工作区内容 |
 | 设置页预览参数不合法或未识别草稿/生效值 | ERROR / WARN（`degraded`） | `backend/src/settings_view.rs`（`VIEW_ERROR_CODES`、`VIEW_CATEGORIES`） | 错误类别 `settings_view.invalid_params`；非预期设置值计数通过 `settings_view.setting_unrecognized` 降级上报并回退默认显示，不含设置路径或文本 |
 | 宿主启动 JDT LS、java-debug、项目 JVM | 宿主决定 | 声明式贡献/Run 生命周期 | 插件不重复发送启动终态；上游 stderr 由宿主按 DEBUG 接收 |
