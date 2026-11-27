@@ -300,6 +300,53 @@ fn the_backend_reports_restricted_facts_and_suppresses_reads() {
 }
 
 #[test]
+fn java_settings_checks_a_selected_folder_only_after_the_button_click() {
+    let mut host = Host::start();
+    host.initialize();
+    let mut event = json!({
+        "event":"open", "language":"zh-Hans", "surface":{"settingRegionID":"language"},
+        "settings":{"effective":{"languageServerHome":"invalid-relative-path"}}
+    });
+    let opened = host.invoke(1, "settings.view", event.clone());
+    let nodes = opened["result"]["view"]
+        .as_array()
+        .expect("language settings view");
+    assert_eq!(nodes[0]["type"], "canvas");
+    assert_eq!(nodes[1]["action"], "libraries");
+    let section = &nodes[2];
+    assert_eq!(section["title"], "语言服务器");
+    let controls = section["children"].as_array().unwrap();
+    assert_eq!(controls[1]["setting"], "heapMaxMB");
+    assert_eq!(controls[2]["setting"], "languageServerHome");
+    assert_eq!(controls[3]["setting"], "logLevel");
+    let row = &controls[0]["children"];
+    assert_eq!(row[0]["type"], "textField");
+    assert_eq!(row[0]["label"], "Java 环境");
+    assert_eq!(row[0]["enabled"], false);
+    assert!(row[0]["value"]
+        .as_str()
+        .unwrap()
+        .contains("JDK for JDT LS · Java Support"));
+    assert!(row[0]["info"].as_str().is_some_and(|s| !s.is_empty()));
+    assert_eq!(row[1]["id"], "check-jdtls");
+    assert_eq!(row[1]["text"], "检查");
+    assert_eq!(row.as_array().unwrap().len(), 2);
+    event["event"] = json!("click");
+    event["node"] = json!("check-jdtls");
+    let checked = host.invoke(2, "settings.view", event);
+    let checked_rows = checked["result"]["view"][2]["children"].as_array().unwrap();
+    assert!(checked_rows.iter().all(|node| node["type"] != "tool"));
+    assert!(checked["result"]["view"][2]["children"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|n| n["text"]
+            .as_str()
+            .is_some_and(|s| s.contains("invalid-relative-path") && s.contains("绝对路径"))));
+    assert_eq!(host.close(), 1);
+}
+
+#[test]
 fn initialize_without_lithe_logging_is_refused() {
     let mut host = Host::start();
     host.request(

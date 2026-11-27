@@ -894,6 +894,25 @@ pub fn resolve_launch_function(
         answer["initializationOptions"]["settings"] = configuration;
     }
     context.check_cancelled()?;
+    if let Some(workspace) = context.workspace_context() {
+        let jdk = &params["runtimes"]["jdk"];
+        if let (Some(version), Some(home), Some(server_version)) = (
+            jdk["version"].as_str(),
+            jdk["home"].as_str(),
+            params["runtimes"]["jdtls"]["version"].as_str(),
+        ) {
+            session.record_service_environment(
+                workspace,
+                params["settings"][SERVER_HOME_SETTING]
+                    .as_str()
+                    .unwrap_or(""),
+                [
+                    format!("JDT LS {server_version} · {}", server.home.display()),
+                    format!("JDK {version} · {home}"),
+                ],
+            );
+        }
+    }
     Ok(answer)
 }
 

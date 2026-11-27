@@ -70,13 +70,19 @@ const HEAP_MAX_MB: i64 = 16384;
 
 /// Handles a `settings.view` invocation from the host.
 ///
-/// Redraws on `open`, `settings`, and `resize` events; returns `{}` for `close`
-/// and other non-layout events so the host retains the last view or closes it
-/// without error.
-pub fn view_function(params: Value, context: &Context) -> Result<Value, FunctionError> {
+/// Ordinary redraws only present state. An explicit check inspects local
+/// server layouts; full content verification belongs to runtime preparation.
+pub fn view_function(
+    session: &crate::settings_session::SettingsSession,
+    params: Value,
+    context: &Context,
+) -> Result<Value, FunctionError> {
     context.check_cancelled()?;
     let request = parse_request(&params)?;
-    if !matches!(request.event, "open" | "settings" | "resize") {
+    let check = request.region == LANGUAGE_REGION
+        && request.event == "click"
+        && params["node"] == "check-jdtls";
+    if !check && !matches!(request.event, "open" | "settings" | "resize") {
         return Ok(json!({}));
     }
     let words = words_for_language(request.language);
@@ -99,7 +105,42 @@ pub fn view_function(params: Value, context: &Context) -> Result<Value, Function
             .into());
         }
     };
-    Ok(json!({ "view": [canvas] }))
+    let mut view = vec![canvas];
+    if request.region == LANGUAGE_REGION {
+        let zh = request.language.to_ascii_lowercase().starts_with("zh");
+        let configured = settings.language_server_home.as_str();
+        let status = context
+            .workspace_context()
+            .and_then(|ws| session.service_environment(ws, configured));
+        let environment = match status {
+            Some([server, jdk]) => format!("JDK for JDT LS · Java Support · {jdk} · {server}"),
+            None => format!("JDK for JDT LS · Java Support · {}", words.no_launch),
+        };
+        view.push(json!({"type":"button", "id":"read-project-structure",
+            "action":"libraries", "text":words.read_structure}));
+        let mut controls = vec![json!({"type":"row", "children":[
+            {"type":"textField", "id":"java-environment", "label":words.environment_title,
+             "info":words.environment_help, "value":environment, "enabled":false, "width":"fill"},
+            {"type":"button", "id":"check-jdtls", "text":words.check_server}
+        ]})];
+        let caption = |text: &str| json!({"type":"label", "style":"caption", "text":text});
+        if check {
+            let lines = crate::managed_runtimes::check_local_servers(configured, zh, &|| {
+                context.check_cancelled().map_err(Into::into)
+            })?;
+            controls.extend(lines.iter().map(|line| caption(line)));
+        }
+        controls.extend([
+            json!({"type":"setting", "setting":"heapMaxMB"}),
+            json!({"type":"setting", "setting":"languageServerHome"}),
+            json!({"type":"setting", "setting":"logLevel"}),
+        ]);
+        view.push(
+            json!({"type":"section", "title":words.language_server_section,
+            "children":controls}),
+        );
+    }
+    Ok(json!({ "view": view }))
 }
 
 struct ParsedRequest<'a> {
@@ -296,6 +337,12 @@ fn read_settings(
 }
 
 struct Words {
+    language_server_section: &'static str,
+    read_structure: &'static str,
+    environment_title: &'static str,
+    environment_help: &'static str,
+    check_server: &'static str,
+    no_launch: &'static str,
     preview_title: &'static str,
     preview_label: &'static str,
     follows_options: &'static str,
@@ -344,6 +391,12 @@ struct Words {
 }
 
 const ZH: Words = Words {
+    language_server_section: "语言服务器",
+    read_structure: "读取项目结构",
+    environment_title: "Java 环境",
+    environment_help: "检查目录会读取本机的语言服务器文件。工具链页可校验完整文件或准备缺失组件。",
+    check_server: "检查",
+    no_launch: "尚无启动检查结果",
     preview_title: "效果预览",
     preview_label: "Java 语言服务器与工程模型设置预览",
     follows_options: "示例代码，随下方选项即时变化",
@@ -397,6 +450,12 @@ const ZH: Words = Words {
 };
 
 const EN: Words = Words {
+    language_server_section: "Language server",
+    read_structure: "Read project structure",
+    environment_title: "Java environment",
+    environment_help: "Check local language server files here. Open Toolchains to verify their contents or prepare missing components.",
+    check_server: "Check",
+    no_launch: "No launch check recorded",
     preview_title: "Preview",
     preview_label: "Preview of Java language server and project model settings",
     follows_options: "Sample preview; follows the options below",

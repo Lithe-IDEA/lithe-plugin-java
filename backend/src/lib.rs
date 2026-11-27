@@ -289,12 +289,13 @@ pub fn backend() -> Result<Backend, SdkError> {
         })?;
         backend.suppress_success_diagnostics(function)?;
     }
+    let view_session = Arc::clone(&session);
     backend.function("compiler.prepareSettings", move |params, context| {
         projects.edit(params, context, &session)
     })?;
     backend.function(
         settings_view::SETTINGS_VIEW_FUNCTION_ID,
-        settings_view::view_function,
+        move |params, context| settings_view::view_function(&view_session, params, context),
     )?;
     backend.suppress_success_diagnostics(settings_view::SETTINGS_VIEW_FUNCTION_ID)?;
     Ok(backend)

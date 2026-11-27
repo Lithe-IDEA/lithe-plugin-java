@@ -20,6 +20,7 @@
 
 | 能力 | macOS | Windows | Linux | 证据 |
 | --- | --- | --- | --- | --- |
+| Java 设置显示上次启动检查的路径，在同一行显示服务 JDK 信息并按需检查本机目录；macOS 还查找用户应用数据目录下固定深度的 `tools/jdtls` | implemented / pending | implemented / pending | implemented / pending | `backend/src/jdtls.rs`、`managed_runtimes.rs`、`settings_view.rs`；各平台原生界面待验收 |
 | 完整 JDK 25 与固定 JDT LS 分别声明，已有依赖复用，只下载缺失部分 | implemented / pending | implemented / pending | x64 verified；ARM64 pending | `managed_runtimes` 单元测试覆盖四种存在组合；真实宿主安装结果见 [运行环境说明](managed-runtimes.md) |
 | JDT LS 精确 114 文件 + 当前平台模板校验，拒绝混装/残缺；完整 JDK 的版本、OS、CPU、java/javac 执行文件检查 | implemented / pending | implemented / pending | x64 verified；ARM64 pending | 六平台文件布局与 ELF / Mach-O / PE 头单测；Linux 用官方归档及真实 SDK hook |
 | 服务 JDK 25 独立于项目 JDK；显式选择优先，再复用受管缓存，最后自动发现 | implemented / pending | implemented / pending | x64 verified；ARM64 pending | `backend/src/managed_runtimes.rs`、`repository_pins.rs`；真实 launch 只绑定 `jdtls-runtime` |
