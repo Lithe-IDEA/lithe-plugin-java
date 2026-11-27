@@ -281,6 +281,8 @@ struct WorkspaceState {
     /// same default runtime the host runs.
     java_runtimes: Vec<JdtJavaRuntime>,
     native_root: Option<std::path::PathBuf>,
+    // Verified paths from the last launch resolution, scoped to its workspace generation.
+    service_environment: Option<(u64, String, [String; 2])>,
     /// The project model settings of the last launch; every push detects
     /// the model with them, so a push never undoes what the launch configured.
     model_options: crate::project_model::ModelOptions,
@@ -301,6 +303,7 @@ impl WorkspaceState {
             contributions: Contributions::default(),
             java_runtimes: Vec::new(),
             native_root: None,
+            service_environment: None,
             model_options: crate::project_model::ModelOptions::default(),
             pending_projects: Vec::new(),
             collecting: None,
@@ -850,6 +853,36 @@ impl SettingsSession {
             .unwrap_or_default()
     }
 
+    pub fn record_service_environment(
+        &self,
+        workspace: &WorkspaceContext,
+        configured: &str,
+        lines: [String; 2],
+    ) {
+        let mut states = self.lock_states();
+        let state = states
+            .entry(workspace.context_id().to_owned())
+            .or_insert_with(|| WorkspaceState::new(workspace.clone()));
+        if workspace.generation() >= state.context.generation() {
+            state.remember_context(workspace);
+            state.service_environment =
+                Some((workspace.generation(), configured.to_owned(), lines));
+        }
+    }
+
+    pub fn service_environment(
+        &self,
+        workspace: &WorkspaceContext,
+        configured: &str,
+    ) -> Option<[String; 2]> {
+        let states = self.lock_states();
+        let (generation, selection, lines) = states
+            .get(workspace.context_id())?
+            .service_environment
+            .as_ref()?;
+        (*generation == workspace.generation() && selection == configured).then(|| lines.clone())
+    }
+
     /// Remembers the JDKs a launch of the workspace `workspace` configured,
     /// so a later push repeats them instead of leaving the server with the
     /// runtimes of an older launch. A workspace the session has not seen is
@@ -1087,6 +1120,25 @@ mod tests {
 
     fn workspace() -> WorkspaceContext {
         WorkspaceContext::new("ctx-1", 1).expect("a valid context")
+    }
+
+    #[test]
+    fn service_environment_follows_workspace_generation_and_server_selection() {
+        let (_, session) = fixture();
+        let old = workspace();
+        let current = WorkspaceContext::new("ctx-1", 2).unwrap();
+        let lines = ["JDT LS".to_owned(), "JDK".to_owned()];
+        session.record_service_environment(&current, "selected", lines.clone());
+        session.record_service_environment(&old, "", ["old".to_owned(), "jdk".to_owned()]);
+        assert_eq!(
+            session.service_environment(&current, "selected"),
+            Some(lines)
+        );
+        assert!(session.service_environment(&current, "").is_none());
+        assert!(session.service_environment(&old, "selected").is_none());
+        assert!(session
+            .service_environment(&WorkspaceContext::new("other", 2).unwrap(), "selected")
+            .is_none());
     }
 
     fn state_of(server: &str, state: &str, generation: u64) -> Value {

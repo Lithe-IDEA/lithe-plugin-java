@@ -70,13 +70,19 @@ const HEAP_MAX_MB: i64 = 16384;
 
 /// Handles a `settings.view` invocation from the host.
 ///
-/// Redraws on `open`, `settings`, and `resize` events; returns `{}` for `close`
-/// and other non-layout events so the host retains the last view or closes it
-/// without error.
-pub fn view_function(params: Value, context: &Context) -> Result<Value, FunctionError> {
+/// Ordinary redraws only present state. An explicit check inspects local
+/// server layouts; full content verification belongs to runtime preparation.
+pub fn view_function(
+    session: &crate::settings_session::SettingsSession,
+    params: Value,
+    context: &Context,
+) -> Result<Value, FunctionError> {
     context.check_cancelled()?;
     let request = parse_request(&params)?;
-    if !matches!(request.event, "open" | "settings" | "resize") {
+    let check = request.region == LANGUAGE_REGION
+        && request.event == "click"
+        && params["node"] == "check-jdtls";
+    if !check && !matches!(request.event, "open" | "settings" | "resize") {
         return Ok(json!({}));
     }
     let words = words_for_language(request.language);
@@ -99,7 +105,39 @@ pub fn view_function(params: Value, context: &Context) -> Result<Value, Function
             .into());
         }
     };
-    Ok(json!({ "view": [canvas] }))
+    let mut view = Vec::new();
+    if request.region == LANGUAGE_REGION {
+        let zh = request.language.to_ascii_lowercase().starts_with("zh");
+        let configured = settings.language_server_home.as_str();
+        let status = context
+            .workspace_context()
+            .and_then(|ws| session.service_environment(ws, configured));
+        let label = |text: &str| json!({"type":"label","text":text});
+        if let Some(lines) = status {
+            view.push(label(if zh {
+                "上次启动检查采用的环境"
+            } else {
+                "Environment selected at last launch check"
+            }));
+            view.extend(lines.iter().map(|line| label(line)));
+        } else {
+            view.push(label(if zh {
+                "当前选择尚无启动检查结果"
+            } else {
+                "No launch check recorded for this selection"
+            }));
+        }
+        view.push(json!({"type":"button","id":"check-jdtls","text":if zh { "检查本机语言服务器目录" } else { "Check local language server folders" }}));
+        if check {
+            let lines = crate::managed_runtimes::check_local_servers(configured, zh, &|| {
+                context.check_cancelled().map_err(Into::into)
+            })?;
+            view.extend(lines.iter().map(|line| label(line)));
+        }
+        view.push(json!({"type":"tool","tool":crate::launch::SERVER_RUNTIME_TOOL}));
+    }
+    view.push(canvas);
+    Ok(json!({ "view": view }))
 }
 
 struct ParsedRequest<'a> {

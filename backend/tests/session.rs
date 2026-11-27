@@ -300,6 +300,35 @@ fn the_backend_reports_restricted_facts_and_suppresses_reads() {
 }
 
 #[test]
+fn java_settings_checks_a_selected_folder_only_after_the_button_click() {
+    let mut host = Host::start();
+    host.initialize();
+    let mut event = json!({
+        "event":"open", "language":"zh-Hans", "surface":{"settingRegionID":"language"},
+        "settings":{"effective":{"languageServerHome":"invalid-relative-path"}}
+    });
+    let opened = host.invoke(1, "settings.view", event.clone());
+    let nodes = opened["result"]["view"]
+        .as_array()
+        .expect("language settings view");
+    assert!(nodes
+        .iter()
+        .any(|n| n["type"] == "tool" && n["tool"] == "jdtls-runtime"));
+    assert!(nodes.iter().any(|n| n["id"] == "check-jdtls"));
+    event["event"] = json!("click");
+    event["node"] = json!("check-jdtls");
+    let checked = host.invoke(2, "settings.view", event);
+    assert!(checked["result"]["view"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|n| n["text"]
+            .as_str()
+            .is_some_and(|s| s.contains("invalid-relative-path") && s.contains("绝对路径"))));
+    assert_eq!(host.close(), 1);
+}
+
+#[test]
 fn initialize_without_lithe_logging_is_refused() {
     let mut host = Host::start();
     host.request(

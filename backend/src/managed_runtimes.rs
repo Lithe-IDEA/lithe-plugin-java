@@ -286,9 +286,13 @@ pub fn inspect_jdk(home: &Path, os: &str, arch: &str) -> Option<(PathBuf, String
     Some((home, version.to_owned()))
 }
 
+fn matches_size(home: &Path, pin: &PinnedFile) -> bool {
+    fs::metadata(home.join(&pin.path)).is_ok_and(|m| m.is_file() && m.len() == pin.size)
+}
+
 fn matches_file(home: &Path, pin: &PinnedFile) -> bool {
     let path = home.join(&pin.path);
-    if !fs::metadata(&path).is_ok_and(|metadata| metadata.is_file() && metadata.len() == pin.size) {
+    if !matches_size(home, pin) {
         return false;
     }
     let Ok(file) = File::open(path) else {
@@ -313,6 +317,17 @@ fn inspect_server_with(
     arch: &str,
     profile: &ServerProfile,
     check_cancelled: &dyn Fn() -> Result<(), FunctionError>,
+) -> Result<Option<ServerInstallation>, FunctionError> {
+    inspect_layout(home, os, arch, profile, check_cancelled, matches_file)
+}
+
+fn inspect_layout(
+    home: &Path,
+    os: &str,
+    arch: &str,
+    profile: &ServerProfile,
+    check_cancelled: &dyn Fn() -> Result<(), FunctionError>,
+    matches: fn(&Path, &PinnedFile) -> bool,
 ) -> Result<Option<ServerInstallation>, FunctionError> {
     let Some(configuration) = jdtls::configuration_name(os, arch) else {
         return Ok(None);
@@ -348,7 +363,7 @@ fn inspect_server_with(
     };
     for pin in std::iter::once(config).chain(&profile.files) {
         check_cancelled()?;
-        if !matches_file(&server.home, pin) {
+        if !matches(&server.home, pin) {
             return Ok(None);
         }
     }
@@ -363,6 +378,111 @@ pub fn inspect_server(
     check_cancelled: &dyn Fn() -> Result<(), FunctionError>,
 ) -> Result<Option<ServerInstallation>, FunctionError> {
     inspect_server_with(home, os, arch, &ServerProfile::pinned()?, check_cancelled)
+}
+
+/// Checks local server candidates only when requested from settings. A successful
+/// local probe is not a claim that the host chose it over a managed installation.
+pub fn check_local_servers(
+    configured: &str,
+    zh: bool,
+    check_cancelled: &dyn Fn() -> Result<(), FunctionError>,
+) -> Result<Vec<String>, FunctionError> {
+    let os = std::env::consts::OS;
+    let arch = match std::env::consts::ARCH {
+        "aarch64" => "arm64",
+        arch => arch,
+    };
+    let profile = ServerProfile::pinned()?;
+    let explicit = !configured.is_empty();
+    let homes = if explicit {
+        vec![("setting", PathBuf::from(configured))]
+    } else {
+        jdtls::candidate_sources(&SearchEnvironment::current(), os)
+    };
+    let mut lines = Vec::new();
+    let mut seen = BTreeSet::new();
+    let limited = homes.len() > MAX_DISCOVERED_SERVERS;
+    for (source, home) in homes.into_iter().take(MAX_DISCOVERED_SERVERS) {
+        check_cancelled()?;
+        if !seen.insert(home.clone()) {
+            continue;
+        }
+        let (en, cn) = if !explicit && !home.is_dir() {
+            ("Folder not found", "未找到目录")
+        } else if home.is_absolute()
+            && inspect_layout(&home, os, arch, &profile, check_cancelled, matches_size)?.is_some()
+        {
+            (
+                "Layout matches 1.61.0; Toolchains verifies file contents",
+                "目录结构符合 1.61.0，可在工具链页校验文件内容",
+            )
+        } else {
+            server_rejection(&home, os, arch)
+        };
+        let origin = match (source, zh) {
+            ("setting", true) => "手动选择",
+            ("setting", false) => "Selected folder",
+            ("package", true) => "包管理器",
+            ("package", false) => "Package manager",
+            ("extension", true) => "编辑器扩展",
+            ("extension", false) => "Editor extension",
+            _ => source,
+        };
+        lines.push(format!(
+            "{origin} · {} · {}",
+            home.display(),
+            if zh { cn } else { en }
+        ));
+    }
+    if lines.is_empty() {
+        lines.push(if zh {
+            "在已检查的位置未找到本机 JDT LS。可选择语言服务器目录，或使用工具链页准备托管环境。"
+        } else {
+            "No local JDT LS found in the checked locations. Choose a server folder or prepare the managed environment in Toolchains."
+        }.into());
+    }
+    if limited {
+        lines.push(
+            if zh {
+                "已达到 32 个候选目录的检查上限。"
+            } else {
+                "Checked the first 32 candidate folders."
+            }
+            .into(),
+        );
+    }
+    Ok(lines)
+}
+
+fn server_rejection(home: &Path, os: &str, arch: &str) -> (&'static str, &'static str) {
+    if !home.is_absolute() || !home.is_dir() {
+        return (
+            "Choose an existing absolute server folder",
+            "请选择存在的语言服务器绝对路径",
+        );
+    }
+    let roots = [home.to_path_buf(), home.join("libexec")];
+    if let Some(config) = jdtls::configuration_name(os, arch) {
+        if !roots
+            .iter()
+            .any(|root| root.join(config).join("config.ini").is_file())
+        {
+            return ("Missing platform config.ini", "缺少当前平台的 config.ini");
+        }
+    }
+    if !roots
+        .iter()
+        .any(|root| jdtls::launcher_in(&root.join("plugins")).is_some())
+    {
+        return (
+            "Expected one Equinox launcher JAR",
+            "需要一个 Equinox 启动 JAR",
+        );
+    }
+    (
+        "Files differ from verified JDT LS 1.61.0",
+        "文件与已验证的 JDT LS 1.61.0 不一致",
+    )
 }
 
 fn resolve_with(
@@ -442,9 +562,12 @@ Choose a valid JDK or clear its toolchain override to use the managed runtime.",
         let candidates = absolute(params["candidates"].get(JDTLS_ID))
             .into_iter()
             .chain(
-                jdtls::candidates(environment, os)
-                    .into_iter()
-                    .take(MAX_DISCOVERED_SERVERS),
+                std::iter::once_with(|| {
+                    jdtls::candidates(environment, os)
+                        .into_iter()
+                        .take(MAX_DISCOVERED_SERVERS)
+                })
+                .flatten(),
             );
         let mut found = None;
         let mut seen = BTreeSet::new();
@@ -474,7 +597,8 @@ Choose a valid JDK or clear its toolchain override to use the managed runtime.",
 /// invalid explicit configuration is an SDK-reported error. Cancellation is
 /// checked between each bounded file read and never becomes a failure log.
 pub fn resolve_runtimes_function(params: Value, context: &Context) -> Result<Value, FunctionError> {
-    localize_result(
+    let language = params["language"].as_str().unwrap_or_default();
+    let result = localize_result(
         (|| {
             resolve_with(
                 &params,
@@ -483,8 +607,26 @@ pub fn resolve_runtimes_function(params: Value, context: &Context) -> Result<Val
                 &|| context.check_cancelled().map_err(Into::into),
             )
         })(),
-        params["language"].as_str().unwrap_or_default(),
-    )
+        language,
+    );
+    if let Err(FunctionError::Plugin(error)) = &result {
+        if error.code() == SERVER_INCOMPATIBLE {
+            if let Some(home) = absolute(params["settings"].get(SERVER_HOME_SETTING)) {
+                let (en, zh) = server_rejection(
+                    &home,
+                    params["platform"]["os"].as_str().unwrap_or_default(),
+                    params["platform"]["arch"].as_str().unwrap_or_default(),
+                );
+                let message = if language.to_ascii_lowercase().starts_with("zh") {
+                    format!("{zh}。请重新选择语言服务器目录，或清除选择以使用托管环境。")
+                } else {
+                    format!("{en}. Choose another server folder or clear it to use the managed environment.")
+                };
+                return Err(PluginError::new(SERVER_INCOMPATIBLE, message).into());
+            }
+        }
+    }
+    result
 }
 
 fn localize_result(
@@ -739,6 +881,31 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn local_probe_distinguishes_missing_configuration_and_other_distributions() {
+        let fixture = Fixture::new();
+        let (home, profile) = fixture.server("server");
+        let checked = || Ok(());
+        assert!(
+            inspect_layout(&home, "linux", "x86_64", &profile, &checked, matches_size)
+                .unwrap()
+                .is_some()
+        );
+        fs::write(home.join("plugins/extra.jar"), b"other distribution").unwrap();
+        assert!(
+            inspect_layout(&home, "linux", "x86_64", &profile, &checked, matches_size)
+                .unwrap()
+                .is_none()
+        );
+        assert!(server_rejection(&home, "linux", "x86_64")
+            .0
+            .contains("differ"));
+        fs::remove_file(home.join("config_linux/config.ini")).unwrap();
+        assert!(server_rejection(&home, "linux", "x86_64")
+            .0
+            .contains("config.ini"));
     }
 
     #[test]

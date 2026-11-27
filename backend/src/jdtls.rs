@@ -243,7 +243,7 @@ pub fn manifest_java_version(manifest: &str) -> Option<u64> {
 
 /// The one Equinox launcher JAR in `directory`. None or several mean the
 /// folder is no usable installation.
-fn launcher_in(directory: &Path) -> Option<PathBuf> {
+pub(crate) fn launcher_in(directory: &Path) -> Option<PathBuf> {
     let mut launchers: Vec<PathBuf> = fs::read_dir(directory)
         .ok()?
         .filter_map(Result::ok)
@@ -312,12 +312,58 @@ pub fn locate_for_runtime(
 /// The folders [`locate`] tries without a configured one, in order. A folder
 /// may hold no installation; [`inspect`] decides.
 pub fn candidates(environment: &SearchEnvironment, os: &str) -> Vec<PathBuf> {
+    candidate_sources(environment, os)
+        .into_iter()
+        .map(|(_, path)| path)
+        .collect()
+}
+
+/// Identifies where each candidate came from, in the same order used to launch.
+pub(crate) fn candidate_sources(
+    environment: &SearchEnvironment,
+    os: &str,
+) -> Vec<(&'static str, PathBuf)> {
     let mut folders = Vec::new();
-    folders.extend(environment.server_home.clone());
-    folders.extend(launcher_installations(environment.path.as_ref(), os));
-    folders.extend(package_manager_folders(environment, os));
+    folders.extend(
+        environment
+            .server_home
+            .clone()
+            .map(|path| ("JDTLS_HOME", path)),
+    );
+    folders.extend(
+        launcher_installations(environment.path.as_ref(), os)
+            .into_iter()
+            .map(|path| ("PATH", path)),
+    );
+    folders.extend(
+        package_manager_folders(environment, os)
+            .into_iter()
+            .map(|path| ("package", path)),
+    );
     if let Some(home) = &environment.home {
-        folders.extend(editor_extension_servers(home));
+        folders.extend(
+            editor_extension_servers(home)
+                .into_iter()
+                .map(|path| ("extension", path)),
+        );
+        if os == "macos" {
+            // Other editors can install the server at this fixed depth. Probe only this
+            // suffix, never descend through an application's other data.
+            if let Ok(entries) = fs::read_dir(home.join("Library/Application Support")) {
+                let mut servers: Vec<_> = entries
+                    .take(256)
+                    .filter_map(Result::ok)
+                    .map(|entry| entry.path().join("tools/jdtls"))
+                    .filter(|server| server.is_dir())
+                    .collect();
+                servers.sort();
+                folders.extend(
+                    servers
+                        .into_iter()
+                        .map(|path| ("Application Support", path)),
+                );
+            }
+        }
     }
     folders
 }
@@ -594,6 +640,21 @@ mod tests {
                 .home,
             extensions.join("redhat.java-1.58.0-darwin-arm64/server")
         );
+    }
+
+    #[test]
+    fn macos_application_tools_are_discovered_only_at_the_reported_depth() {
+        let temp = TempDir::new();
+        let support = temp.0.join("Library/Application Support");
+        let home = support.join("An Editor/tools/jdtls");
+        install(&home, &["config_mac_arm"]);
+        let nested = support.join("Another/nested/tools/jdtls");
+        install(&nested, &["config_mac_arm"]);
+        let environment = environment(&temp.0);
+        let found = candidates(&environment, "macos");
+        assert!(found.contains(&home));
+        assert!(!found.contains(&nested));
+        assert!(!candidates(&environment, "windows").contains(&home));
     }
 
     #[test]
