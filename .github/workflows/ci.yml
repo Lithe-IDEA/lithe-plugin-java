@@ -1,7 +1,7 @@
 name: CI
 
-# Draft pull requests only run the Linux checks. The macOS package job starts
-# when a pull request is ready for review and on every push to main.
+# Draft pull requests only run the Linux checks. Windows tests and macOS
+# packaging run on ready pull requests and on every push to main.
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
@@ -43,6 +43,25 @@ jobs:
         run: cargo test --workspace --locked
       - name: Check the pinned plugin SDK release
         run: scripts/verify-sdk-lock.sh --download
+
+  windows:
+    name: Test Windows x64 backend
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      # Match the static CRT used by the release backend.
+      RUSTFLAGS: -C target-feature=+crt-static
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@v2
+      - name: Test the native Windows backend
+        run: cargo test --workspace --locked --target x86_64-pc-windows-msvc
 
   package:
     name: Build and verify the macOS packages
