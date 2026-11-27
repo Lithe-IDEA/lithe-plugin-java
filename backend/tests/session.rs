@@ -311,14 +311,32 @@ fn java_settings_checks_a_selected_folder_only_after_the_button_click() {
     let nodes = opened["result"]["view"]
         .as_array()
         .expect("language settings view");
-    assert!(nodes
-        .iter()
-        .any(|n| n["type"] == "tool" && n["tool"] == "jdtls-runtime"));
-    assert!(nodes.iter().any(|n| n["id"] == "check-jdtls"));
+    assert_eq!(nodes[0]["type"], "canvas");
+    assert_eq!(nodes[1]["action"], "libraries");
+    let section = &nodes[2];
+    assert_eq!(section["title"], "语言服务器");
+    let controls = section["children"].as_array().unwrap();
+    assert_eq!(controls[1]["setting"], "heapMaxMB");
+    assert_eq!(controls[2]["setting"], "languageServerHome");
+    assert_eq!(controls[3]["setting"], "logLevel");
+    let row = &controls[0]["children"];
+    assert_eq!(row[0]["type"], "textField");
+    assert_eq!(row[0]["label"], "Java 环境");
+    assert_eq!(row[0]["enabled"], false);
+    assert!(row[0]["value"]
+        .as_str()
+        .unwrap()
+        .contains("JDK for JDT LS · Java Support"));
+    assert!(row[0]["info"].as_str().is_some_and(|s| !s.is_empty()));
+    assert_eq!(row[1]["id"], "check-jdtls");
+    assert_eq!(row[1]["text"], "检查");
+    assert_eq!(row.as_array().unwrap().len(), 2);
     event["event"] = json!("click");
     event["node"] = json!("check-jdtls");
     let checked = host.invoke(2, "settings.view", event);
-    assert!(checked["result"]["view"]
+    let checked_rows = checked["result"]["view"][2]["children"].as_array().unwrap();
+    assert!(checked_rows.iter().all(|node| node["type"] != "tool"));
+    assert!(checked["result"]["view"][2]["children"]
         .as_array()
         .unwrap()
         .iter()

@@ -745,9 +745,6 @@
       "description": "Optional folder of the verified Eclipse JDT Language Server 1.61.0. Leave empty to reuse a compatible installation or let Lithe prepare the pinned server and its separate Java 25 runtime. This does not change the project JDK.",
       "default": "",
       "placeholder": "Automatic",
-      "page": {
-        "languageID": "java"
-      },
       "section": "Language server"
     },
     {
@@ -759,7 +756,6 @@
       "minimum": 2048,
       "maximum": 16384,
       "unit": "MB",
-      "page": {"languageID": "java"},
       "section": "Language server"
     },
     {
@@ -774,7 +770,6 @@
         { "value": "WARNING", "title": "Warnings" },
         { "value": "SEVERE", "title": "Errors only" }
       ],
-      "page": {"languageID": "java"},
       "section": "Language server"
     },
     {
@@ -1071,7 +1066,7 @@
       ]
     }
   ],
-  "settingActions": [{"id": "compiler", "title": "Read compiler settings", "description": "Read actual Eclipse JDT project settings. Save writes the displayed native preferences or library configuration files.", "function": "compiler.settings", "sourceEditor": {"editFunction": "compiler.prepareSettings", "languageID": "java"}, "page": {"compilerID": "java"}}, {"id": "libraries", "title": "Read project structure", "description": "Read each module's source folders, output folder, JRE and dependencies. Save writes Eclipse .classpath files and the library configuration files shown; Maven and Gradle modules are read-only.", "function": "libraries.settings", "sourceEditor": {"editFunction": "compiler.prepareSettings", "languageID": "java"}, "page": {"languageID": "java"}}],
+  "settingActions": [{"id": "compiler", "title": "Read compiler settings", "description": "Read actual Eclipse JDT project settings. Save writes the displayed native preferences or library configuration files.", "function": "compiler.settings", "sourceEditor": {"editFunction": "compiler.prepareSettings", "languageID": "java"}, "page": {"compilerID": "java"}}, {"id": "libraries", "title": "Read project structure", "description": "Read each module's source folders, output folder, JRE and dependencies. Save writes Eclipse .classpath files and the library configuration files shown; Maven and Gradle modules are read-only.", "function": "libraries.settings", "sourceEditor": {"editFunction": "compiler.prepareSettings", "languageID": "java"}}],
   "settingRegions": [
     {
       "id": "language",
