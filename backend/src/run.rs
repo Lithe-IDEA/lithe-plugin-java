@@ -1538,8 +1538,11 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 /// YAML (`MalformedInputException`) although it starts from IDEA. The host's
 /// Run window decodes the process output as UTF-8, so the console streams are
 /// fixed as well. A property the launch already sets is left alone.
-const UTF8_ENCODING_PROPERTIES: [&str; 3] =
-    ["file.encoding", "sun.stdout.encoding", "sun.stderr.encoding"];
+const UTF8_ENCODING_PROPERTIES: [&str; 3] = [
+    "file.encoding",
+    "sun.stdout.encoding",
+    "sun.stderr.encoding",
+];
 
 /// Puts the UTF-8 encoding properties ahead of the launch's own arguments,
 /// skipping any the arguments already define.
@@ -1548,7 +1551,9 @@ fn with_utf8_encoding(arguments: Vec<String>) -> Vec<String> {
         .iter()
         .filter(|property| {
             let prefix = format!("-D{property}=");
-            !arguments.iter().any(|argument| argument.starts_with(&prefix))
+            !arguments
+                .iter()
+                .any(|argument| argument.starts_with(&prefix))
         })
         .map(|property| format!("-D{property}=UTF-8"))
         .collect();
@@ -1564,6 +1569,8 @@ mod tests {
     #[test]
     fn launches_read_and_print_text_as_utf8_before_the_main_class() {
         let arguments = with_utf8_encoding(vec![
+            "--module-path".to_owned(),
+            "mods".to_owned(),
             "-cp".to_owned(),
             "classes".to_owned(),
             "example.Main".to_owned(),
@@ -1574,6 +1581,8 @@ mod tests {
                 "-Dfile.encoding=UTF-8",
                 "-Dsun.stdout.encoding=UTF-8",
                 "-Dsun.stderr.encoding=UTF-8",
+                "--module-path",
+                "mods",
                 "-cp",
                 "classes",
                 "example.Main",
@@ -1585,14 +1594,15 @@ mod tests {
     fn an_encoding_the_launch_already_sets_is_kept() {
         let arguments = with_utf8_encoding(vec![
             "-Dfile.encoding=GBK".to_owned(),
+            "-Dsun.stdout.encoding=UTF-8".to_owned(),
             "example.Main".to_owned(),
         ]);
         assert_eq!(
             arguments,
             [
-                "-Dsun.stdout.encoding=UTF-8",
                 "-Dsun.stderr.encoding=UTF-8",
                 "-Dfile.encoding=GBK",
+                "-Dsun.stdout.encoding=UTF-8",
                 "example.Main",
             ]
         );
