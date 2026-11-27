@@ -4,11 +4,163 @@ use super::java_navigation_syntax::navigation_candidates;
 use crate::protocol::JavaNavigationMarkerResponse;
 use serde_json::json;
 use serde_json::Value;
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::time::Instant;
 
 /// Maximum semantic verification work accepted for one document version.
 pub const MAX_JAVA_NAVIGATION_TASKS: usize = 64;
+
+/// Normalized 0-based LSP location returned by `textDocument/implementation`,
+/// `textDocument/definition`, or `java/findLinks`.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct NormalizedNavigationLocation {
+    pub uri: String,
+    pub start_line: u32,
+    pub start_character: u32,
+    pub end_line: u32,
+    pub end_character: u32,
+    pub display_name: Option<String>,
+}
+
+impl NormalizedNavigationLocation {
+    /// Converts this normalized target to an LSP `Location` JSON object for
+    /// `editor/registerActions` `reveal.locations`.
+    pub fn to_lsp_location_value(&self) -> Value {
+        json!({
+            "uri": self.uri,
+            "range": {
+                "start": { "line": self.start_line, "character": self.start_character },
+                "end": { "line": self.end_line, "character": self.end_character },
+            }
+        })
+    }
+
+    /// Short human-readable label (preferring JDT's `displayName`, otherwise the
+    /// URI's file stem — never exposing filesystem paths).
+    pub fn short_label(&self) -> Option<String> {
+        if let Some(name) = self
+            .display_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+        {
+            return Some(name.to_owned());
+        }
+        let parsed = url::Url::parse(&self.uri).ok()?;
+        let segment = parsed
+            .path_segments()
+            .and_then(|mut segments| segments.next_back())
+            .filter(|segment| !segment.is_empty())?;
+        let stem = segment
+            .strip_suffix(".java")
+            .or_else(|| segment.strip_suffix(".class"))
+            .unwrap_or(segment);
+        (!stem.is_empty()).then(|| stem.to_owned())
+    }
+}
+
+/// Normalizes JDT LS navigation responses across all three wire shapes:
+/// 1. LSP `Location` (`{uri, range}`)
+/// 2. LSP `LocationLink` (`{targetUri, targetSelectionRange | targetRange}`)
+/// 3. JDT `java/findLinks` (`{location: {uri, range}, displayName?, kindName?}`)
+///
+/// Supports `file:` and `jdt:` (and any valid non-empty URI with a scheme),
+/// deduplicates by `(uri, start.line, start.character)`, and accepts either a
+/// JSON array or a single JSON object.
+pub fn extract_normalized_locations(value: &Value) -> Vec<NormalizedNavigationLocation> {
+    let items: Vec<&Value> = match value {
+        Value::Array(items) => items.iter().collect(),
+        Value::Object(_) => vec![value],
+        _ => return Vec::new(),
+    };
+    let mut out = Vec::with_capacity(items.len());
+    let mut seen = HashSet::new();
+    for item in items {
+        if let Some(loc) = parse_navigation_location(item) {
+            let key = (loc.uri.clone(), loc.start_line, loc.start_character);
+            if seen.insert(key) {
+                out.push(loc);
+            }
+        }
+    }
+    out
+}
+
+fn parse_navigation_location(item: &Value) -> Option<NormalizedNavigationLocation> {
+    let display_name = item
+        .get("displayName")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned);
+
+    if let Some(inner) = item.get("location").filter(|value| value.is_object()) {
+        if let Some(mut loc) = parse_direct_location(inner) {
+            if loc.display_name.is_none() {
+                loc.display_name = display_name;
+            }
+            return Some(loc);
+        }
+    }
+    if let Some(mut loc) = parse_direct_location(item) {
+        if loc.display_name.is_none() {
+            loc.display_name = display_name;
+        }
+        return Some(loc);
+    }
+    let uri = item
+        .get("targetUri")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|uri| is_valid_navigation_uri(uri))?;
+    let range = item
+        .get("targetSelectionRange")
+        .filter(|value| value.is_object())
+        .or_else(|| item.get("targetRange").filter(|value| value.is_object()))?;
+    let (start_line, start_character, end_line, end_character) = parse_lsp_range(range)?;
+    Some(NormalizedNavigationLocation {
+        uri: uri.to_owned(),
+        start_line,
+        start_character,
+        end_line,
+        end_character,
+        display_name,
+    })
+}
+
+fn parse_direct_location(item: &Value) -> Option<NormalizedNavigationLocation> {
+    let uri = item
+        .get("uri")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|uri| is_valid_navigation_uri(uri))?;
+    let range = item.get("range").filter(|value| value.is_object())?;
+    let (start_line, start_character, end_line, end_character) = parse_lsp_range(range)?;
+    Some(NormalizedNavigationLocation {
+        uri: uri.to_owned(),
+        start_line,
+        start_character,
+        end_line,
+        end_character,
+        display_name: None,
+    })
+}
+
+fn parse_lsp_range(range: &Value) -> Option<(u32, u32, u32, u32)> {
+    let start = range.get("start")?;
+    let end = range.get("end").unwrap_or(start);
+    let start_line = u32::try_from(start.get("line")?.as_u64()?).ok()?;
+    let start_character = u32::try_from(start.get("character")?.as_u64()?).ok()?;
+    let end_line = u32::try_from(end.get("line")?.as_u64()?).ok()?;
+    let end_character = u32::try_from(end.get("character")?.as_u64()?).ok()?;
+    Some((start_line, start_character, end_line, end_character))
+}
+
+fn is_valid_navigation_uri(uri: &str) -> bool {
+    !uri.is_empty()
+        && url::Url::parse(uri)
+            .is_ok_and(|parsed| !parsed.scheme().is_empty() && !parsed.path().is_empty())
+}
 
 /// Bounded multi-request projection of JDT LS data into visible gutter markers.
 pub struct JavaNavigationMarkerBatch {
@@ -27,6 +179,11 @@ pub enum JavaNavigationMarkerTask {
     ResolveCodeLens(Value),
     FindImplementations(super::java_navigation_syntax::JavaNavigationCandidate),
     FindSuperImplementation(super::java_navigation_syntax::JavaNavigationCandidate),
+    FindTypeSuperDefinition {
+        candidate: super::java_navigation_syntax::JavaNavigationCandidate,
+        super_line: i64,
+        super_utf16_column: i64,
+    },
 }
 
 impl JavaNavigationMarkerBatch {
@@ -43,13 +200,24 @@ impl JavaNavigationMarkerBatch {
             .collect::<VecDeque<_>>();
         // Parent checks run before child checks so an override arrow can appear
         // even when the fixed task budget is exhausted by a very large type.
-        tasks.extend(
-            candidates
-                .iter()
-                .filter(|candidate| candidate.direction == "up")
-                .cloned()
-                .map(JavaNavigationMarkerTask::FindSuperImplementation),
-        );
+        for candidate in candidates
+            .iter()
+            .filter(|candidate| candidate.direction == "up")
+        {
+            if candidate.super_positions.is_empty() {
+                tasks.push_back(JavaNavigationMarkerTask::FindSuperImplementation(
+                    candidate.clone(),
+                ));
+            } else {
+                for &(super_line, super_utf16_column) in &candidate.super_positions {
+                    tasks.push_back(JavaNavigationMarkerTask::FindTypeSuperDefinition {
+                        candidate: candidate.clone(),
+                        super_line,
+                        super_utf16_column,
+                    });
+                }
+            }
+        }
         tasks.extend(
             candidates
                 .into_iter()
@@ -88,7 +256,8 @@ impl JavaNavigationMarkerBatch {
                 }
             }
             JavaNavigationMarkerTask::FindImplementations(candidate)
-            | JavaNavigationMarkerTask::FindSuperImplementation(candidate) => {
+            | JavaNavigationMarkerTask::FindSuperImplementation(candidate)
+            | JavaNavigationMarkerTask::FindTypeSuperDefinition { candidate, .. } => {
                 let count = raw_location_count(result);
                 if count > 0 {
                     self.semantic_markers.push(JavaNavigationMarkerResponse {
@@ -155,16 +324,26 @@ impl JavaNavigationMarkerTask {
                     }
                 }),
             ),
+            Self::FindTypeSuperDefinition {
+                super_line,
+                super_utf16_column,
+                ..
+            } => (
+                "textDocument/definition",
+                json!({
+                    "textDocument": { "uri": uri },
+                    "position": {
+                        "line": super_line,
+                        "character": super_utf16_column
+                    }
+                }),
+            ),
         }
     }
 }
 
 fn raw_location_count(result: Option<&Value>) -> usize {
-    match result {
-        Some(Value::Array(locations)) => locations.len(),
-        Some(Value::Object(_)) => 1,
-        _ => 0,
-    }
+    result.map_or(0, |value| extract_normalized_locations(value).len())
 }
 
 /// Keeps only JDT LS implementation lenses; reference lenses never drive gutter icons.
@@ -346,5 +525,77 @@ mod tests {
         assert_eq!(filtered.len(), 2);
         assert!(!is_resolved_implementation_lens(&filtered[0]));
         assert!(is_resolved_implementation_lens(&filtered[1]));
+    }
+
+    #[test]
+    fn extract_normalized_locations_handles_all_three_jdt_shapes_and_jdt_uris() {
+        let payload = json!([
+            {
+                "uri": "file:///workspace/src/ImplA.java",
+                "range": { "start": { "line": 4, "character": 6 }, "end": { "line": 4, "character": 11 } }
+            },
+            {
+                "targetUri": "jdt://contents/rt.jar/java.lang/Runnable.class?foo=1",
+                "targetRange": { "start": { "line": 0, "character": 0 }, "end": { "line": 20, "character": 1 } },
+                "targetSelectionRange": { "start": { "line": 2, "character": 17 }, "end": { "line": 2, "character": 25 } }
+            },
+            {
+                "displayName": "Base.greet(String)",
+                "kindName": "superImplementation",
+                "location": {
+                    "uri": "file:///workspace/src/ImplA.java",
+                    "range": { "start": { "line": 4, "character": 6 }, "end": { "line": 4, "character": 11 } }
+                }
+            },
+            {
+                "displayName": "Greeter.greet(String)",
+                "location": {
+                    "uri": "file:///workspace/src/Greeter.java",
+                    "range": { "start": { "line": 1, "character": 11 }, "end": { "line": 1, "character": 16 } }
+                }
+            },
+            {
+                "uri": "relative/ignored.java",
+                "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 1 } }
+            }
+        ]);
+
+        let normalized = extract_normalized_locations(&payload);
+
+        assert_eq!(normalized.len(), 3);
+        assert_eq!(normalized[0].short_label().as_deref(), Some("ImplA"));
+        assert_eq!(
+            normalized[1].uri,
+            "jdt://contents/rt.jar/java.lang/Runnable.class?foo=1"
+        );
+        assert_eq!(normalized[1].start_line, 2);
+        assert_eq!(normalized[1].short_label().as_deref(), Some("Runnable"));
+        assert_eq!(
+            normalized[2].short_label().as_deref(),
+            Some("Greeter.greet(String)")
+        );
+    }
+
+    #[test]
+    fn batch_plans_type_super_definitions_alongside_methods() {
+        let source = "class Sub extends Base implements Greeter {\n    void run() {}\n}\n";
+        let now = Instant::now();
+        let mut batch = JavaNavigationMarkerBatch::new(&[], source, now, now);
+
+        let first = batch.take_next().expect("super definition task");
+        let (method, params) = first.request("file:///Sub.java");
+        assert_eq!(method, "textDocument/definition");
+        assert_eq!(params["position"]["line"], 0);
+
+        batch.record_active_result(Some(&json!([
+            {
+                "uri": "file:///Base.java",
+                "range": { "start": { "line": 0, "character": 6 }, "end": { "line": 0, "character": 10 } }
+            }
+        ])));
+
+        let second = batch.take_next().expect("interface super definition task");
+        let (method2, _) = second.request("file:///Sub.java");
+        assert_eq!(method2, "textDocument/definition");
     }
 }

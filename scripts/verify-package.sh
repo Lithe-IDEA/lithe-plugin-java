@@ -52,7 +52,8 @@ for notice in LICENSE NOTICE; do
 done
 node "$ROOT_DIR/scripts/package/collect-notices.mjs" --verify "$PACKAGE"
 
-allowed=(plugin.json bin icons templates l10n jdtls-extensions LICENSE NOTICE licenses)
+allowed=(plugin.json bin icons templates l10n grammars jdtls-extensions LICENSE NOTICE licenses)
+[[ -f "$PACKAGE/grammars/jsp.tmLanguage.json" ]] || fail "JSP TextMate grammar is missing"
 for entry in "$PACKAGE"/*(DN); do
     (( ${allowed[(Ie)${entry:t}]} )) || fail "undeclared top-level entry ${entry:t}"
 done
@@ -89,7 +90,7 @@ for declared in \
     jdtls-extensions/java-test/runner/com.microsoft.java.test.runner-jar-with-dependencies.jar; do
     [[ -f "$PACKAGE/$declared" ]] || fail "the backend expects $declared, which the package does not contain"
 done
-for directory in jdtls-extensions/java-debug jdtls-extensions/java-test/extensions; do
+for directory in jdtls-extensions/java-debug jdtls-extensions/java-test/extensions jdtls-extensions/project-model; do
     [[ -n "$(find "$PACKAGE/$directory" -maxdepth 1 -name '*.jar' -print -quit 2>/dev/null)" ]] ||
         fail "extension bundle directory $directory holds no bundles"
 done

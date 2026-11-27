@@ -88,6 +88,59 @@ impl Host {
         self.invoke_with_logs(id, function, params).0
     }
 
+    fn respond(&mut self, id: Value, result: Value) {
+        let body = json!({"jsonrpc": "2.0", "id": id, "result": result}).to_string();
+        self.input
+            .as_mut()
+            .expect("open input")
+            .write_all(format!("Content-Length: {}\r\n\r\n{body}", body.len()).as_bytes())
+            .expect("write response to backend");
+    }
+
+    fn notify(&mut self, method: &str, params: Value) {
+        let body = json!({"jsonrpc": "2.0", "method": method, "params": params}).to_string();
+        self.input
+            .as_mut()
+            .expect("open input")
+            .write_all(format!("Content-Length: {}\r\n\r\n{body}", body.len()).as_bytes())
+            .expect("write notification to backend");
+    }
+
+    fn run_until(
+        &mut self,
+        mut stop: impl FnMut(&Value) -> bool,
+        mut on_host_request: impl FnMut(&str, &Value) -> Value,
+    ) -> (Value, Vec<Value>) {
+        let mut logs = Vec::new();
+        loop {
+            let frame = self
+                .frames
+                .recv_timeout(WAIT)
+                .expect("a frame from the backend in time");
+            if frame.get("method").and_then(Value::as_str) == Some("lithe/log") {
+                logs.push(frame["params"].clone());
+            } else if let Some(method) = frame.get("method").and_then(Value::as_str) {
+                let req_id = frame["id"].clone();
+                let answer = on_host_request(method, &frame["params"]);
+                let done = stop(&frame);
+                self.respond(req_id, answer);
+                if done {
+                    return (frame, logs);
+                }
+            } else if stop(&frame) {
+                return (frame, logs);
+            }
+        }
+    }
+
+    fn run_until_answer(
+        &mut self,
+        id: i64,
+        on_host_request: impl FnMut(&str, &Value) -> Value,
+    ) -> (Value, Vec<Value>) {
+        self.run_until(|frame| frame["id"] == id, on_host_request)
+    }
+
     /// Sends `initialize` as a host that offers plugin functions and
     /// `litheLogging` 0, and returns the answer.
     fn initialize(&mut self) -> Value {
@@ -247,6 +300,53 @@ fn the_backend_reports_restricted_facts_and_suppresses_reads() {
 }
 
 #[test]
+fn java_settings_checks_a_selected_folder_only_after_the_button_click() {
+    let mut host = Host::start();
+    host.initialize();
+    let mut event = json!({
+        "event":"open", "language":"zh-Hans", "surface":{"settingRegionID":"language"},
+        "settings":{"effective":{"languageServerHome":"invalid-relative-path"}}
+    });
+    let opened = host.invoke(1, "settings.view", event.clone());
+    let nodes = opened["result"]["view"]
+        .as_array()
+        .expect("language settings view");
+    assert_eq!(nodes[0]["type"], "canvas");
+    assert_eq!(nodes[1]["action"], "libraries");
+    let section = &nodes[2];
+    assert_eq!(section["title"], "语言服务器");
+    let controls = section["children"].as_array().unwrap();
+    assert_eq!(controls[1]["setting"], "heapMaxMB");
+    assert_eq!(controls[2]["setting"], "languageServerHome");
+    assert_eq!(controls[3]["setting"], "logLevel");
+    let row = &controls[0]["children"];
+    assert_eq!(row[0]["type"], "textField");
+    assert_eq!(row[0]["label"], "Java 环境");
+    assert_eq!(row[0]["enabled"], false);
+    assert!(row[0]["value"]
+        .as_str()
+        .unwrap()
+        .contains("JDK for JDT LS · Java Support"));
+    assert!(row[0]["info"].as_str().is_some_and(|s| !s.is_empty()));
+    assert_eq!(row[1]["id"], "check-jdtls");
+    assert_eq!(row[1]["text"], "检查");
+    assert_eq!(row.as_array().unwrap().len(), 2);
+    event["event"] = json!("click");
+    event["node"] = json!("check-jdtls");
+    let checked = host.invoke(2, "settings.view", event);
+    let checked_rows = checked["result"]["view"][2]["children"].as_array().unwrap();
+    assert!(checked_rows.iter().all(|node| node["type"] != "tool"));
+    assert!(checked["result"]["view"][2]["children"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|n| n["text"]
+            .as_str()
+            .is_some_and(|s| s.contains("invalid-relative-path") && s.contains("绝对路径"))));
+    assert_eq!(host.close(), 1);
+}
+
+#[test]
 fn initialize_without_lithe_logging_is_refused() {
     let mut host = Host::start();
     host.request(
@@ -276,4 +376,205 @@ fn binary_content_callback_is_available_before_provider_registration() {
         initialized.to_string().contains("java.classFileContents"),
         "{initialized}"
     );
+}
+
+#[test]
+fn navigation_collect_and_invoke_round_trip_with_quiet_collect_logging() {
+    let mut host = Host::start();
+    let initialized = host.initialize();
+    let encoded = initialized.to_string();
+    assert!(encoded.contains("java.navigation.collect"), "{encoded}");
+    assert!(encoded.contains("java.navigation.invoke"), "{encoded}");
+
+    let (workspace_root, greeter_uri, impl_uri) = if cfg!(windows) {
+        (
+            r"C:\workspace\nav",
+            "file:///C:/workspace/nav/src/Greeter.java",
+            "file:///C:/workspace/nav/src/Impl.java",
+        )
+    } else {
+        (
+            "/workspace/nav",
+            "file:///workspace/nav/src/Greeter.java",
+            "file:///workspace/nav/src/Impl.java",
+        )
+    };
+    let context_ref = json!({
+        "contextID": "ctx-nav",
+        "generation": 1
+    });
+    let full_context = json!({
+        "contextID": "ctx-nav",
+        "generation": 1,
+        "folders": [{"rootID": "r1", "path": workspace_root}]
+    });
+    host.notify("initialized", json!({}));
+    host.notify(
+        "lithe/host/languageServer/didChangeState",
+        json!({
+            "context": context_ref,
+            "serverID": "java",
+            "generation": 1,
+            "state": "running"
+        }),
+    );
+
+    // Wait until navigation actions registration occurs (meaning didChangeState processed "running").
+    host.run_until(
+        |frame| {
+            frame.get("method").and_then(Value::as_str) == Some("lithe/host/editor/registerActions")
+                && frame.pointer("/params/id").and_then(Value::as_str) == Some("java.navigation")
+        },
+        |method, _params| match method {
+            "lithe/host/workspace/listContexts" => json!({"contexts": [full_context]}),
+            "lithe/host/workspace/getContext" => full_context.clone(),
+            "lithe/host/editor/registerActions" => json!({"subscriptionID": "sub-nav-1"}),
+            "lithe/host/documents/registerContentProvider" => {
+                json!({"subscriptionID": "sub-content-1"})
+            }
+            _ => json!({}),
+        },
+    );
+
+    let source = "interface Greeter { void greet(); }\nclass Impl implements Greeter {\n    public void greet() {}\n}\n";
+    let mut seen_methods = Vec::new();
+    host.request(
+        10,
+        "lithe/function/invoke",
+        json!({
+            "functionID": "java.navigation.collect",
+            "operationID": "op-nav-collect",
+            "context": context_ref,
+            "params": {
+                "document": {"path": "src/App.java"},
+                "text": source
+            }
+        }),
+    );
+    let (collect_resp, collect_logs) = host.run_until_answer(10, |method, params| {
+        seen_methods.push(method.to_owned());
+        match method {
+            "lithe/host/workspace/listContexts" => json!({"contexts": [full_context]}),
+            "lithe/host/workspace/getContext" => full_context.clone(),
+            "lithe/host/getCapabilities" => json!({
+                "services": {
+                    "editor": {
+                        "options": {
+                            "actionIcons": [
+                                "navigate-implemented",
+                                "navigate-implementing",
+                                "navigate-overridden",
+                                "navigate-overriding"
+                            ]
+                        }
+                    }
+                }
+            }),
+            "lithe/host/editor/registerActions" => json!({"subscriptionID": "sub-nav-1"}),
+            "lithe/host/languageServer/request" => {
+                match params.get("method").and_then(Value::as_str) {
+                    Some("textDocument/definition") => json!({
+                        "value": [{
+                            "uri": greeter_uri,
+                            "range": {"start": {"line": 0, "character": 10}, "end": {"line": 0, "character": 17}}
+                        }]
+                    }),
+                    Some("textDocument/implementation") => json!({
+                        "value": [{
+                            "uri": impl_uri,
+                            "range": {"start": {"line": 1, "character": 6}, "end": {"line": 1, "character": 10}}
+                        }]
+                    }),
+                    Some("java/findLinks") => json!({
+                        "value": [{
+                            "displayName": "Greeter.greet()",
+                            "location": {
+                                "uri": greeter_uri,
+                                "range": {"start": {"line": 0, "character": 25}, "end": {"line": 0, "character": 30}}
+                            }
+                        }]
+                    }),
+                    _ => json!({"value": []}),
+                }
+            }
+            _ => json!({}),
+        }
+    });
+
+    let actions = collect_resp["result"]["actions"]
+        .as_array()
+        .unwrap_or_else(|| panic!("expected actions array, got {collect_resp}"));
+    assert!(
+        !actions.is_empty(),
+        "expected navigation actions: {collect_resp}"
+    );
+    assert!(
+        actions.iter().any(|a| a["icon"] == "navigate-implemented"),
+        "expected navigate-implemented: {actions:?}"
+    );
+    assert!(
+        actions.iter().any(|a| a["icon"] == "navigate-implementing"),
+        "expected navigate-implementing: {actions:?}"
+    );
+    assert!(
+        !collect_logs
+            .iter()
+            .any(|log| log["kind"] == "operationFinished"
+                && log["operation"] == "java.navigation.collect"),
+        "high-frequency collect must suppress INFO operationFinished: {collect_logs:?}"
+    );
+
+    let first_action = actions
+        .iter()
+        .find(|a| a["icon"] == "navigate-implementing")
+        .expect("implementing action");
+    host.request(
+        11,
+        "lithe/function/invoke",
+        json!({
+            "functionID": "java.navigation.invoke",
+            "operationID": "op-nav-invoke",
+            "context": context_ref,
+            "params": {
+                "data": first_action["invoke"]["params"]
+            }
+        }),
+    );
+    let (invoke_resp, invoke_logs) = host.run_until_answer(11, |method, params| match method {
+        "lithe/host/languageServer/request"
+            if params.get("method").and_then(Value::as_str) == Some("textDocument/definition") =>
+        {
+            json!({
+                "value": [{
+                    "uri": greeter_uri,
+                    "range": {"start": {"line": 0, "character": 10}, "end": {"line": 0, "character": 17}}
+                }]
+            })
+        }
+        "lithe/host/languageServer/request" => json!({
+            "value": [{
+                "displayName": "Greeter.greet()",
+                "location": {
+                    "uri": greeter_uri,
+                    "range": {"start": {"line": 0, "character": 25}, "end": {"line": 0, "character": 30}}
+                }
+            }]
+        }),
+        _ => json!({}),
+    });
+
+    let locations = invoke_resp["result"]["reveal"]["locations"]
+        .as_array()
+        .expect("reveal locations");
+    assert_eq!(locations.len(), 1, "{invoke_resp}");
+    assert_eq!(locations[0]["uri"], greeter_uri);
+    assert!(
+        invoke_logs
+            .iter()
+            .any(|log| log["kind"] == "operationFinished"
+                && log["operation"] == "java.navigation.invoke"),
+        "user click invoke must record operationFinished INFO: {invoke_logs:?}"
+    );
+    let _ = seen_methods;
+    assert_eq!(host.close(), 1);
 }

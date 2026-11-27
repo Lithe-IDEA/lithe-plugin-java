@@ -1,37 +1,37 @@
 //! Finds the Eclipse JDT Language Server installed on the user's machine.
 //!
-//! The plugin package does not ship JDT LS or a Java runtime for it, the same
-//! way the Go plugin uses the user's own `gopls`: the user installs JDT LS
-//! with a package manager or an editor, and the launch reads its files from
-//! there. The backend only reads that installation. Equinox gets a writable
-//! copy of the installation's `config.ini` under the host's state directory
-//! (`prepare_jdt_configuration_area`), so neither the backend nor JDT LS
-//! writes into the user's installation.
+//! These read-only discovery helpers enumerate external installations. The
+//! managed-runtime hook in [`crate::managed_runtimes`] applies the stricter
+//! pinned-file qualification before reusing one. Missing dependencies are
+//! downloaded by the host into separate state, never into the plugin package.
 //!
-//! # Where the launch looks
+//! The discovery order is `JDTLS_HOME`, a `jdtls` launcher on `PATH`, common
+//! package managers (Homebrew, Linuxbrew, mason.nvim, Scoop), then installed
+//! VS Code Java extensions. An explicit `languageServerHome` is final.
 //!
-//! [`locate`] takes the first installation of these, in order:
-//!
-//! 1. the `languageServerHome` setting. A folder set there is the user's
-//!    explicit choice, so an unusable one fails the launch instead of falling
-//!    back to another installation;
-//! 2. the `JDTLS_HOME` environment variable;
-//! 3. a `jdtls` launcher on `PATH`, resolved through its symbolic links to the
-//!    installation it belongs to;
-//! 4. the folders package managers install JDT LS into (Homebrew, Linuxbrew,
-//!    mason.nvim, Scoop);
-//! 5. the language server inside an installed VS Code Java extension
-//!    (`redhat.java`), newest version first.
-//!
-//! A folder holds an installation when it, or its `libexec/` (Homebrew keeps
-//! the files there), contains exactly one Equinox launcher JAR in `plugins/`
-//! and the `config_<platform>/config.ini` of the host platform. Nothing else
-//! is checked: JDT LS reports a version it cannot run at `initialize`.
+//! [`inspect`] recognizes the basic launcher/configuration layout only. It
+//! does not assert compatibility with the plugin; the managed hook verifies
+//! the complete bundle set and platform template against the pinned archive.
+//! Mutable Equinox configuration is copied into host-provided state.
 
 use lithe_plugin_sdk::PluginError;
 use std::ffi::OsString;
-use std::fs;
+use std::fs::{self, File};
+use std::io::Read;
 use std::path::{Path, PathBuf};
+use zip::ZipArchive;
+
+/// Oldest Java feature release any JDT LS installation runs on.
+pub const DEFAULT_MINIMUM_JAVA_VERSION: u64 = 21;
+/// Core OSGi bundles whose `META-INF/MANIFEST.MF` declares the Java release
+/// an installation requires (for example `JavaSE-25` in JDT LS 1.63+).
+const CORE_RUNTIME_BUNDLE_PREFIXES: &[&str] = &[
+    "org.eclipse.jdt.ls.core_",
+    "org.eclipse.jdt.core_",
+    "org.eclipse.core.resources_",
+    "org.eclipse.core.filesystem_",
+    "org.eclipse.equinox.common_",
+];
 
 /// No JDT LS installation was found on the machine.
 pub const LAUNCH_SERVER_MISSING: &str = "launch.server_missing";
@@ -95,6 +95,9 @@ pub struct ServerInstallation {
     /// The read-only Equinox configuration of the platform; the launch uses a
     /// writable copy of it.
     pub configuration: PathBuf,
+    /// Oldest Java feature release the bundles of this installation require,
+    /// at least [`DEFAULT_MINIMUM_JAVA_VERSION`].
+    pub minimum_java_version: u64,
 }
 
 /// What [`locate`] reads from the backend's process environment, so tests
@@ -156,21 +159,91 @@ fn installation_at(home: &Path, configuration: &str) -> Option<ServerInstallatio
     // Java cannot load `-jar` or `-javaagent` through a Windows verbatim
     // prefix, so the paths keep their ordinary spelling.
     let home = dunce::canonicalize(home).ok()?;
-    let launcher_jar = launcher_in(&home.join(PLUGINS_DIRECTORY))?;
+    let plugins = home.join(PLUGINS_DIRECTORY);
+    let launcher_jar = launcher_in(&plugins)?;
     let configuration = home.join(configuration);
     if !configuration.join(CONFIG_INI).is_file() {
         return None;
     }
+    let minimum_java_version = required_java_version(&plugins);
     Some(ServerInstallation {
         home,
         launcher_jar,
         configuration,
+        minimum_java_version,
     })
+}
+
+/// Oldest Java feature release the core OSGi bundles in `plugins` declare,
+/// floored at [`DEFAULT_MINIMUM_JAVA_VERSION`]. Unreadable or synthetic JARs
+/// keep the floor.
+pub fn required_java_version(plugins: &Path) -> u64 {
+    let Ok(entries) = fs::read_dir(plugins) else {
+        return DEFAULT_MINIMUM_JAVA_VERSION;
+    };
+    entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let path = entry.path();
+            let name = path.file_name()?.to_str()?;
+            if !name.ends_with(".jar")
+                || !CORE_RUNTIME_BUNDLE_PREFIXES
+                    .iter()
+                    .any(|prefix| name.starts_with(prefix))
+            {
+                return None;
+            }
+            bundle_java_version(&path)
+        })
+        .fold(DEFAULT_MINIMUM_JAVA_VERSION, u64::max)
+}
+
+fn bundle_java_version(jar_path: &Path) -> Option<u64> {
+    let file = File::open(jar_path).ok()?;
+    let mut archive = ZipArchive::new(file).ok()?;
+    let entry = archive.by_name("META-INF/MANIFEST.MF").ok()?;
+    let mut manifest = String::new();
+    entry.take(256 * 1024).read_to_string(&mut manifest).ok()?;
+    manifest_java_version(&manifest)
+}
+
+/// Extracts the highest Java feature version declared in an OSGi
+/// `META-INF/MANIFEST.MF` (`Bundle-RequiredExecutionEnvironment: JavaSE-25` or
+/// `Require-Capability: osgi.ee;filter:="(&(osgi.ee=JavaSE)(version=25))"`).
+pub fn manifest_java_version(manifest: &str) -> Option<u64> {
+    let unfolded = manifest.replace("\r\n ", "").replace("\n ", "");
+    let mut highest = None;
+    for line in unfolded.lines() {
+        let trimmed = line.trim();
+        if !trimmed.starts_with("Bundle-RequiredExecutionEnvironment:")
+            && !trimmed.starts_with("Require-Capability:")
+        {
+            continue;
+        }
+        for marker in ["JavaSE-", "(version="] {
+            let mut rest = trimmed;
+            while let Some(index) = rest.find(marker) {
+                rest = &rest[index + marker.len()..];
+                let digits: String = rest
+                    .chars()
+                    .take_while(|character| character.is_ascii_digit())
+                    .collect();
+                // `JavaSE-1.8` has a dot after `1`; only feature releases >= 9 count.
+                if rest.as_bytes().get(digits.len()) == Some(&b'.') && digits == "1" {
+                    continue;
+                }
+                if let Ok(version) = digits.parse::<u64>() {
+                    highest = Some(highest.map_or(version, |current: u64| current.max(version)));
+                }
+            }
+        }
+    }
+    highest
 }
 
 /// The one Equinox launcher JAR in `directory`. None or several mean the
 /// folder is no usable installation.
-fn launcher_in(directory: &Path) -> Option<PathBuf> {
+pub(crate) fn launcher_in(directory: &Path) -> Option<PathBuf> {
     let mut launchers: Vec<PathBuf> = fs::read_dir(directory)
         .ok()?
         .filter_map(Result::ok)
@@ -200,27 +273,97 @@ pub fn locate(
     os: &str,
     arch: &str,
 ) -> Result<ServerInstallation, PluginError> {
+    locate_for_runtime(configured, environment, os, arch, None)
+}
+
+/// Finds the JDT LS installation for `os` and `arch`, preferring a discovered
+/// installation whose required Java release is at most `runtime_java_version`
+/// when `configured` is `None`. When no discovered installation can run on
+/// `runtime_java_version`, the first installation found is returned so the
+/// caller reports the Java version that installation requires.
+pub fn locate_for_runtime(
+    configured: Option<&Path>,
+    environment: &SearchEnvironment,
+    os: &str,
+    arch: &str,
+    runtime_java_version: Option<u64>,
+) -> Result<ServerInstallation, PluginError> {
     let configuration = configuration_name(os, arch)
         .ok_or_else(|| PluginError::new(LAUNCH_SERVER_MISSING, SERVER_MISSING_MESSAGE))?;
     if let Some(folder) = configured {
         return inspect(folder, configuration)
             .ok_or_else(|| PluginError::new(LAUNCH_SERVER_INVALID, SERVER_INVALID_MESSAGE));
     }
-    candidates(environment, os)
-        .iter()
-        .find_map(|folder| inspect(folder, configuration))
-        .ok_or_else(|| PluginError::new(LAUNCH_SERVER_MISSING, SERVER_MISSING_MESSAGE))
+    let mut first = None;
+    for folder in candidates(environment, os) {
+        let Some(installation) = inspect(&folder, configuration) else {
+            continue;
+        };
+        if runtime_java_version.is_none_or(|feature| installation.minimum_java_version <= feature) {
+            return Ok(installation);
+        }
+        if first.is_none() {
+            first = Some(installation);
+        }
+    }
+    first.ok_or_else(|| PluginError::new(LAUNCH_SERVER_MISSING, SERVER_MISSING_MESSAGE))
 }
 
 /// The folders [`locate`] tries without a configured one, in order. A folder
 /// may hold no installation; [`inspect`] decides.
 pub fn candidates(environment: &SearchEnvironment, os: &str) -> Vec<PathBuf> {
+    candidate_sources(environment, os)
+        .into_iter()
+        .map(|(_, path)| path)
+        .collect()
+}
+
+/// Identifies where each candidate came from, in the same order used to launch.
+pub(crate) fn candidate_sources(
+    environment: &SearchEnvironment,
+    os: &str,
+) -> Vec<(&'static str, PathBuf)> {
     let mut folders = Vec::new();
-    folders.extend(environment.server_home.clone());
-    folders.extend(launcher_installations(environment.path.as_ref(), os));
-    folders.extend(package_manager_folders(environment, os));
+    folders.extend(
+        environment
+            .server_home
+            .clone()
+            .map(|path| ("JDTLS_HOME", path)),
+    );
+    folders.extend(
+        launcher_installations(environment.path.as_ref(), os)
+            .into_iter()
+            .map(|path| ("PATH", path)),
+    );
+    folders.extend(
+        package_manager_folders(environment, os)
+            .into_iter()
+            .map(|path| ("package", path)),
+    );
     if let Some(home) = &environment.home {
-        folders.extend(editor_extension_servers(home));
+        folders.extend(
+            editor_extension_servers(home)
+                .into_iter()
+                .map(|path| ("extension", path)),
+        );
+        if os == "macos" {
+            // Other editors can install the server at this fixed depth. Probe only this
+            // suffix, never descend through an application's other data.
+            if let Ok(entries) = fs::read_dir(home.join("Library/Application Support")) {
+                let mut servers: Vec<_> = entries
+                    .take(256)
+                    .filter_map(Result::ok)
+                    .map(|entry| entry.path().join("tools/jdtls"))
+                    .filter(|server| server.is_dir())
+                    .collect();
+                servers.sort();
+                folders.extend(
+                    servers
+                        .into_iter()
+                        .map(|path| ("Application Support", path)),
+                );
+            }
+        }
     }
     folders
 }
@@ -500,6 +643,21 @@ mod tests {
     }
 
     #[test]
+    fn macos_application_tools_are_discovered_only_at_the_reported_depth() {
+        let temp = TempDir::new();
+        let support = temp.0.join("Library/Application Support");
+        let home = support.join("An Editor/tools/jdtls");
+        install(&home, &["config_mac_arm"]);
+        let nested = support.join("Another/nested/tools/jdtls");
+        install(&nested, &["config_mac_arm"]);
+        let environment = environment(&temp.0);
+        let found = candidates(&environment, "macos");
+        assert!(found.contains(&home));
+        assert!(!found.contains(&nested));
+        assert!(!candidates(&environment, "windows").contains(&home));
+    }
+
+    #[test]
     fn jdtls_home_comes_before_the_other_folders() {
         let temp = TempDir::new();
         let mut search = environment(&temp.0);
@@ -510,5 +668,83 @@ mod tests {
         let folders = candidates(&search, "windows");
         assert!(folders.contains(&temp.0.join("scoop/apps/jdtls/current")));
         assert!(!folders.contains(&PathBuf::from("/opt/homebrew/opt/jdtls")));
+    }
+
+    fn write_bundle_manifest(jar_path: &Path, manifest: &str) {
+        use std::io::Write;
+        let file = File::create(jar_path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        zip.start_file(
+            "META-INF/MANIFEST.MF",
+            zip::write::SimpleFileOptions::default(),
+        )
+        .unwrap();
+        zip.write_all(manifest.as_bytes()).unwrap();
+        zip.finish().unwrap();
+    }
+
+    #[test]
+    fn bundle_manifests_report_the_java_release_the_installation_requires() {
+        assert_eq!(
+            manifest_java_version(
+                "Manifest-Version: 1.0\r\nBundle-RequiredExecutionEnvironment: JavaSE-1.8\r\n"
+            ),
+            None
+        );
+        assert_eq!(
+            manifest_java_version(
+                "Manifest-Version: 1.0\r\nBundle-RequiredExecutionEnvironment: JavaSE-25\r\n"
+            ),
+            Some(25)
+        );
+        assert_eq!(
+            manifest_java_version(
+                "Require-Capability: osgi.ee;filter:=\"(&(osgi.ee=JavaSE)(version=\r\n 21))\"\r\n"
+            ),
+            Some(21)
+        );
+
+        let temp = TempDir::new();
+        let modern = temp.0.join(".vscode/extensions/redhat.java-1.58.0/server");
+        install(&modern, &["config_win"]);
+        write_bundle_manifest(
+            &modern.join("plugins/org.eclipse.core.filesystem_1.12.0.jar"),
+            "Manifest-Version: 1.0\nBundle-RequiredExecutionEnvironment: JavaSE-25\n",
+        );
+        let legacy = temp.0.join(".vscode/extensions/redhat.java-1.47.0/server");
+        install(&legacy, &["config_win"]);
+        write_bundle_manifest(
+            &legacy.join("plugins/org.eclipse.jdt.ls.core_1.61.0.jar"),
+            "Manifest-Version: 1.0\nRequire-Capability: osgi.ee;filter:=\"(&(osgi.ee=JavaSE)(version=21))\"\n",
+        );
+
+        assert_eq!(
+            inspect(&modern, "config_win").unwrap().minimum_java_version,
+            25
+        );
+        assert_eq!(
+            inspect(&legacy, "config_win").unwrap().minimum_java_version,
+            21
+        );
+
+        // On JDK 21, automatic discovery skips the Java-25 server and picks
+        // the Java-21 server; on JDK 25, the newest server wins; on JDK 17,
+        // the first installation is returned so the caller reports its requirement.
+        let search = environment(&temp.0);
+        assert_eq!(
+            locate_for_runtime(None, &search, "windows", "x86_64", Some(21))
+                .unwrap()
+                .home,
+            legacy
+        );
+        assert_eq!(
+            locate_for_runtime(None, &search, "windows", "x86_64", Some(25))
+                .unwrap()
+                .home,
+            modern
+        );
+        let fallback = locate_for_runtime(None, &search, "windows", "x86_64", Some(17)).unwrap();
+        assert_eq!(fallback.home, modern);
+        assert_eq!(fallback.minimum_java_version, 25);
     }
 }

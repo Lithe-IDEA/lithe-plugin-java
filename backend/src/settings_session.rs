@@ -281,6 +281,11 @@ struct WorkspaceState {
     /// same default runtime the host runs.
     java_runtimes: Vec<JdtJavaRuntime>,
     native_root: Option<std::path::PathBuf>,
+    // Verified paths from the last launch resolution, scoped to its workspace generation.
+    service_environment: Option<(u64, String, [String; 2])>,
+    /// The project model settings of the last launch; every push detects
+    /// the model with them, so a push never undoes what the launch configured.
+    model_options: crate::project_model::ModelOptions,
     /// Project updates waiting for a running server.
     pending_projects: Vec<ProjectProfiles>,
     /// Set from the moment the server is running until its collection is
@@ -298,6 +303,8 @@ impl WorkspaceState {
             contributions: Contributions::default(),
             java_runtimes: Vec::new(),
             native_root: None,
+            service_environment: None,
+            model_options: crate::project_model::ModelOptions::default(),
             pending_projects: Vec::new(),
             collecting: None,
         }
@@ -514,16 +521,26 @@ pub fn java_configuration(fragments: &[Value], runtimes: &[JdtJavaRuntime]) -> V
 /// Adds native upstream workspace sources without replacing runtimes or import
 /// contributions. Only the owning plugin's allowlisted keys can be overlaid.
 pub fn with_native_settings(
+    settings: Value,
+    root: &std::path::Path,
+    options: &crate::project_model::ModelOptions,
+) -> Result<Value, FunctionError> {
+    Ok(with_native_model(settings, root, options)?.0)
+}
+
+/// [`with_native_settings`], also returning the project model it detected.
+pub fn with_native_model(
     mut settings: Value,
     root: &std::path::Path,
-) -> Result<Value, FunctionError> {
-    let native = crate::project_settings::native_settings(root)?;
+    options: &crate::project_model::ModelOptions,
+) -> Result<(Value, crate::project_model::ProjectModel), FunctionError> {
+    let (native, model) = crate::project_settings::native_settings(root, options)?;
     for (section, values) in native.as_object().into_iter().flatten() {
         for (key, value) in values.as_object().into_iter().flatten() {
             settings["java"][section][key] = value.clone();
         }
     }
-    Ok(settings)
+    Ok((settings, model))
 }
 
 /// Locks `mutex` even when a panic poisoned it: the guarded data stays
@@ -747,7 +764,7 @@ impl SettingsSession {
     /// documentation.
     fn flush(&self, key: &str, report: &dyn Fn(&str, u64)) {
         let _delivery = lock(&self.gate);
-        let (workspace, params, projects, native_root) = {
+        let (workspace, params, projects, native_root, options) = {
             let mut states = self.lock_states();
             let Some(state) = states.get_mut(key) else {
                 return;
@@ -760,10 +777,11 @@ impl SettingsSession {
                 configuration_params(&state.contributions.fragments(), &state.java_runtimes),
                 std::mem::take(&mut state.pending_projects),
                 state.native_root.clone(),
+                state.model_options.clone(),
             )
         };
         let params = match native_root {
-            Some(root) => match with_native_settings(params["settings"].clone(), &root) {
+            Some(root) => match with_native_settings(params["settings"].clone(), &root, &options) {
                 Ok(settings) => json!({"settings":settings}),
                 Err(_) => {
                     report(SESSION_PUSH_FAILED, 1);
@@ -799,7 +817,7 @@ impl SettingsSession {
         root: &std::path::Path,
     ) -> Result<(), FunctionError> {
         let _delivery = lock(&self.gate);
-        let settings = {
+        let (settings, options) = {
             let states = self.lock_states();
             let state = states.get(workspace.context_id()).ok_or_else(|| {
                 PluginError::new(
@@ -807,9 +825,12 @@ impl SettingsSession {
                     "The Java language server is unavailable.",
                 )
             })?;
-            java_configuration(&state.contributions.fragments(), &state.java_runtimes)
+            (
+                java_configuration(&state.contributions.fragments(), &state.java_runtimes),
+                state.model_options.clone(),
+            )
         };
-        let settings = with_native_settings(settings, root)?;
+        let settings = with_native_settings(settings, root, &options)?;
         self.host
             .push_configuration(workspace, json!({"settings":settings}))
             .map_err(|_| {
@@ -832,6 +853,36 @@ impl SettingsSession {
             .unwrap_or_default()
     }
 
+    pub fn record_service_environment(
+        &self,
+        workspace: &WorkspaceContext,
+        configured: &str,
+        lines: [String; 2],
+    ) {
+        let mut states = self.lock_states();
+        let state = states
+            .entry(workspace.context_id().to_owned())
+            .or_insert_with(|| WorkspaceState::new(workspace.clone()));
+        if workspace.generation() >= state.context.generation() {
+            state.remember_context(workspace);
+            state.service_environment =
+                Some((workspace.generation(), configured.to_owned(), lines));
+        }
+    }
+
+    pub fn service_environment(
+        &self,
+        workspace: &WorkspaceContext,
+        configured: &str,
+    ) -> Option<[String; 2]> {
+        let states = self.lock_states();
+        let (generation, selection, lines) = states
+            .get(workspace.context_id())?
+            .service_environment
+            .as_ref()?;
+        (*generation == workspace.generation() && selection == configured).then(|| lines.clone())
+    }
+
     /// Remembers the JDKs a launch of the workspace `workspace` configured,
     /// so a later push repeats them instead of leaving the server with the
     /// runtimes of an older launch. A workspace the session has not seen is
@@ -842,6 +893,29 @@ impl SettingsSession {
             .entry(workspace.context_id().to_string())
             .or_insert_with(|| WorkspaceState::new(workspace.clone()));
         state.java_runtimes = runtimes;
+    }
+
+    /// Records the project model settings a launch received, so pushes and
+    /// the settings page detect with the same ones.
+    pub fn set_model_options(
+        &self,
+        workspace: &WorkspaceContext,
+        options: crate::project_model::ModelOptions,
+    ) {
+        let mut states = self.lock_states();
+        let state = states
+            .entry(workspace.context_id().to_string())
+            .or_insert_with(|| WorkspaceState::new(workspace.clone()));
+        state.model_options = options;
+    }
+
+    /// The project model settings of the last launch of `context_id`; the
+    /// manifest defaults for a workspace the session has not seen.
+    pub fn model_options(&self, context_id: &str) -> crate::project_model::ModelOptions {
+        self.lock_states()
+            .get(context_id)
+            .map(|state| state.model_options.clone())
+            .unwrap_or_default()
     }
 
     /// The JDKs the last launch of the workspace `context_id` configured;
@@ -1046,6 +1120,25 @@ mod tests {
 
     fn workspace() -> WorkspaceContext {
         WorkspaceContext::new("ctx-1", 1).expect("a valid context")
+    }
+
+    #[test]
+    fn service_environment_follows_workspace_generation_and_server_selection() {
+        let (_, session) = fixture();
+        let old = workspace();
+        let current = WorkspaceContext::new("ctx-1", 2).unwrap();
+        let lines = ["JDT LS".to_owned(), "JDK".to_owned()];
+        session.record_service_environment(&current, "selected", lines.clone());
+        session.record_service_environment(&old, "", ["old".to_owned(), "jdk".to_owned()]);
+        assert_eq!(
+            session.service_environment(&current, "selected"),
+            Some(lines)
+        );
+        assert!(session.service_environment(&current, "").is_none());
+        assert!(session.service_environment(&old, "selected").is_none());
+        assert!(session
+            .service_environment(&WorkspaceContext::new("other", 2).unwrap(), "selected")
+            .is_none());
     }
 
     fn state_of(server: &str, state: &str, generation: u64) -> Value {

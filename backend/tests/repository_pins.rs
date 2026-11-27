@@ -11,6 +11,8 @@ use lithe_java_backend::launch::{
     EXTENSIONS_DIRECTORY, LAUNCH_FUNCTION_ID, MINIMUM_SERVER_JAVA_VERSION, PACKAGE_LAYOUT,
     SERVER_RUNTIME_TOOL,
 };
+use lithe_java_backend::managed_runtimes::{JDK_VERSION, RESOLVE_FUNCTION_ID};
+use lithe_java_backend::settings_view::SETTINGS_VIEW_FUNCTION_ID;
 use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -192,10 +194,7 @@ fn package_scripts_name_every_path_the_backend_resolves() {
 }
 
 #[test]
-fn the_users_jdt_ls_runs_on_the_declared_runtime_tool() {
-    // JDT LS and its JDK come from the user's machine: the package ships
-    // neither, the backend answers the runtime tool the manifest defines, and
-    // the user can choose the JDT LS folder in a setting the backend reads.
+fn the_language_service_jdk_is_separate_from_the_project_jdk() {
     let manifest = read_json(&format!("{PLUGIN_ID}/plugin.json"));
     let tools: Vec<&str> = manifest["requiresTools"]
         .as_array()
@@ -213,9 +212,38 @@ fn the_users_jdt_ls_runs_on_the_declared_runtime_tool() {
         .iter()
         .find(|definition| definition["id"] == "java")
         .unwrap();
-    // The runtime finds JDKs where the project JDK is found.
-    assert_eq!(runtime["discovery"], java["discovery"]);
+    assert_eq!(manifest["requires"]["toolDefinitions"], 1);
+    assert_eq!(text(java, "category"), "runtime");
+    assert_eq!(text(java, "audience"), "user");
+    assert_eq!(text(runtime, "category"), "runtime");
+    assert_eq!(text(runtime, "audience"), "plugin");
+    // Discovery reuses full JDK installations, not editor-specific JREs.
+    let java_discovery = java["discovery"].as_array().unwrap();
+    let runtime_discovery = runtime["discovery"].as_array().unwrap();
+    assert!(
+        runtime_discovery.len() <= 16,
+        "Core allows at most 16 discovery entries per tool"
+    );
+    assert_eq!(runtime_discovery, java_discovery);
     assert_eq!(runtime["executableLayouts"], java["executableLayouts"]);
+    let runtime_pattern = text(&runtime["version"], "pattern");
+    let pattern = regex::Regex::new(runtime_pattern).unwrap();
+    for rejected in [
+        r#"java version "1.8.0_301""#,
+        r#"openjdk version "11.0.20""#,
+        r#"openjdk version "17.0.10""#,
+        r#"openjdk version "20.0.2""#,
+        r#"openjdk version "21.0.9""#,
+        r#"openjdk version "24.0.2""#,
+        r#"openjdk version "26.0.1""#,
+        r#"openjdk version "250.0.1""#,
+    ] {
+        assert!(!pattern.is_match(rejected), "{rejected}");
+    }
+    for version in ["25", "25.0.1", "25.0.5.0.2"] {
+        let output = format!("openjdk version \"{version}\" LTS");
+        assert_eq!(&pattern.captures(&output).unwrap()[1], version);
+    }
     // It exports nothing, so JDT LS keeps the environment the host gives it.
     assert!(runtime.get("exports").is_none());
     assert!(runtime.get("pathPrepend").is_none());
@@ -230,15 +258,80 @@ fn the_users_jdt_ls_runs_on_the_declared_runtime_tool() {
     assert_eq!(text(setting, "default"), "");
 
     let pins = read_json("third_party/jdtls/manifest.json");
-    assert_eq!(
-        pins["minimumJavaVersion"].as_u64(),
-        Some(MINIMUM_SERVER_JAVA_VERSION),
-        "the tested JDT LS and the backend must agree on its oldest Java"
-    );
-    assert!(
-        !repository_root().join("third_party/jdk").exists(),
-        "the package ships no JDK"
-    );
+    assert!(pins["minimumJavaVersion"].as_u64().unwrap() <= MINIMUM_SERVER_JAVA_VERSION);
+}
+
+#[test]
+fn managed_dependencies_pin_all_six_platforms_and_bind_only_the_service_tool() {
+    let manifest = read_json(&format!("{PLUGIN_ID}/plugin.json"));
+    assert_eq!(manifest["requires"]["managedRuntimes"], 1);
+    assert!(manifest["permissions"]
+        .as_array()
+        .unwrap()
+        .contains(&Value::String("runtimes.install".into())));
+    let managed = &manifest["managedRuntimes"];
+    assert_eq!(managed["resolve"]["function"], RESOLVE_FUNCTION_ID);
+    assert!(managed["resolve"]["timeoutMilliseconds"].as_u64().unwrap() > 0);
+    let dependencies = managed["dependencies"].as_array().unwrap();
+    assert_eq!(dependencies.len(), 2);
+    let pins = read_json("third_party/jdtls/manifest.json");
+    for dependency in dependencies {
+        let artifacts = dependency["artifacts"].as_array().unwrap();
+        let mut platforms = std::collections::BTreeSet::new();
+        for artifact in artifacts {
+            assert!(platforms.insert((text(artifact, "os"), text(artifact, "arch"))));
+            assert!(text(artifact, "url").starts_with("https://"));
+            assert_sha256(
+                artifact["sha256"].as_str().expect("archive checksum"),
+                "managed runtime archive",
+            );
+            if dependency["id"] == "jdk" {
+                assert_eq!(dependency["tool"], SERVER_RUNTIME_TOOL);
+                assert_eq!(dependency["version"], JDK_VERSION);
+                let expected_prefix = if artifact["os"] == "windows" && artifact["arch"] == "arm64"
+                {
+                    "jdk-25.0.5.0.2+1"
+                } else {
+                    "jdk-25.0.5+8"
+                };
+                assert_eq!(artifact["stripPrefix"], expected_prefix);
+                let windows = artifact["os"] == "windows";
+                assert_eq!(artifact["archive"], if windows { "zip" } else { "tar.gz" });
+                assert_eq!(
+                    artifact["executable"],
+                    if windows { "bin/java.exe" } else { "bin/java" }
+                );
+                assert_eq!(
+                    artifact["home"],
+                    if artifact["os"] == "macos" {
+                        "Contents/Home"
+                    } else {
+                        ""
+                    }
+                );
+            } else {
+                assert_eq!(dependency["id"], "jdtls");
+                assert!(dependency.get("tool").is_none());
+                assert_eq!(dependency["version"], pins["version"]);
+                assert_eq!(artifact["url"], pins["archiveURL"]);
+                assert_eq!(artifact["sha256"], pins["archiveSHA256"]);
+            }
+        }
+        assert_eq!(
+            platforms,
+            std::collections::BTreeSet::from([
+                ("linux", "x86_64"),
+                ("linux", "arm64"),
+                ("macos", "x86_64"),
+                ("macos", "arm64"),
+                ("windows", "x86_64"),
+                ("windows", "arm64"),
+            ])
+        );
+    }
+    let profile = read_json("third_party/jdtls/runtime-files.json");
+    assert_eq!(profile["version"], pins["version"]);
+    assert_eq!(profile["archiveSHA256"], pins["archiveSHA256"]);
 }
 
 #[test]
@@ -308,4 +401,64 @@ fn assert_sha256(value: &str, label: &str) {
                 .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
         "{label} is not a lowercase SHA-256: {value}"
     );
+}
+
+#[test]
+fn manifest_and_zh_hans_declare_setting_regions() {
+    let manifest = read_json(&format!("{PLUGIN_ID}/plugin.json"));
+    assert_eq!(manifest["requires"]["ui"], 0);
+    assert!(
+        manifest["permissions"]
+            .as_array()
+            .is_some_and(|items| items.iter().any(|item| item == "ui.contribute")),
+        "permissions must include ui.contribute"
+    );
+    let regions = manifest["settingRegions"]
+        .as_array()
+        .expect("settingRegions must be an array");
+    let language = regions
+        .iter()
+        .find(|region| region["id"] == "language")
+        .expect("language settingRegion must exist");
+    assert_eq!(text(&language["page"], "languageID"), "java");
+    assert_eq!(
+        text(&language["view"], "function"),
+        SETTINGS_VIEW_FUNCTION_ID
+    );
+    assert!(
+        language["keywords"]
+            .as_array()
+            .is_some_and(|items| !items.is_empty()),
+        "language settingRegion keywords must be non-empty"
+    );
+
+    let compiler = regions
+        .iter()
+        .find(|region| region["id"] == "compiler")
+        .expect("compiler settingRegion must exist");
+    assert_eq!(text(&compiler["page"], "compilerID"), "java");
+    assert_eq!(
+        text(&compiler["view"], "function"),
+        SETTINGS_VIEW_FUNCTION_ID
+    );
+    assert!(
+        compiler["keywords"]
+            .as_array()
+            .is_some_and(|items| !items.is_empty()),
+        "compiler settingRegion keywords must be non-empty"
+    );
+
+    let zh = read_json(&format!("{PLUGIN_ID}/l10n/zh-Hans.json"));
+    for region_id in ["language", "compiler"] {
+        let keywords = zh["settingRegions"][region_id]["keywords"]
+            .as_array()
+            .unwrap_or_else(|| panic!("zh-Hans settingRegions.{region_id}.keywords missing"));
+        assert!(
+            !keywords.is_empty()
+                && keywords
+                    .iter()
+                    .all(|item| item.as_str().is_some_and(|s| !s.is_empty())),
+            "zh-Hans settingRegions.{region_id}.keywords must contain non-empty strings"
+        );
+    }
 }

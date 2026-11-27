@@ -16,7 +16,8 @@
 //! The manifest declares the `java` language server with
 //! `launch.kind: "backend"`, so the host asks [`launch`] for the JDT LS
 //! command line, initialization options and startup settings before each
-//! start. JDT LS is the user's own installation, which [`jdtls`] finds.
+//! start. [`managed_runtimes`] qualifies the separately installed JDT LS
+//! and full JDK; the host downloads only missing declared dependencies.
 //! The launch reads the settings the [`settings_session`] knows for
 //! the workspace, so a restart starts with the last pushed settings.
 //!
@@ -51,10 +52,17 @@
 pub mod class_content;
 pub mod jdtls;
 pub mod launch;
+pub mod library_settings;
+pub mod managed_runtimes;
+pub mod module_structure;
+pub mod navigation;
 pub mod plugin_functions;
+pub mod project_model;
 pub mod project_settings;
 pub mod run;
 pub mod settings_session;
+pub mod settings_view;
+pub mod web_facet;
 
 use crate::launch::LAUNCH_FUNCTION_ID;
 use crate::run::{
@@ -96,6 +104,7 @@ pub const KEY_OPERATIONS: &[&str] = &[
     "execution.planLaunchCommand",
     "java.prepareLaunch",
     LAUNCH_FUNCTION_ID,
+    navigation::INVOKE_FUNCTION_ID,
     RERUN_FUNCTION_ID,
     RUN_ACTION_FUNCTION_ID,
     SETTINGS_CHANGED_FUNCTION_ID,
@@ -141,9 +150,14 @@ pub fn backend() -> Result<Backend, SdkError> {
     })?;
     backend.suppress_success_diagnostics(class_content::CONTENT_FUNCTION)?;
     let run_session = Arc::new(RunSession::new(backend.handle(), Arc::clone(&session)));
+    let nav_session = Arc::new(navigation::NavigationSession::new(
+        backend.handle(),
+        Arc::clone(&session),
+    ));
     let handle = backend.handle();
     backend.on_host_notification(LANGUAGE_SERVER_STATE_NOTIFICATION, {
         let run_session = Arc::clone(&run_session);
+        let nav_session = Arc::clone(&nav_session);
         let session = Arc::clone(&session);
         let content_session = Arc::clone(&content_session);
         move |params| {
@@ -157,6 +171,7 @@ pub fn backend() -> Result<Backend, SdkError> {
             session.did_change_state(&params, &report);
             content_session.sync_reporting(&session, &report);
             run_session.sync_contexts_reporting(&report);
+            nav_session.sync_contexts_reporting(&report);
             Ok(())
         }
     })?;
@@ -184,6 +199,13 @@ pub fn backend() -> Result<Backend, SdkError> {
             Ok(plan)
         }
     })?;
+    backend.function(
+        managed_runtimes::RESOLVE_FUNCTION_ID,
+        managed_runtimes::resolve_runtimes_function,
+    )?;
+    // Cache qualification is a startup read, including an expected missing
+    // dependency. The SDK still records failures of explicit configuration.
+    backend.suppress_success_diagnostics(managed_runtimes::RESOLVE_FUNCTION_ID)?;
 
     // The run session registers the editor actions of every workspace context
     // and keeps the result listener of each test run; both happen outside a
@@ -198,20 +220,24 @@ pub fn backend() -> Result<Backend, SdkError> {
     };
     backend.on_initialize({
         let run_session = Arc::clone(&run_session);
+        let nav_session = Arc::clone(&nav_session);
         let report = Arc::clone(&report);
         move |_initialize| {
             run_session.sync_after_initialize(Arc::clone(&report));
+            nav_session.sync_after_initialize(Arc::clone(&report));
             Ok(())
         }
     });
     backend.on_contexts_changed({
         let run_session = Arc::clone(&run_session);
+        let nav_session = Arc::clone(&nav_session);
         let report = Arc::clone(&report);
         let content_session = Arc::clone(&content_session);
         let session = Arc::clone(&session);
         move |_params| {
             content_session.sync_reporting(&session, &*report);
             run_session.sync_contexts_reporting(&*report);
+            nav_session.sync_contexts_reporting(&*report);
             Ok(())
         }
     });
@@ -224,9 +250,11 @@ pub fn backend() -> Result<Backend, SdkError> {
     })?;
     backend.on_host_notification(LANGUAGE_SERVER_NOTIFICATION, {
         let run_session = Arc::clone(&run_session);
+        let nav_session = Arc::clone(&nav_session);
         let report = Arc::clone(&report);
         move |params| {
             run_session.did_receive_notification(&params, &*report);
+            nav_session.did_receive_notification(&params, &*report);
             Ok(())
         }
     })?;
@@ -235,6 +263,15 @@ pub fn backend() -> Result<Backend, SdkError> {
         move |params, context| run::collect_actions_function(&run_session, params, context)
     })?;
     backend.suppress_success_diagnostics(COLLECT_FUNCTION_ID)?;
+    backend.function(navigation::COLLECT_FUNCTION_ID, {
+        let nav_session = Arc::clone(&nav_session);
+        move |params, context| navigation::collect_actions_function(&nav_session, params, context)
+    })?;
+    backend.suppress_success_diagnostics(navigation::COLLECT_FUNCTION_ID)?;
+    backend.function(navigation::INVOKE_FUNCTION_ID, {
+        let nav_session = Arc::clone(&nav_session);
+        move |params, context| navigation::invoke_action_function(&nav_session, params, context)
+    })?;
     backend.function(RUN_ACTION_FUNCTION_ID, {
         let run_session = Arc::clone(&run_session);
         move |params, context| run::run_action_function(&run_session, params, context)
@@ -252,9 +289,15 @@ pub fn backend() -> Result<Backend, SdkError> {
         })?;
         backend.suppress_success_diagnostics(function)?;
     }
+    let view_session = Arc::clone(&session);
     backend.function("compiler.prepareSettings", move |params, context| {
-        projects.edit(params, context)
+        projects.edit(params, context, &session)
     })?;
+    backend.function(
+        settings_view::SETTINGS_VIEW_FUNCTION_ID,
+        move |params, context| settings_view::view_function(&view_session, params, context),
+    )?;
+    backend.suppress_success_diagnostics(settings_view::SETTINGS_VIEW_FUNCTION_ID)?;
     Ok(backend)
 }
 
@@ -424,8 +467,13 @@ mod tests {
             .chain(plugin_functions::RELAY_CATEGORIES)
             .chain(launch::LAUNCH_ERROR_CODES)
             .chain(launch::LAUNCH_CATEGORIES)
+            .chain(managed_runtimes::ERROR_CODES)
             .chain(run::RUN_ERROR_CODES)
             .chain(run::RUN_CATEGORIES)
+            .chain(navigation::NAV_ERROR_CODES)
+            .chain(navigation::NAV_CATEGORIES)
+            .chain(settings_view::VIEW_ERROR_CODES)
+            .chain(settings_view::VIEW_CATEGORIES)
         {
             assert!(seen.insert(*name), "{name} names two causes");
         }
@@ -456,6 +504,8 @@ mod tests {
                 COLLECT_FUNCTION_ID,
                 RUN_ACTION_FUNCTION_ID,
                 RERUN_FUNCTION_ID,
+                navigation::COLLECT_FUNCTION_ID,
+                navigation::INVOKE_FUNCTION_ID,
             ])
             .collect();
         let distinct: std::collections::BTreeSet<&str> = KEY_OPERATIONS.iter().copied().collect();

@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?eclipse version="3.4"?>
+<!--
+  Resolves classpath containers that Eclipse WTP and MyEclipse write into
+  .classpath but that JDT LS does not ship. Every container is computed from
+  files of the workspace (and the servlet container the plugin backend
+  configures) in memory; nothing is written to the project.
+  The IDs must stay in step with ContainerKind.
+-->
+<plugin>
+   <extension point="org.eclipse.jdt.core.classpathContainerInitializer">
+      <classpathContainerInitializer id="io.github.lithe_idea.java.projectmodel.IDEA_CLASS_FOLDERS" class="io.github.lithe_idea.java.projectmodel.LitheContainerInitializer"/>
+      <classpathContainerInitializer id="org.eclipse.jst.j2ee.internal.web.container" class="io.github.lithe_idea.java.projectmodel.LitheContainerInitializer"/>
+      <classpathContainerInitializer id="org.eclipse.jst.j2ee.internal.module.container" class="io.github.lithe_idea.java.projectmodel.LitheContainerInitializer"/>
+      <classpathContainerInitializer id="org.eclipse.jst.server.core.container" class="io.github.lithe_idea.java.projectmodel.LitheContainerInitializer"/>
+      <classpathContainerInitializer id="com.genuitec.eclipse.j2eedt.core.J2EE13_CONTAINER" class="io.github.lithe_idea.java.projectmodel.LitheContainerInitializer"/>
+      <classpathContainerInitializer id="com.genuitec.eclipse.j2eedt.core.J2EE14_CONTAINER" class="io.github.lithe_idea.java.projectmodel.LitheContainerInitializer"/>
+      <classpathContainerInitializer id="melibrary.com.genuitec.eclipse.j2eedt.core.MYECLIPSE_JAVAEE_5_CONTAINER" class="io.github.lithe_idea.java.projectmodel.LitheContainerInitializer"/>
+      <classpathContainerInitializer id="melibrary.com.genuitec.eclipse.j2eedt.core.MYECLIPSE_JAVAEE_6_CONTAINER" class="io.github.lithe_idea.java.projectmodel.LitheContainerInitializer"/>
+      <classpathContainerInitializer id="melibrary.com.genuitec.eclipse.j2eedt.core.MYECLIPSE_JAVAEE_7_CONTAINER" class="io.github.lithe_idea.java.projectmodel.LitheContainerInitializer"/>
+      <classpathContainerInitializer id="com.genuitec.runtime.library" class="io.github.lithe_idea.java.projectmodel.LitheContainerInitializer"/>
+   </extension>
+   <extension point="org.eclipse.jdt.core.classpathVariableInitializer">
+      <classpathVariableInitializer variable="TOMCAT_HOME" readOnly="true" class="io.github.lithe_idea.java.projectmodel.ServletHomeVariableInitializer"/>
+      <classpathVariableInitializer variable="CATALINA_HOME" readOnly="true" class="io.github.lithe_idea.java.projectmodel.ServletHomeVariableInitializer"/>
+   </extension>
+   <extension point="org.eclipse.jdt.ls.core.delegateCommandHandler">
+      <delegateCommandHandler class="io.github.lithe_idea.java.projectmodel.DescribeCommandHandler">
+         <command id="lithe.java.projectModel.describe"/>
+      </delegateCommandHandler>
+   </extension>
+</plugin>

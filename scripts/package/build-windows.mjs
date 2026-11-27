@@ -11,6 +11,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { collectNotices, verifyNotices } from './collect-notices.mjs';
+import { buildProjectModelBundle } from './project-model-bundle.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 if (process.platform !== 'darwin') throw new Error('Assemble this development package on macOS.');
@@ -41,12 +42,14 @@ const id = 'io.github.lithe-idea.java-support';
 const packageRoot = join(staging, id);
 try {
   await mkdir(packageRoot, { recursive: true });
-  for (const name of ['icons', 'templates', 'l10n']) await cp(join(root, id, name), join(packageRoot, name), { recursive: true });
+  for (const name of ['icons', 'templates', 'l10n', 'grammars']) await cp(join(root, id, name), join(packageRoot, name), { recursive: true });
   const extensions = join(packageRoot, 'jdtls-extensions');
   await mkdir(extensions);
   for (const name of ['lombok', 'java-debug', 'java-test', 'manifest.json']) {
     await cp(join(jdt, name), join(extensions, name), { recursive: true });
   }
+  // The plugin's own bundle, compiled against the prepared JDT LS release.
+  buildProjectModelBundle(jdt, extensions);
   const manifest = JSON.parse(await readFile(join(root, id, 'plugin.json'), 'utf8'));
   manifest.backend.launch.path = 'bin/lithe-java-backend.exe';
   await writeFile(join(packageRoot, 'plugin.json'), `${JSON.stringify(manifest, null, 2)}\n`);

@@ -1,8 +1,9 @@
 {
+  "$schema": "https://raw.githubusercontent.com/Lithe-IDEA/Lithe-core-rust/main/shared/plugins/contract/v1/plugin-l10n.schema.json",
   "settings": {
     "languageServerHome": {
       "title": "语言服务器目录",
-      "description": "Eclipse JDT Language Server 的目录，即包含 plugins 和 config 目录的那一层。留空时自动查找：JDTLS_HOME、PATH 上的 jdtls，以及 Homebrew、mason.nvim、Scoop 或 VS Code Java 扩展安装的 JDT LS。",
+      "description": "可选的 Eclipse JDT Language Server 1.61.0 目录。留空时复用已验证兼容的安装，缺少时由 Lithe 自动准备固定版本的语言服务器和独立的 Java 25 运行环境；不会更改项目自己的 JDK。",
       "placeholder": "自动查找"
     },
     "heapMaxMB": {
@@ -18,10 +19,20 @@
         "WARNING": "警告",
         "SEVERE": "仅错误"
       }
+    },
+    "projectModelDetection": {
+      "title": "自动识别工程模型",
+      "description": "对没有 Maven 或 Gradle 的文件夹，读取其他 IDE 留下的工程结构：Eclipse WTP 容器（Web App Libraries、EAR Libraries、Server Runtime）、IntelliJ IDEA 的模块和库，以及传统 Web 项目的 WEB-INF/lib。Lithe 在内存中把它们声明的库加入类路径，不修改项目文件。修改在 Java 语言服务器重启后生效。"
+    },
+    "servletContainerHome": {
+      "title": "Servlet 容器文件夹",
+      "description": "为 Web 项目提供 javax.servlet 等服务器 API 的 Tomcat 或 Jetty 安装文件夹，对应 Eclipse 的 Server Runtime 和 IDEA 的应用服务器库。留空时依次使用 CATALINA_HOME、TOMCAT_HOME 和常见位置安装的 Tomcat，并优先选择项目指定的版本。",
+      "placeholder": "自动查找"
     }
   },
   "sections": {
-    "Language server": "语言服务器"
+    "Language server": "语言服务器",
+    "Project model": "工程模型"
   },
   "settingActions": {
     "compiler": {
@@ -29,8 +40,30 @@
       "description": "读取工具的实际配置；保存时写入页面列出的原生配置文件。"
     },
     "libraries": {
-      "title": "读取本地 JAR 依赖",
-      "description": "读取项目实际引用的 JAR；保存时更新页面列出的原生配置文件。"
+      "title": "读取项目结构",
+      "description": "读取每个模块的源文件夹、输出文件夹、JRE 和依赖。保存时写入 Eclipse 的 .classpath 和页面列出的库配置文件；Maven、Gradle 模块只读。"
+    }
+  },
+  "settingRegions": {
+    "language": {
+      "keywords": [
+        "语言服务器",
+        "堆内存",
+        "类路径",
+        "项目结构",
+        "模块",
+        "依赖",
+        "工程模型",
+        "Servlet 容器"
+      ]
+    },
+    "compiler": {
+      "keywords": [
+        "Java 编译器",
+        "字节码",
+        "编译级别",
+        "目标版本"
+      ]
     }
   }
 }

@@ -1,0 +1,18 @@
+{
+  "repository": "https://github.com/Lithe-IDEA/Lithe-core-rust",
+  "commit": "0b6da2725ded74de7c3b62b49d12c1947dc0a38a",
+  "schemas": [
+    {
+      "path": "plugin-manifest.schema.json",
+      "sha256": "ab756a2dfa023bd2301f7e52cf5d0a9a5341d60ec3df9a106715ad604119415c"
+    },
+    {
+      "path": "plugin-ui.schema.json",
+      "sha256": "7e2155edacb2818145f300e3191e4ec041d0f3cb82b6fdfa22e68c5b552824a8"
+    },
+    {
+      "path": "plugin-l10n.schema.json",
+      "sha256": "a6d07bfe0fae0760640cffe9f1ed76f6f42b2851f6c5e7c4ff6a4407af30e38e"
+    }
+  ]
+}

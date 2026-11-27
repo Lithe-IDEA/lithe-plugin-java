@@ -44,10 +44,23 @@ pub struct JavaTestLaunchRequest {
     pub testng_test_names: Vec<String>,
 }
 
-/// Creates the provider arguments consumed by Java Debug Server.
-pub fn java_test_launch(
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// Validated, typed JVM and runner arguments for launching a Java test process.
+pub struct JavaTestProcessLaunch {
+    pub name: String,
+    pub working_directory: String,
+    pub main_class: String,
+    pub project_name: Option<String>,
+    pub class_paths: Vec<String>,
+    pub module_paths: Vec<String>,
+    pub vm_arguments: Vec<String>,
+    pub program_arguments: Vec<String>,
+}
+
+/// Resolves validated, typed JVM and runner arguments for starting a Java test process.
+pub fn java_test_process_launch(
     request: JavaTestLaunchRequest,
-) -> Result<DebugLaunchConfiguration, CoreError> {
+) -> Result<JavaTestProcessLaunch, CoreError> {
     let name = required(request.name, "Java test launch name is required.")?;
     let working_directory = required(
         request.working_directory,
@@ -63,16 +76,7 @@ pub fn java_test_launch(
     let mut class_paths = non_empty_unique(request.class_paths);
     let module_paths = non_empty_unique(request.module_paths);
     let vm_arguments = non_empty(request.vm_arguments);
-    let mut arguments = Map::new();
-    arguments.insert("mainClass".to_string(), Value::String(main_class));
-    arguments.insert("cwd".to_string(), Value::String(working_directory));
-    arguments.insert(
-        "console".to_string(),
-        Value::String("integratedTerminal".to_string()),
-    );
-    if let Some(project_name) = optional_non_empty(request.project_name) {
-        arguments.insert("projectName".to_string(), Value::String(project_name));
-    }
+    let project_name = optional_non_empty(request.project_name);
 
     let program_arguments = match request.framework {
         JavaTestFramework::Junit => junit_arguments(request.program_arguments, request.result_port),
@@ -97,13 +101,41 @@ pub fn java_test_launch(
         }
     };
 
-    insert_string_array(&mut arguments, "classPaths", class_paths);
-    insert_string_array(&mut arguments, "modulePaths", module_paths);
-    insert_java_debug_arguments(&mut arguments, "args", program_arguments);
-    insert_java_debug_arguments(&mut arguments, "vmArgs", vm_arguments);
+    Ok(JavaTestProcessLaunch {
+        name,
+        working_directory,
+        main_class,
+        project_name,
+        class_paths,
+        module_paths,
+        vm_arguments,
+        program_arguments,
+    })
+}
+
+/// Creates the provider arguments consumed by Java Debug Server.
+pub fn java_test_launch(
+    request: JavaTestLaunchRequest,
+) -> Result<DebugLaunchConfiguration, CoreError> {
+    let launch = java_test_process_launch(request)?;
+    let mut arguments = Map::new();
+    arguments.insert("mainClass".to_string(), Value::String(launch.main_class));
+    arguments.insert("cwd".to_string(), Value::String(launch.working_directory));
+    arguments.insert(
+        "console".to_string(),
+        Value::String("integratedTerminal".to_string()),
+    );
+    if let Some(project_name) = launch.project_name {
+        arguments.insert("projectName".to_string(), Value::String(project_name));
+    }
+
+    insert_string_array(&mut arguments, "classPaths", launch.class_paths);
+    insert_string_array(&mut arguments, "modulePaths", launch.module_paths);
+    insert_java_debug_arguments(&mut arguments, "args", launch.program_arguments);
+    insert_java_debug_arguments(&mut arguments, "vmArgs", launch.vm_arguments);
 
     Ok(DebugLaunchConfiguration {
-        name,
+        name: launch.name,
         request: DebugRequestKind::Launch,
         arguments,
         stepping_filters: None,
@@ -275,6 +307,54 @@ mod tests {
         assert_eq!(
             configuration.arguments["args"],
             json!("43128 testng example.UserServiceTest#logsIn")
+        );
+    }
+
+    #[test]
+    fn java_test_process_launch_keeps_typed_vm_and_runner_arguments() {
+        let launch = java_test_process_launch(JavaTestLaunchRequest {
+            name: "UserServiceTest".to_string(),
+            framework: JavaTestFramework::Junit,
+            working_directory: "/workspace".to_string(),
+            main_class: "org.eclipse.jdt.internal.junit.runner.RemoteTestRunner".to_string(),
+            project_name: Some("service".to_string()),
+            class_paths: vec!["/workspace/classes".to_string()],
+            module_paths: vec!["/workspace/mods".to_string()],
+            vm_arguments: vec!["--enable-preview".to_string(), "-Dfoo=bar baz".to_string()],
+            program_arguments: vec![
+                "-version".to_string(),
+                "3".to_string(),
+                "-port".to_string(),
+                "-1".to_string(),
+                "-classNames".to_string(),
+                "example.UserServiceTest".to_string(),
+                "-test".to_string(),
+                "example.UserServiceTest:logsIn".to_string(),
+            ],
+            result_port: 43129,
+            testng_runner_path: None,
+            testng_test_names: Vec::new(),
+        })
+        .expect("typed process launch should resolve");
+
+        assert_eq!(
+            launch.vm_arguments,
+            vec!["--enable-preview", "-Dfoo=bar baz"]
+        );
+        assert_eq!(launch.module_paths, vec!["/workspace/mods"]);
+        assert_eq!(launch.class_paths, vec!["/workspace/classes"]);
+        assert_eq!(
+            launch.program_arguments,
+            vec![
+                "-version",
+                "3",
+                "-port",
+                "43129",
+                "-classNames",
+                "example.UserServiceTest",
+                "-test",
+                "example.UserServiceTest:logsIn",
+            ]
         );
     }
 

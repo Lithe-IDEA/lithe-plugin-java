@@ -10,12 +10,11 @@
 //!
 //! # Where the files are
 //!
-//! JDT LS itself is not in the package: [`crate::jdtls`] finds the
-//! installation on the machine, the way the Go plugin uses the user's own
-//! `gopls`. The answer runs it with the plugin's `jdtls-runtime` tool
-//! ([`SERVER_RUNTIME_TOOL`]), a JDK the host resolves from the user's choice
-//! and discovery, and refuses one older than
-//! [`MINIMUM_SERVER_JAVA_VERSION`] when the host reports its version.
+//! JDT LS and its JDK live outside the small plugin package. The host prepares
+//! the dependencies declared in `managedRuntimes`; [`crate::managed_runtimes`]
+//! qualifies existing files before any missing dependency is downloaded. The
+//! launch uses that approved server home and the separate `jdtls-runtime`
+//! tool ([`SERVER_RUNTIME_TOOL`]). The project's `java` tool stays independent.
 //!
 //! The package only carries what the plugin adds to JDT LS: the Lombok agent
 //! and the Java Debug and Java Test extension bundles. `resolveParams` carries
@@ -49,9 +48,10 @@
 //! [`settings_session::java_configuration`]: crate::settings_session::java_configuration
 
 use crate::jdtls::{
-    self, SearchEnvironment, ServerInstallation, LAUNCH_SERVER_INVALID, LAUNCH_SERVER_MISSING,
-    SERVER_HOME_SETTING,
+    ServerInstallation, LAUNCH_SERVER_INVALID, LAUNCH_SERVER_MISSING, SERVER_HOME_SETTING,
 };
+use crate::managed_runtimes;
+use crate::project_model::{ModelOptions, ProjectModel};
 use crate::run::file_uri;
 use crate::settings_session::{java_configuration, jdt_settings, SettingsSession, SERVER_ID};
 use lithe_java_domain::jdt_integration::launch_resources::{bundles_in, missing_resource_message};
@@ -66,7 +66,9 @@ use lithe_plugin_sdk::{
 };
 use serde_json::json;
 use std::collections::VecDeque;
+use std::ffi::OsString;
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -103,14 +105,25 @@ pub const LAUNCH_ERROR_CODES: &[&str] = &[
 /// JDT LS accepts.
 pub const SERVER_RUNTIME_TOOL: &str = "jdtls-runtime";
 /// Oldest Java feature release JDT LS runs on.
-pub const MINIMUM_SERVER_JAVA_VERSION: u64 = 21;
-/// Message of [`LAUNCH_RUNTIME_TOO_OLD`].
+pub const MINIMUM_SERVER_JAVA_VERSION: u64 = managed_runtimes::JAVA_FEATURE;
+/// Message of [`LAUNCH_RUNTIME_TOO_OLD`] for [`MINIMUM_SERVER_JAVA_VERSION`].
 ///
 /// TODO(host-api: API-37 i18n): user-facing text must go through the host's
 /// i18n table.
-pub const RUNTIME_TOO_OLD_MESSAGE: &str = "The Eclipse JDT Language Server needs Java 21 or \
-later, but the JDK chosen for it is older. Choose a JDK 21 or later for \"JDK for JDT LS\" in \
+pub const RUNTIME_TOO_OLD_MESSAGE: &str = "The Eclipse JDT Language Server needs Java 25 or \
+later, but the JDK chosen for it is older. Choose a JDK 25 or later for \"JDK for JDT LS\" in \
 Settings > Build, Execution, Deployment > Toolchains.";
+
+/// Message of [`LAUNCH_RUNTIME_TOO_OLD`] for the Java feature release
+/// `minimum_java_version` the selected JDT LS installation requires.
+pub fn runtime_too_old_message(minimum_java_version: u64) -> String {
+    let minimum = minimum_java_version.max(MINIMUM_SERVER_JAVA_VERSION);
+    format!(
+        "The Eclipse JDT Language Server needs Java {minimum} or later, but the JDK chosen for \
+it is older. Choose a JDK {minimum} or later for \"JDK for JDT LS\" in Settings > Build, \
+Execution, Deployment > Toolchains."
+    )
+}
 
 /// Configuration areas of older JDT LS versions could not be removed. Only
 /// disk space is at stake, so the launch goes on.
@@ -121,10 +134,26 @@ pub const LAUNCH_CONFIGURATION_CLEANUP_FAILED: &str = "launch.configuration_clea
 /// launch names no `triggerFiles` and JDT LS falls back to the first opened
 /// file to lay out a workspace without a build file.
 pub const LAUNCH_WORKSPACE_FOLDERS_UNAVAILABLE: &str = "launch.workspace_folders_unavailable";
+/// The project needs servlet container libraries (a web module, a Server
+/// Runtime container) and none was found, so `javax.servlet` stays
+/// unresolved until the user configures one.
+pub const LAUNCH_SERVLET_CONTAINER_MISSING: &str = "launch.servlet_container_missing";
+/// Libraries the project model declares could not be added; the count is
+/// how many. The Java libraries settings page lists them.
+pub const LAUNCH_PROJECT_MODEL_UNRESOLVED: &str = "launch.project_model_unresolved";
+/// The project model scan stopped at its budget; deeper layouts were not read.
+pub const LAUNCH_PROJECT_MODEL_TRUNCATED: &str = "launch.project_model_truncated";
+/// Directory scanning lost some optional trigger-file hints to I/O errors.
+/// Missing files and directories during concurrent editing are not failures.
+pub const LAUNCH_TRIGGER_SCAN_UNREADABLE: &str = "launch.trigger_scan_unreadable";
 /// Every degraded-diagnostic category `java.resolveLaunch` reports.
 pub const LAUNCH_CATEGORIES: &[&str] = &[
     LAUNCH_CONFIGURATION_CLEANUP_FAILED,
     LAUNCH_WORKSPACE_FOLDERS_UNAVAILABLE,
+    LAUNCH_SERVLET_CONTAINER_MISSING,
+    LAUNCH_PROJECT_MODEL_UNRESOLVED,
+    LAUNCH_PROJECT_MODEL_TRUNCATED,
+    LAUNCH_TRIGGER_SCAN_UNREADABLE,
 ];
 
 /// Most `.java` files named as `triggerFiles`. JDT LS uses the first one
@@ -180,11 +209,13 @@ pub const EXTENSIONS_DIRECTORY: &str = "jdtls-extensions";
 /// Package path of the Lombok agent JDT LS runs with.
 pub const LOMBOK_AGENT: &str = "jdtls-extensions/lombok/lombok.jar";
 /// Package directories whose JAR files JDT LS loads as extension bundles, in
-/// this order and then by file name: the Java Debug Server, then the Java
-/// Test extensions.
+/// this order and then by file name: the Java Debug Server, the Java Test
+/// extensions, then the plugin's own project model bundle, built from
+/// `jdtls-extension/project-model` by `scripts/package/project-model-bundle.mjs`.
 pub const EXTENSION_BUNDLE_DIRECTORIES: &[&str] = &[
     "jdtls-extensions/java-debug",
     "jdtls-extensions/java-test/extensions",
+    "jdtls-extensions/project-model",
 ];
 /// Package path of the Java Test runner JAR the test flow adds to the class
 /// path of TestNG launches; JDT LS itself does not load it.
@@ -196,6 +227,7 @@ pub const PACKAGE_LAYOUT: &[&str] = &[
     LOMBOK_AGENT,
     EXTENSION_BUNDLE_DIRECTORIES[0],
     EXTENSION_BUNDLE_DIRECTORIES[1],
+    EXTENSION_BUNDLE_DIRECTORIES[2],
     TEST_RUNNER,
 ];
 /// Directory under `workspaceStateDirectory` passed to JDT LS as `-data`.
@@ -227,8 +259,8 @@ pub struct LaunchRequest {
     pub heap_max_mb: u64,
     /// `settings.logLevel`: the JDT LS log level.
     pub log_level: String,
-    /// `settings.languageServerHome`: the JDT LS folder the user chose;
-    /// `None` finds one ([`crate::jdtls::locate`]).
+    /// Explicit `settings.languageServerHome`, otherwise the approved
+    /// `runtimes.jdtls.home`. No launch-time rediscovery can replace it.
     pub server_home: Option<PathBuf>,
     /// `tools["jdtls-runtime"].version`, when the host resolved the JDK that
     /// runs JDT LS and read its version.
@@ -238,6 +270,8 @@ pub struct LaunchRequest {
     /// with that JDK, so the server must compile for it. Empty when the host
     /// found none, which leaves the server on the runtimes it already knows.
     pub java_runtimes: Vec<JdtJavaRuntime>,
+    /// `settings.projectModelDetection` and `settings.servletContainerHome`.
+    pub model_options: ModelOptions,
 }
 
 /// The files of a JDT LS launch, absolute.
@@ -301,6 +335,18 @@ pub fn parse_launch_params(params: &Value) -> Result<LaunchRequest, PluginError>
             }
         },
     };
+    let prepared_home = match params.get("runtimes").and_then(|value| value.get("jdtls")) {
+        None => None,
+        Some(value) => Some(
+            value
+                .get("home")
+                .and_then(Value::as_str)
+                .map(PathBuf::from)
+                .filter(|home| home.is_absolute())
+                .ok_or_else(|| invalid_params("The prepared language server folder is invalid."))?,
+        ),
+    };
+    let model_options = crate::project_model::parse_options(&settings).map_err(invalid_params)?;
     Ok(LaunchRequest {
         os: os.to_string(),
         architecture: architecture.to_string(),
@@ -310,9 +356,10 @@ pub fn parse_launch_params(params: &Value) -> Result<LaunchRequest, PluginError>
         temporary_directory: directory(params, "temporaryDirectory")?,
         heap_max_mb,
         log_level: log_level.to_string(),
-        server_home,
+        server_home: server_home.or(prepared_home),
         server_runtime_version: host_tool_version(params, SERVER_RUNTIME_TOOL),
         java_runtimes: jdt_java_runtimes(&host_java_tool(params)),
+        model_options,
     })
 }
 
@@ -329,19 +376,33 @@ fn host_tool_version(params: &Value, tool: &str) -> Option<String> {
         .map(str::to_string)
 }
 
+/// The Java feature release of `request.server_runtime_version`, when readable.
+pub fn server_runtime_feature(request: &LaunchRequest) -> Option<u64> {
+    request
+        .server_runtime_version
+        .as_deref()
+        .and_then(|version| version.split(['.', '_', '+', '-']).next())
+        .and_then(|feature| feature.parse::<u64>().ok())
+}
+
 /// Refuses a JDT LS runtime the host reported as older than
 /// [`MINIMUM_SERVER_JAVA_VERSION`]. A runtime without a readable version is
 /// left to the host and to JDT LS, which reports what it cannot run on.
 pub fn check_server_runtime(request: &LaunchRequest) -> Result<(), PluginError> {
-    let feature = request
-        .server_runtime_version
-        .as_deref()
-        .and_then(|version| version.split(['.', '_', '+', '-']).next())
-        .and_then(|feature| feature.parse::<u64>().ok());
-    match feature {
-        Some(feature) if feature < MINIMUM_SERVER_JAVA_VERSION => Err(PluginError::new(
+    check_server_runtime_for(request, MINIMUM_SERVER_JAVA_VERSION)
+}
+
+/// Refuses a JDT LS runtime the host reported as older than
+/// `minimum_java_version` (floored at [`MINIMUM_SERVER_JAVA_VERSION`]).
+pub fn check_server_runtime_for(
+    request: &LaunchRequest,
+    minimum_java_version: u64,
+) -> Result<(), PluginError> {
+    let minimum = minimum_java_version.max(MINIMUM_SERVER_JAVA_VERSION);
+    match server_runtime_feature(request) {
+        Some(feature) if feature < minimum => Err(PluginError::new(
             LAUNCH_RUNTIME_TOO_OLD,
-            RUNTIME_TOO_OLD_MESSAGE,
+            runtime_too_old_message(minimum),
         )),
         _ => Ok(()),
     }
@@ -518,7 +579,7 @@ pub fn resolve(
     now_unix_seconds: u64,
     report: &dyn Fn(&str, u64),
 ) -> Result<Value, PluginError> {
-    check_server_runtime(request)?;
+    check_server_runtime_for(request, server.minimum_java_version)?;
     let files = locate_launch_files(package_root, server)?;
     let area = prepare_jdt_configuration_area(
         &request.state_directory,
@@ -587,60 +648,153 @@ fn workspace_folders(host: &Host, workspace: &WorkspaceContext) -> Result<Vec<Pa
         .unwrap_or_default())
 }
 
-/// The `triggerFiles` of a launch: `file:` URIs of up to
-/// [`TRIGGER_FILE_LIMIT`] `.java` files found under `folders`, folders and
-/// entries in sorted order so the same workspace always names the same files.
-/// The scan stops at [`TRIGGER_SCAN_DEPTH`] levels, skips hidden directories
-/// and [`TRIGGER_SCAN_SKIPPED_DIRECTORIES`], does not follow symbolic links,
-/// and reads at most [`TRIGGER_SCAN_ENTRY_BUDGET`] entries. A folder that
-/// cannot be read contributes nothing; JDT LS treats a missing list as
-/// "nothing to import".
-pub fn trigger_files(folders: &[PathBuf]) -> Result<Vec<String>, PluginError> {
-    let mut files = Vec::new();
-    let mut budget = TRIGGER_SCAN_ENTRY_BUDGET;
+// A native DirEntry is intentionally classified only after the per-entry budget
+// check. Tests can substitute entries and failures without changing permissions
+// or relying on host-specific directory iteration behavior.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TriggerKind {
+    Directory,
+    File,
+    Other,
+}
+
+trait TriggerEntry {
+    fn name(&self) -> OsString;
+    fn path(&self) -> PathBuf;
+    fn kind(&self) -> io::Result<TriggerKind>;
+}
+
+impl TriggerEntry for fs::DirEntry {
+    fn name(&self) -> OsString {
+        self.file_name()
+    }
+
+    fn path(&self) -> PathBuf {
+        self.path()
+    }
+
+    fn kind(&self) -> io::Result<TriggerKind> {
+        let kind = self.file_type()?;
+        Ok(if kind.is_dir() {
+            TriggerKind::Directory
+        } else if kind.is_file() {
+            TriggerKind::File
+        } else {
+            // In particular, do not follow links into a different source tree.
+            TriggerKind::Other
+        })
+    }
+}
+
+#[derive(Default)]
+struct TriggerScan {
+    files: Vec<String>,
+    unreadable: u64,
+}
+
+impl TriggerScan {
+    fn note_error(&mut self, error: &io::Error) {
+        // Optional source trees are allowed to disappear while the scan runs.
+        if error.kind() != io::ErrorKind::NotFound {
+            self.unreadable = self.unreadable.saturating_add(1);
+        }
+    }
+}
+
+fn native_trigger_entries(directory: &Path) -> io::Result<Vec<io::Result<fs::DirEntry>>> {
+    Ok(fs::read_dir(directory)?.collect())
+}
+
+// Only this iterator owns the scan rules. It uses a substitute directory
+// reader in tests to cover failed open, failed iteration and failed stat.
+fn scan_trigger_files<E: TriggerEntry>(
+    folders: &[PathBuf],
+    max_entries: usize,
+    mut read_directory: impl FnMut(&Path) -> io::Result<Vec<io::Result<E>>>,
+) -> Result<TriggerScan, PluginError> {
+    let mut scan = TriggerScan::default();
+    let mut budget = max_entries;
     let mut roots: Vec<&PathBuf> = folders.iter().collect();
     roots.sort();
     roots.dedup();
     for root in roots {
-        // Breadth first, so the files nearest the folder come first and a
-        // deep tree cannot use up the limit before a shallow source root.
+        // Breadth first, so nearby sources precede deep source trees.
         let mut pending = VecDeque::from([(root.clone(), 0usize)]);
         while let Some((directory, depth)) = pending.pop_front() {
-            let Ok(entries) = fs::read_dir(&directory) else {
-                continue;
+            if budget == 0 {
+                return Ok(scan);
+            }
+            let entries = match read_directory(&directory) {
+                Ok(entries) => entries,
+                Err(error) => {
+                    scan.note_error(&error);
+                    continue;
+                }
             };
-            let mut entries: Vec<_> = entries.filter_map(Result::ok).collect();
-            entries.sort_by_key(|entry| entry.file_name());
-            let mut subdirectories = Vec::new();
+            let mut sorted = Vec::new();
             for entry in entries {
+                match entry {
+                    Ok(entry) => sorted.push(entry),
+                    Err(error) => scan.note_error(&error),
+                }
+            }
+            sorted.sort_by_key(TriggerEntry::name);
+            let mut subdirectories = Vec::new();
+            for entry in sorted {
                 if budget == 0 {
-                    return Ok(files);
+                    return Ok(scan);
                 }
                 budget -= 1;
-                let name = entry.file_name();
+                let name = entry.name();
                 let Some(name) = name.to_str() else {
                     continue;
                 };
-                let Ok(kind) = entry.file_type() else {
-                    continue;
+                let kind = match entry.kind() {
+                    Ok(kind) => kind,
+                    Err(error) => {
+                        scan.note_error(&error);
+                        continue;
+                    }
                 };
-                if kind.is_dir() {
+                if kind == TriggerKind::Directory {
                     let skipped =
                         name.starts_with('.') || TRIGGER_SCAN_SKIPPED_DIRECTORIES.contains(&name);
                     if depth < TRIGGER_SCAN_DEPTH && !skipped {
                         subdirectories.push((entry.path(), depth + 1));
                     }
-                } else if kind.is_file() && name.ends_with(".java") && !name.starts_with('.') {
-                    files.push(file_uri(&entry.path())?);
-                    if files.len() >= TRIGGER_FILE_LIMIT {
-                        return Ok(files);
+                } else if kind == TriggerKind::File
+                    && name.ends_with(".java")
+                    && !name.starts_with('.')
+                {
+                    scan.files.push(file_uri(&entry.path())?);
+                    if scan.files.len() >= TRIGGER_FILE_LIMIT {
+                        return Ok(scan);
                     }
                 }
             }
             pending.extend(subdirectories);
         }
     }
-    Ok(files)
+    Ok(scan)
+}
+
+fn report_trigger_scan(scan: &TriggerScan, report: &dyn Fn(&str, u64)) {
+    if scan.unreadable != 0 {
+        report(LAUNCH_TRIGGER_SCAN_UNREADABLE, scan.unreadable);
+    }
+}
+
+/// The `triggerFiles` of a launch: `file:` URIs of up to
+/// [`TRIGGER_FILE_LIMIT`] `.java` files found under `folders`, folders and
+/// entries in sorted order so the same workspace always names the same files.
+/// The scan stops at [`TRIGGER_SCAN_DEPTH`] levels, skips hidden directories
+/// and [`TRIGGER_SCAN_SKIPPED_DIRECTORIES`], does not follow symbolic links,
+/// and reads at most [`TRIGGER_SCAN_ENTRY_BUDGET`] entries. Optional missing
+/// folders contribute nothing; other I/O failures preserve partial results and
+/// are counted once at the launch boundary without including file paths. Only
+/// a launch reports diagnostic degradation, not this helper.
+pub fn trigger_files(folders: &[PathBuf]) -> Result<Vec<String>, PluginError> {
+    Ok(scan_trigger_files(folders, TRIGGER_SCAN_ENTRY_BUDGET, native_trigger_entries)?.files)
 }
 
 /// Seconds since the Unix epoch; a clock before 1970 counts as 0, which only
@@ -649,6 +803,22 @@ fn now_unix_seconds() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |elapsed| elapsed.as_secs())
+}
+
+/// Reports what detection could not do for the project; the launch stands.
+pub fn report_model(model: &ProjectModel, report: &dyn Fn(&str, u64)) {
+    if model.needs_servlet && model.servlet.runtime.is_none() {
+        report(LAUNCH_SERVLET_CONTAINER_MISSING, 1);
+    }
+    if !model.unresolved.is_empty() {
+        report(
+            LAUNCH_PROJECT_MODEL_UNRESOLVED,
+            model.unresolved.len() as u64,
+        );
+    }
+    if model.truncated {
+        report(LAUNCH_PROJECT_MODEL_TRUNCATED, 1);
+    }
 }
 
 /// Runs a call of `java.resolveLaunch`.
@@ -665,12 +835,15 @@ pub fn resolve_launch_function(
     context.check_cancelled()?;
     let request = parse_launch_params(&params)?;
     check_server_runtime(&request)?;
-    let server = jdtls::locate(
-        request.server_home.as_deref(),
-        &SearchEnvironment::current(),
-        &request.os,
-        &request.architecture,
-    )?;
+    let home = request
+        .server_home
+        .as_deref()
+        .ok_or_else(managed_runtimes::not_prepared)?;
+    let server =
+        managed_runtimes::inspect_server(home, &request.os, &request.architecture, &|| {
+            context.check_cancelled().map_err(Into::into)
+        })?
+        .ok_or_else(managed_runtimes::incompatible_server)?;
     let package_root = package_root()?;
     let diagnostics = context.diagnostics();
     let operation = context.function_id().to_owned();
@@ -681,8 +854,10 @@ pub fn resolve_launch_function(
     };
     let (fragments, folders) = match context.workspace_context() {
         Some(workspace) => {
-            // The pushes after this start repeat the runtimes it configures.
+            // The pushes after this start repeat the runtimes and the
+            // project model settings it configures.
             session.set_java_runtimes(workspace, request.java_runtimes.clone());
+            session.set_model_options(workspace, request.model_options.clone());
             let folders = match workspace_folders(context.host(), workspace) {
                 Ok(folders) => folders,
                 Err(_) => {
@@ -696,32 +871,55 @@ pub fn resolve_launch_function(
         }
         None => (Vec::new(), Vec::new()),
     };
-    let trigger_files = trigger_files(&folders)?;
+    let scan = scan_trigger_files(&folders, TRIGGER_SCAN_ENTRY_BUDGET, native_trigger_entries)?;
     context.check_cancelled()?;
+    report_trigger_scan(&scan, &report);
     let mut answer = resolve(
         &request,
         &server,
         &package_root,
         &fragments,
-        &trigger_files,
+        &scan.files,
         now_unix_seconds(),
         &report,
     )?;
     if let Some(folder) = folders.first() {
-        let configuration = crate::settings_session::with_native_settings(
+        let (configuration, model) = crate::settings_session::with_native_model(
             answer["workspaceConfiguration"].clone(),
             folder,
+            &request.model_options,
         )?;
+        report_model(&model, &report);
         answer["workspaceConfiguration"] = configuration.clone();
         answer["initializationOptions"]["settings"] = configuration;
     }
     context.check_cancelled()?;
+    if let Some(workspace) = context.workspace_context() {
+        let jdk = &params["runtimes"]["jdk"];
+        if let (Some(version), Some(home), Some(server_version)) = (
+            jdk["version"].as_str(),
+            jdk["home"].as_str(),
+            params["runtimes"]["jdtls"]["version"].as_str(),
+        ) {
+            session.record_service_environment(
+                workspace,
+                params["settings"][SERVER_HOME_SETTING]
+                    .as_str()
+                    .unwrap_or(""),
+                [
+                    format!("JDT LS {server_version} · {}", server.home.display()),
+                    format!("JDK {version} · {home}"),
+                ],
+            );
+        }
+    }
     Ok(answer)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::jdtls;
 
     #[test]
     #[cfg(windows)]
@@ -1128,14 +1326,16 @@ mod tests {
     }
 
     #[test]
-    fn a_runtime_older_than_java_21_is_refused_before_anything_is_written() {
+    fn a_runtime_older_than_java_25_is_refused_before_anything_is_written() {
         let fixture = Fixture::new();
         let mut params = fixture.params();
         for (version, accepted) in [
             ("17.0.19", false),
             ("8.0.392", false),
-            ("21", true),
-            ("21.0.9", true),
+            ("21", false),
+            ("21.0.9", false),
+            ("25", true),
+            ("25.0.5.0.2", true),
             ("26.0.2", true),
             ("unknown", true),
         ] {
@@ -1171,6 +1371,49 @@ mod tests {
         // Without a version the host's own resolution decides.
         params["tools"] = json!({});
         assert!(check_server_runtime(&parse_launch_params(&params).unwrap()).is_ok());
+
+        // A JDT LS installation whose core bundles require Java 25 (such as
+        // JDT LS 1.63+) refuses a Java 21 runtime with the exact required
+        // version before writing anything to `state`.
+        let mut server_25 = fixture.server();
+        server_25.minimum_java_version = 25;
+        params["tools"] = json!({
+            "jdtls-runtime": {"executable": "/jdk21/bin/java", "home": "/jdk21", "version": "21.0.9"}
+        });
+        let request_21 = parse_launch_params(&params).unwrap();
+        let report = |_: &str, _: u64| {};
+        let error = resolve(
+            &request_21,
+            &server_25,
+            &fixture.package(),
+            &[],
+            &[],
+            1_000_000,
+            &report,
+        )
+        .unwrap_err();
+        assert_eq!(error.code(), LAUNCH_RUNTIME_TOO_OLD);
+        assert_eq!(error.message(), runtime_too_old_message(25));
+        assert!(error.message().contains("Java 25 or later"));
+        assert!(fs::read_dir(fixture.root.join("state"))
+            .unwrap()
+            .next()
+            .is_none());
+
+        params["tools"] = json!({
+            "jdtls-runtime": {"executable": "/jdk25/bin/java", "home": "/jdk25", "version": "25.0.4.1"}
+        });
+        let request_25 = parse_launch_params(&params).unwrap();
+        assert!(resolve(
+            &request_25,
+            &server_25,
+            &fixture.package(),
+            &[],
+            &[],
+            1_000_000,
+            &report,
+        )
+        .is_ok());
     }
 
     #[test]
@@ -1188,6 +1431,149 @@ mod tests {
             .iter()
             .all(|code| lithe_plugin_sdk::is_plugin_error_code(code)));
         assert!(lithe_plugin_sdk::is_function_id(LAUNCH_FUNCTION_ID));
+    }
+
+    // The injected reader models errors that cannot reliably be produced with
+    // chmod on Windows or when a test process has elevated permissions.
+    struct TriggerFixtureEntry {
+        path: PathBuf,
+        kind: Result<TriggerKind, io::ErrorKind>,
+    }
+
+    impl TriggerEntry for TriggerFixtureEntry {
+        fn name(&self) -> OsString {
+            self.path.file_name().unwrap().to_os_string()
+        }
+
+        fn path(&self) -> PathBuf {
+            self.path.clone()
+        }
+
+        fn kind(&self) -> io::Result<TriggerKind> {
+            self.kind.map_err(io::Error::from)
+        }
+    }
+
+    #[test]
+    fn trigger_scan_treats_disappeared_directories_as_optional_but_counts_io_denial() {
+        let fixture = Fixture::new();
+        let roots = vec![fixture.root.join("workspace")];
+        let vanished =
+            scan_trigger_files::<TriggerFixtureEntry>(&roots, TRIGGER_SCAN_ENTRY_BUDGET, |_| {
+                Err(io::Error::from(io::ErrorKind::NotFound))
+            })
+            .unwrap();
+        assert!(vanished.files.is_empty());
+        assert_eq!(vanished.unreadable, 0);
+
+        let denied =
+            scan_trigger_files::<TriggerFixtureEntry>(&roots, TRIGGER_SCAN_ENTRY_BUDGET, |_| {
+                Err(io::Error::from(io::ErrorKind::PermissionDenied))
+            })
+            .unwrap();
+        assert!(denied.files.is_empty());
+        assert_eq!(denied.unreadable, 1);
+        let calls = std::cell::Cell::new(0);
+        report_trigger_scan(&denied, &|code, count| {
+            assert_eq!(code, LAUNCH_TRIGGER_SCAN_UNREADABLE);
+            assert_eq!(count, 1);
+            calls.set(calls.get() + 1);
+        });
+        assert_eq!(calls.get(), 1);
+        report_trigger_scan(&vanished, &|_, _| panic!("missing folders are normal"));
+
+        let disappeared_entries =
+            scan_trigger_files::<TriggerFixtureEntry>(&roots, TRIGGER_SCAN_ENTRY_BUDGET, |_| {
+                Ok(vec![
+                    Err(io::Error::from(io::ErrorKind::NotFound)),
+                    Ok(TriggerFixtureEntry {
+                        path: roots[0].join("Gone.java"),
+                        kind: Err(io::ErrorKind::NotFound),
+                    }),
+                ])
+            })
+            .unwrap();
+        assert!(disappeared_entries.files.is_empty());
+        assert_eq!(disappeared_entries.unreadable, 0);
+    }
+
+    #[test]
+    fn trigger_scan_retains_partial_results_and_reports_one_redacted_summary() {
+        let fixture = Fixture::new();
+        let root = fixture.root.join("workspace");
+        let java = root.join("Main.java");
+        let unreadable = root.join("Unreadable.java");
+        let child = root.join("src");
+        let scan = scan_trigger_files::<TriggerFixtureEntry>(
+            std::slice::from_ref(&root),
+            TRIGGER_SCAN_ENTRY_BUDGET,
+            |directory| {
+                if directory == root {
+                    return Ok(vec![
+                        Ok(TriggerFixtureEntry {
+                            path: child.clone(),
+                            kind: Ok(TriggerKind::Directory),
+                        }),
+                        Ok(TriggerFixtureEntry {
+                            path: java.clone(),
+                            kind: Ok(TriggerKind::File),
+                        }),
+                        Err(io::Error::from(io::ErrorKind::PermissionDenied)),
+                        Ok(TriggerFixtureEntry {
+                            path: unreadable.clone(),
+                            kind: Err(io::ErrorKind::PermissionDenied),
+                        }),
+                        Ok(TriggerFixtureEntry {
+                            path: root.join("Link.java"),
+                            kind: Ok(TriggerKind::Other),
+                        }),
+                    ]);
+                }
+                Err(io::Error::from(io::ErrorKind::PermissionDenied))
+            },
+        )
+        .unwrap();
+        assert_eq!(scan.files, vec![file_uri(&java).unwrap()]);
+        assert_eq!(scan.unreadable, 3);
+        let calls = std::cell::Cell::new(0);
+        report_trigger_scan(&scan, &|code, count| {
+            assert_eq!(code, LAUNCH_TRIGGER_SCAN_UNREADABLE);
+            assert_eq!(count, 3);
+            calls.set(calls.get() + 1);
+        });
+        assert_eq!(calls.get(), 1);
+    }
+
+    #[test]
+    fn trigger_scan_keeps_the_entry_budget_when_reading_fixture_directories() {
+        let fixture = Fixture::new();
+        let root = fixture.root.join("workspace");
+        let first = root.join("A.java");
+        let second = root.join("B.java");
+        let third = root.join("C.java");
+        let scan =
+            scan_trigger_files::<TriggerFixtureEntry>(std::slice::from_ref(&root), 2, |_| {
+                Ok(vec![
+                    Ok(TriggerFixtureEntry {
+                        path: third.clone(),
+                        kind: Ok(TriggerKind::File),
+                    }),
+                    Ok(TriggerFixtureEntry {
+                        path: first.clone(),
+                        kind: Ok(TriggerKind::File),
+                    }),
+                    Ok(TriggerFixtureEntry {
+                        path: second.clone(),
+                        kind: Ok(TriggerKind::File),
+                    }),
+                ])
+            })
+            .unwrap();
+        assert_eq!(
+            scan.files,
+            vec![file_uri(&first).unwrap(), file_uri(&second).unwrap()]
+        );
+        assert_eq!(scan.unreadable, 0);
     }
 
     #[test]
@@ -1228,6 +1614,31 @@ mod tests {
             .unwrap()
             .is_empty());
         assert!(trigger_files(&[]).unwrap().is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn trigger_scan_does_not_follow_symlinks_or_report_them_unreadable() {
+        let fixture = Fixture::new();
+        let workspace = fixture.root.join("workspace");
+        let outside = fixture.root.join("outside");
+        fs::create_dir_all(&workspace).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        let real = workspace.join("Real.java");
+        let outside_file = outside.join("Outside.java");
+        fs::write(&real, b"").unwrap();
+        fs::write(&outside_file, b"").unwrap();
+        std::os::unix::fs::symlink(&outside_file, workspace.join("Link.java")).unwrap();
+        std::os::unix::fs::symlink(&outside, workspace.join("linked_dir")).unwrap();
+
+        let scan = scan_trigger_files(
+            std::slice::from_ref(&workspace),
+            TRIGGER_SCAN_ENTRY_BUDGET,
+            native_trigger_entries,
+        )
+        .unwrap();
+        assert_eq!(scan.files, vec![file_uri(&real).unwrap()]);
+        assert_eq!(scan.unreadable, 0);
     }
 
     #[test]

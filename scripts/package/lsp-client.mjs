@@ -3,7 +3,7 @@
 import {spawn,execFileSync} from 'node:child_process';
 export class Client {
  constructor(executable,args=[],options={}){
-  this.hostRequests=options.hostRequests??{};const {hostRequests,...spawnOptions}=options;
+  this.hostRequests=options.hostRequests??{};this.notifications=options.notifications??(()=>{});const {hostRequests,notifications,...spawnOptions}=options;
   this.next=1;this.pending=new Map();this.buffer=Buffer.alloc(0);this.stderr='';
   this.child=spawn(executable,args,{...spawnOptions,detached:true,stdio:['pipe','pipe','pipe']});
   this.exited=new Promise(resolve=>{this.child.once('exit',(code,signal)=>{this.fail(Error(`Process exited: ${code}/${signal}: ${this.stderr}`));resolve();});this.child.once('error',error=>{this.fail(error);resolve();});});
@@ -22,7 +22,8 @@ export class Client {
       const handler=this.hostRequests[message.method];
       if(handler){Promise.resolve().then(()=>handler(message.params)).then(result=>this.send({id:message.id,result}),error=>this.send({id:message.id,error:{code:-32603,message:error.message}}));}
       else{const result=message.method==='workspace/configuration'?(message.params?.items??[]).map(()=>({})):null;this.send({id:message.id,result});}
-     }else if(message.id!==undefined){const item=this.pending.get(message.id);if(item){this.pending.delete(message.id);clearTimeout(item.timer);message.error?item.reject(Error(JSON.stringify(message.error))):item.resolve(message.result);}}
+     }else if(message.method){this.notifications(message.method,message.params);}
+     else if(message.id!==undefined){const item=this.pending.get(message.id);if(item){this.pending.delete(message.id);clearTimeout(item.timer);message.error?item.reject(Error(JSON.stringify(message.error))):item.resolve(message.result);}}
     }
    }catch(error){this.fail(error);}
   });

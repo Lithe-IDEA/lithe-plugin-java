@@ -152,9 +152,10 @@ validate_output() {
     [[ -f "$OUTPUT_DIR/java-test/runner/$java_test_runner_name" ]] || { print -u2 -- "Java Test runner is missing: $OUTPUT_DIR"; exit 1; }
     [[ -f "$OUTPUT_DIR/java-test/LICENSE-MIT.txt" ]] || { print -u2 -- "Java Test license is missing: $OUTPUT_DIR"; exit 1; }
     # Wrapper scripts remain available for external/legacy launch plans. The
-    # packaged product launches bundled Java directly with the resources above.
+    # packaged product launches the selected service JDK directly with these resources.
     grep -Fq -- '-javaagent:' "$OUTPUT_DIR/bin/jdtls" || { print -u2 -- "JDTLS launcher does not load the Lombok agent: $OUTPUT_DIR"; exit 1; }
     grep -Fq -- '-javaagent:' "$OUTPUT_DIR/bin/jdtls.ps1" || { print -u2 -- "JDTLS Windows launcher does not load the Lombok agent: $OUTPUT_DIR"; exit 1; }
+    node "$ROOT_DIR/scripts/package/jdtls-runtime-profile.mjs" "$OUTPUT_DIR"
 }
 
 if [[ -n "${LITHE_JDTLS_ROOT:-}" ]]; then

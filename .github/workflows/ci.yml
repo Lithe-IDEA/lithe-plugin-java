@@ -1,7 +1,7 @@
 name: CI
 
-# Draft pull requests only run the Linux checks. The macOS package job starts
-# when a pull request is ready for review and on every push to main.
+# Draft pull requests only run the Linux checks. Windows tests and macOS
+# packaging run on ready pull requests and on every push to main.
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
@@ -44,6 +44,25 @@ jobs:
       - name: Check the pinned plugin SDK release
         run: scripts/verify-sdk-lock.sh --download
 
+  windows:
+    name: Test Windows x64 backend
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      # Match the static CRT used by the release backend.
+      RUSTFLAGS: -C target-feature=+crt-static
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@v2
+      - name: Test the native Windows backend
+        run: cargo test --workspace --locked --target x86_64-pc-windows-msvc
+
   package:
     name: Build and verify the macOS packages
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
@@ -67,6 +86,13 @@ jobs:
         with:
           path: .artifacts/jdtls-downloads
           key: third-party-${{ hashFiles('third_party/*/manifest.json') }}
+      # The package ships no JDK. This one compiles the plugin's own JDT LS
+      # extension bundle while packaging, and the integration tests run the
+      # tested JDT LS release on it, as a user's JDK 21+ would.
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
       - name: Build, verify and archive both architectures
         run: |
           set -euo pipefail
@@ -74,17 +100,13 @@ jobs:
             package=$(scripts/build-package.sh --arch "$arch")
             scripts/archive-package.sh --package "$package" --arch "$arch"
           done
-      # The package ships no JDK; the integration tests run the tested JDT LS
-      # release on this one, as a user's JDK 21+ would.
-      - uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: "21"
       - name: Verify native compiler settings and JARs with the user's JDT LS
         run: |
           package=".artifacts/package/$(uname -m)/io.github.lithe-idea.java-support"
           node scripts/compiler/test-live.mjs "$package"
           LITHE_JAVA_PROJECT_KIND=eclipse node scripts/compiler/test-live.mjs "$package"
+          node scripts/compiler/test-project-models.mjs "$package"
+          node scripts/compiler/test-module-structure.mjs "$package"
       - name: Upload native compiler projections
         uses: actions/upload-artifact@v4
         with:
@@ -139,6 +161,13 @@ jobs:
         run: node scripts/package/build-linux.mjs "${{ matrix.arch }}"
       - name: Start the packaged backend and the user's language server
         run: node scripts/package/smoke-linux.mjs dist/*-linux-${{ matrix.arch }}.zip
+      - name: Compile legacy and cross-IDE project models with the user's language server
+        run: |
+          package=$(mktemp -d)
+          unzip -q dist/*-linux-${{ matrix.arch }}.zip -d "$package"
+          node scripts/compiler/test-project-models.mjs "$package/io.github.lithe-idea.java-support"
+          node scripts/compiler/test-module-structure.mjs "$package/io.github.lithe-idea.java-support"
+          rm -rf "$package"
       - uses: actions/upload-artifact@v4
         with:
           name: java-linux-${{ matrix.arch }}
@@ -147,6 +176,36 @@ jobs:
             dist/*-linux-*.zip.sha256
           if-no-files-found: error
           retention-days: 7
+
+  jsp-grammar-host:
+    # Runs on drafts too: it needs neither the Rust Core nor a package, only the
+    # host's pure-Go editor packages.
+    name: JSP grammar on the host tokenizer
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Read pinned host revision
+        id: host
+        run: echo "revision=$(node -p 'JSON.parse(require("fs").readFileSync("grammar-host.json")).revision')" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          repository: 1lck/Lithe-IDEA
+          ref: ${{ steps.host.outputs.revision }}
+          path: .artifacts/grammar-host
+          sparse-checkout: desktop
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: .artifacts/grammar-host/desktop/go.mod
+          cache: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Tokenize JSP with the host's TextMate engine
+        run: node scripts/grammar/host-jsp.mjs .artifacts/grammar-host
 
   native-settings-visual:
     name: Native compiler settings screenshots

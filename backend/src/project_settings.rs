@@ -14,16 +14,24 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use url::Url;
 
+use crate::project_model::{self, Environment, Explicit, ModelKind, ModelOptions, ProjectModel};
+
 const LIMIT: u64 = 2 * 1024 * 1024;
 const TARGET: &str = "org.eclipse.jdt.core.compiler.codegen.targetPlatform";
 const SOURCE: &str = "org.eclipse.jdt.core.compiler.source";
 const COMPLIANCE: &str = "org.eclipse.jdt.core.compiler.compliance";
 const RELEASE: &str = "org.eclipse.jdt.core.compiler.release";
 const NATURES: &str = "org.eclipse.jdt.ls.core.natureIds";
-const LIBRARIES: &str = "org.eclipse.jdt.ls.core.referencedLibraries";
+pub(crate) const LIBRARIES_FACT: &str = "org.eclipse.jdt.ls.core.referencedLibraries";
 const PREFS: &str = ".settings/org.eclipse.jdt.core.prefs";
 const SETTINGS: &str = ".vscode/settings.json";
 const LIBRARY_KEY: &str = "java.project.referencedLibraries";
+const SOURCE_PATHS_KEY: &str = "java.project.sourcePaths";
+const OUTPUT_KEY: &str = "java.project.outputPath";
+const JDT_COMMAND_TIMEOUT_MS: u64 = 30_000;
+const WORKSPACE_CLASSPATH_TIMEOUT_MS: u64 = 1_500;
+const WORKSPACE_AFTER_SAVE_TIMEOUT_MS: u64 = 10_000;
+const WORKSPACE_CLASSPATH_UNAVAILABLE: &str = "java.workspaceSettings.classpathUnavailable";
 
 /// Bounded native read bindings; no configuration documents or tool models are cached.
 #[derive(Default)]
@@ -74,9 +82,17 @@ fn root(context: &Context) -> Result<PathBuf, FunctionError> {
     dunce::canonicalize(path).map_err(|_| fail())
 }
 fn command(context: &Context, name: &str, args: Value) -> Result<Value, FunctionError> {
+    command_with_timeout(context, name, args, JDT_COMMAND_TIMEOUT_MS)
+}
+fn command_with_timeout(
+    context: &Context,
+    name: &str,
+    args: Value,
+    timeout_ms: u64,
+) -> Result<Value, FunctionError> {
     context.check_cancelled()?;
     let workspace = context.workspace_context().ok_or_else(fail)?;
-    let answer=context.host().request(crate::settings_session::REQUEST_METHOD,json!({"context":workspace.to_value(),"serverID":"java","method":"workspace/executeCommand","params":{"command":name,"arguments":args},"timeoutMilliseconds":30000})).map_err(|_|fail())?;
+    let answer=context.host().request(crate::settings_session::REQUEST_METHOD,json!({"context":workspace.to_value(),"serverID":"java","method":"workspace/executeCommand","params":{"command":name,"arguments":args},"timeoutMilliseconds":timeout_ms})).map_err(|_|fail())?;
     Ok(answer.get("value").cloned().unwrap_or(Value::Null))
 }
 fn local(zh: bool, en: &str, cn: &str) -> String {
@@ -170,7 +186,7 @@ fn compiler_fields(
 }
 
 impl ProjectSettings {
-    /// Projects native settings only after the declared JDT server is ready.
+    /// Projects native settings and reports the JDT facts available for them.
     pub fn snapshot(
         &self,
         params: Value,
@@ -188,7 +204,29 @@ impl ProjectSettings {
                 .refresh_native_settings(context.workspace_context().ok_or_else(fail)?, &root)
                 .map_err(|_| fail())?;
         }
-        let projects = command(context, "java.project.getAll", json!([]))?;
+        let model = if libraries {
+            let workspace = context.workspace_context().ok_or_else(fail)?;
+            let options = session.model_options(workspace.context_id());
+            let explicit = Explicit::from_document(&native_json(&read(&root.join(SETTINGS))?.0)?);
+            Some((
+                project_model::detect(&root, &options, &Environment::current()),
+                explicit,
+            ))
+        } else {
+            None
+        };
+        let workspace_module = model.as_ref().is_some_and(|(model, _)| {
+            matches!(model.kind, ModelKind::Plain | ModelKind::LegacyWeb)
+        });
+        let workspace_uri = model
+            .as_ref()
+            .filter(|(model, _)| workspace_module || !model.idea_module_details.is_empty())
+            .and_then(|_| Url::from_file_path(&root).ok());
+        let projects = if let Some(uri) = &workspace_uri {
+            json!([uri.as_str()])
+        } else {
+            command(context, "java.project.getAll", json!([]))?
+        };
         if params["operation"] == "readAfterSave" {
             let identifiers: Vec<_> = projects
                 .as_array()
@@ -205,10 +243,66 @@ impl ProjectSettings {
             RELEASE,
             "org.eclipse.jdt.core.compiler.debug.lineNumber",
             NATURES,
-            LIBRARIES
+            LIBRARIES_FACT,
+            crate::library_settings::SOURCE_PATHS_FACT
         ]);
+        // The workspace configuration is available while JDT waits for indexing.
+        let workspace_timeout = if params["operation"] == "readAfterSave" {
+            WORKSPACE_AFTER_SAVE_TIMEOUT_MS
+        } else {
+            WORKSPACE_CLASSPATH_TIMEOUT_MS
+        };
+        let mut workspace_degraded = false;
+        let workspace_classpaths = workspace_uri.as_ref().and_then(|uri| {
+            let resolved = resolved_classpaths(context, uri.as_str(), workspace_timeout);
+            if resolved.is_none() {
+                workspace_degraded = true;
+            }
+            resolved
+        });
         let mut facts = Vec::new();
-        for entry in projects.as_array().ok_or_else(fail)? {
+        if let Some(uri) = &workspace_uri {
+            let settings = if workspace_classpaths.is_some() {
+                match command_with_timeout(
+                    context,
+                    "java.project.getSettings",
+                    json!([
+                        uri.as_str(),
+                        [
+                            LIBRARIES_FACT,
+                            crate::library_settings::SOURCE_PATHS_FACT,
+                            crate::library_settings::OUTPUT_PATH_FACT
+                        ]
+                    ]),
+                    workspace_timeout,
+                ) {
+                    Ok(value) => value,
+                    Err(_) => {
+                        workspace_degraded = true;
+                        Value::Null
+                    }
+                }
+            } else {
+                Value::Null
+            };
+            facts.push((root.clone(), settings));
+        }
+        if workspace_degraded {
+            let _ = context.diagnostics().degraded(
+                context.function_id(),
+                WORKSPACE_CLASSPATH_UNAVAILABLE,
+                Some(1),
+            );
+        }
+        context.check_cancelled()?;
+        // Maven and Gradle projects: shown read-only on the structure page.
+        let mut managed_projects = Vec::new();
+        for entry in projects
+            .as_array()
+            .ok_or_else(fail)?
+            .iter()
+            .filter(|_| workspace_uri.is_none())
+        {
             context.check_cancelled()?;
             let value = entry.as_str().ok_or_else(fail)?;
             let path = Url::parse(value)
@@ -228,9 +322,11 @@ impl ProjectSettings {
             });
             if !managed {
                 facts.push((path, settings));
+            } else if libraries {
+                managed_projects.push((path, value.to_owned()));
             }
         }
-        if facts.len() > 1023 {
+        if facts.len() + managed_projects.len() > 1023 {
             return Err(fail());
         }
         // Global defaults come from the native global preference file, or
@@ -263,6 +359,29 @@ impl ProjectSettings {
                 global_effective[key] = facts[index].1[key].clone();
             }
         }
+        // The libraries page also projects the detected project model and
+        // what the project model bundle made of Eclipse containers. A JDT LS
+        // without the bundle (an older user installation) has no describe
+        // command; the page then shows only what the backend detected.
+        let described = if libraries && workspace_uri.is_none() {
+            command(
+                context,
+                crate::library_settings::DESCRIBE_COMMAND,
+                json!([]),
+            )
+            .ok()
+        } else {
+            None
+        };
+        let page = model
+            .as_ref()
+            .map(|(model, explicit)| crate::library_settings::Page {
+                zh,
+                root: &root,
+                model,
+                explicit,
+                described: described.as_ref(),
+            });
         let mut sources = Vec::new();
         let mut bindings = BTreeMap::new();
         let mut paths = BTreeSet::new();
@@ -276,13 +395,14 @@ impl ProjectSettings {
             paths.insert(path);
             sources.push(json!({"id":id,"group":"project","title":local(zh,"Project defaults","项目默认设置"),"path":PREFS,"revision":revision,"writable":true,"fields":compiler_fields(zh,&raw,&effective,false)}));
         }
+        let mut modules = Vec::new();
         for (path, fact) in facts {
+            if libraries && read(&path.join(".classpath"))?.1 != "missing" {
+                modules.push(path);
+                continue;
+            }
             let source_path = if libraries {
-                if read(&path.join(".classpath"))?.1 != "missing" {
-                    path.join(".classpath")
-                } else {
-                    root.join(SETTINGS)
-                }
+                root.join(SETTINGS)
             } else {
                 path.join(PREFS)
             };
@@ -297,14 +417,22 @@ impl ProjectSettings {
                 .replace('\\', "/");
             let id = format!("source{:x}", Sha256::digest(rel.as_bytes()));
             let (bytes, revision) = read(&source_path)?;
-            let mut fields = if libraries {
-                let value = if source_path.ends_with(".classpath") {
-                    json!(classpath_libraries(&bytes)?)
+            let mut writable = true;
+            let mut fields = if let Some(page) = &page {
+                let settings = native_json(&bytes)?;
+                if workspace_module {
+                    let explicit = Explicit::from_document(&settings);
+                    let page = crate::library_settings::Page {
+                        explicit: &explicit,
+                        ..*page
+                    };
+                    let (fields, complete) =
+                        page.workspace_fields(&fact, workspace_classpaths.as_deref());
+                    writable = complete;
+                    fields
                 } else {
-                    library_input(&native_json(&bytes)?)
-                };
-                let effective = fact[LIBRARIES].clone();
-                vec![field(zh, ("libraries", "Referenced JAR files", "引用的 JAR 文件", "fileList"),value,effective,json!([]),&local(zh,"Eclipse projects use .classpath. Unmanaged Java uses java.project.referencedLibraries in .vscode/settings.json; lib/**/*.jar is the upstream default.","Eclipse 项目写入 .classpath；普通 Java 使用 .vscode/settings.json 的 java.project.referencedLibraries，上游默认引用 lib/**/*.jar。"))]
+                    page.settings_fields(&fact, library_input(&settings))
+                }
             } else {
                 compiler_fields(zh, &properties(&bytes)?, &fact, true)
             };
@@ -318,8 +446,132 @@ impl ProjectSettings {
                     }
                 }
             }
-            bindings.insert(id.clone(), source_path);
-            sources.push(json!({"id":id,"group":if libraries{"libraries"}else{"modules"},"title":path.file_name().and_then(|n|n.to_str()).unwrap_or("Java"),"path":rel,"revision":revision,"writable":true,"fields":fields}));
+            if writable {
+                bindings.insert(id.clone(), source_path);
+            }
+            let title = crate::module_structure::clean_text(
+                &crate::module_structure::project_name(&path),
+                256,
+            );
+            let title = if title.trim().is_empty() {
+                "Java".to_owned()
+            } else {
+                title
+            };
+            sources.push(json!({"id":id,"group":if libraries && !workspace_module{"libraries"}else{"modules"},"title":title,"path":rel,"revision":revision,"writable":writable,"fields":fields}));
+        }
+        let mut module_sources = if libraries {
+            self.module_sources(
+                context,
+                zh,
+                &root,
+                &modules,
+                &managed_projects,
+                &mut bindings,
+                &mut paths,
+            )?
+        } else {
+            Vec::new()
+        };
+        if let Some(page) = &page {
+            if !page.model.idea_module_details.is_empty() {
+                for module in &page.model.idea_module_details {
+                    let Ok(file) = dunce::canonicalize(root.join(&module.descriptor)) else {
+                        continue;
+                    };
+                    let Some(rel) = project_model::relative_inside(&root, &file) else {
+                        continue;
+                    };
+                    if rel == "." || rel.split('/').any(|part| part == "." || part == "..") {
+                        continue;
+                    }
+                    if !paths.insert(file.clone()) {
+                        continue;
+                    }
+                    let (_, revision) = read(&file)?;
+                    let id = format!("idea{:x}", Sha256::digest(rel.as_bytes()));
+                    let fields = crate::module_structure::idea_fields(
+                        zh,
+                        &root,
+                        module,
+                        workspace_classpaths.as_deref(),
+                    );
+                    let title = crate::module_structure::clean_text(&module.name, 256);
+                    let title = if title.trim().is_empty() {
+                        "IDEA".to_owned()
+                    } else {
+                        title
+                    };
+                    module_sources.push(json!({"id":id,"group":"modules","title":title,"path":rel,"revision":revision,"writable":false,"fields":fields}));
+                }
+            }
+        }
+        let mut groups = if libraries {
+            let mut groups = Vec::new();
+            if module_sources
+                .iter()
+                .chain(&sources)
+                .any(|source| source["group"] == "modules")
+            {
+                groups.push(
+                    json!({"id":"modules","title":local(zh,"Modules","模块"),"layout":"sidebar"}),
+                );
+            }
+            if module_sources
+                .iter()
+                .any(|source| source["group"] == "facets")
+            {
+                groups.push(json!({"id":"facets","title":local(zh,"Web Facets","Web Facet"),"layout":"sidebar"}));
+            }
+            if sources.iter().any(|source| source["group"] == "libraries") {
+                groups.push(json!({"id":"libraries","title":local(zh,"Referenced libraries","引用的库"),"layout":"form"}));
+            }
+            groups
+        } else {
+            vec![
+                json!({"id":"project","title":local(zh,"Project defaults","项目默认设置"),"layout":"form"}),
+                json!({"id":"modules","title":local(zh,"Per-module bytecode","按模块设置字节码"),"rowTitle":local(zh,"Module","模块"),"layout":"table"}),
+            ]
+        };
+        sources.splice(0..0, module_sources);
+        if let Some(page) = &page {
+            let taken: Vec<PathBuf> = paths.iter().cloned().collect();
+            let mut model_sources: Vec<(PathBuf, Value)> = Vec::new();
+            let mut rows = page.model_sources(&taken);
+            rows.extend(page.eclipse_sources(&taken));
+            for (id, path, fields) in rows {
+                // An Eclipse project's container rows share its `.project`
+                // with the model rows; one source holds both.
+                if let Some(source) = model_sources.iter_mut().find(|(known, _)| known == &path) {
+                    let existing = source.1["fields"].as_array_mut().ok_or_else(fail)?;
+                    existing.extend(
+                        fields
+                            .into_iter()
+                            .take(32usize.saturating_sub(existing.len())),
+                    );
+                    continue;
+                }
+                if sources.len() + model_sources.len() >= 1024 || !paths.insert(path.clone()) {
+                    continue;
+                }
+                let rel = project_model::relative_inside(&root, &path).ok_or_else(fail)?;
+                let title = if id == "model" {
+                    local(zh, "Project model", "工程模型")
+                } else {
+                    path.parent()
+                        .and_then(|p| p.file_name())
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("Eclipse")
+                        .to_string()
+                };
+                let (_, revision) = read(&path)?;
+                let id = format!("model{:x}", Sha256::digest(rel.as_bytes()));
+                model_sources.push((path, json!({"id":id,"group":"model","title":title,"path":rel,"revision":revision,"writable":false,"fields":fields})));
+            }
+            sources.extend(model_sources.into_iter().map(|(_, source)| source));
+            if sources.iter().any(|source| source["group"] == "model") {
+                groups.push(json!({"id":"model","title":local(zh,"Project model","工程模型"),"layout":"form"}));
+            }
         }
         let mut all = self.bindings.lock().map_err(|_| fail())?;
         if all.len() >= 32 && !all.contains_key(&root.to_string_lossy().to_string()) {
@@ -327,11 +579,162 @@ impl ProjectSettings {
         }
         all.insert(root.to_string_lossy().to_string(), bindings);
         Ok(
-            json!({"format":"litheSettingsSources","version":0,"title":if libraries{local(zh,"Java Libraries","Java 库")}else{local(zh,"Java Compiler","Java 编译器")},"groups":if libraries{json!([{"id":"libraries","title":local(zh,"Referenced libraries","引用的库"),"layout":"form"}])}else{json!([{"id":"project","title":local(zh,"Project defaults","项目默认设置"),"layout":"form"},{"id":"modules","title":local(zh,"Per-module bytecode","按模块设置字节码"),"rowTitle":local(zh,"Module","模块"),"layout":"table"}])},"sources":sources}),
+            json!({"format":"litheSettingsSources","version":0,"title":if libraries{local(zh,"Java Project Structure","Java 项目结构")}else{local(zh,"Java Compiler","Java 编译器")},"groups":groups,"sources":sources}),
         )
     }
+    /// The modules of the structure page, parents before children: Eclipse
+    /// projects edit their `.classpath`; Maven and Gradle projects show the
+    /// classpath JDT resolved, read-only.
+    #[allow(clippy::too_many_arguments)]
+    fn module_sources(
+        &self,
+        context: &Context,
+        zh: bool,
+        root: &Path,
+        eclipse: &[PathBuf],
+        managed: &[(PathBuf, String)],
+        bindings: &mut BTreeMap<String, PathBuf>,
+        paths: &mut BTreeSet<PathBuf>,
+    ) -> Result<Vec<Value>, FunctionError> {
+        use crate::module_structure as modules;
+        let mut classpaths = Vec::new();
+        let mut containers = Vec::new();
+        let mut names = Vec::new();
+        for project in eclipse {
+            let file = project.join(".classpath");
+            let (bytes, revision) = read(&file)?;
+            let classpath = modules::read(zh, &bytes)?;
+            for container in &classpath.containers {
+                if !containers.contains(container) {
+                    containers.push(container.clone());
+                }
+            }
+            let name = modules::project_name(project);
+            names.push(name.clone());
+            classpaths.push((project.clone(), file, revision, classpath, name));
+        }
+        // (folder, source file, source) in folder order, so that an
+        // enclosing module comes before the modules inside it.
+        let mut rows: Vec<(PathBuf, PathBuf, Value)> = Vec::new();
+        let mut facet_sources = Vec::new();
+        let mut unreadable_facets: u64 = 0;
+        for (project, file, revision, classpath, name) in classpaths {
+            let rel = project_model::relative_inside(root, &file).ok_or_else(fail)?;
+            let choices = modules::Choices {
+                containers: &containers,
+                modules: &names,
+            };
+            let fields = modules::fields(zh, &classpath, &name, &choices, &rel);
+            let id = format!("source{:x}", Sha256::digest(rel.as_bytes()));
+            if classpath.editable {
+                bindings.insert(id.clone(), file.clone());
+            }
+            // Web Facet is stored in another native XML source. Keep it
+            // separate from .classpath so each save replaces exactly one file.
+            // A facet file this page cannot edit safely costs only its own
+            // source: the module still shows, and the page reports one
+            // degradation for all such files.
+            if facet_sources.len() < 256 {
+                let facet_file = project.join(crate::web_facet::FILE);
+                if fs::symlink_metadata(&facet_file).is_ok_and(|info| info.is_file()) {
+                    let facet = read(&facet_file).and_then(|(bytes, revision)| {
+                        Ok(crate::web_facet::fields(zh, &bytes)?.map(|fields| (revision, fields)))
+                    });
+                    match facet {
+                        Ok(Some((revision, fields))) => {
+                            let rel = project_model::relative_inside(root, &facet_file)
+                                .ok_or_else(fail)?;
+                            let facet_id = format!("facet{:x}", Sha256::digest(rel.as_bytes()));
+                            if paths.insert(facet_file.clone()) {
+                                bindings.insert(facet_id.clone(), facet_file);
+                                facet_sources.push(json!({"id":facet_id,"group":"facets","title":name.clone(),"path":rel,"revision":revision,"writable":true,"fields":fields}));
+                            }
+                        }
+                        Ok(None) => {}
+                        Err(_) => unreadable_facets += 1,
+                    }
+                }
+            }
+            rows.push((project, file, json!({"id":id,"group":"modules","title":name,"path":rel,"revision":revision,"writable":classpath.editable,"fields":fields})));
+        }
+        let mut unavailable = 0;
+        for (project, uri) in managed {
+            context.check_cancelled()?;
+            let Some(file) = ["pom.xml", "build.gradle.kts", "build.gradle"]
+                .iter()
+                .map(|name| project.join(name))
+                .find(|file| file.is_file())
+            else {
+                continue;
+            };
+            let Some(resolved) = resolved_classpaths(context, uri, JDT_COMMAND_TIMEOUT_MS) else {
+                unavailable += 1;
+                continue;
+            };
+            let rel = project_model::relative_inside(root, &file).ok_or_else(fail)?;
+            let (_, revision) = read(&file)?;
+            let title = project
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("Java")
+                .to_owned();
+            let id = format!("managed{:x}", Sha256::digest(rel.as_bytes()));
+            rows.push((project.clone(), file, json!({"id":id,"group":"modules","title":title,"path":rel,"revision":revision,"writable":false,"fields":modules::resolved_fields(zh,root,&resolved,&rel)})));
+        }
+        if unavailable > 0 {
+            // A module JDT could not resolve is left out; the page still shows the others.
+            let _ = context.diagnostics().degraded(
+                context.function_id(),
+                "java.moduleSettings.classpathUnavailable",
+                Some(unavailable),
+            );
+        }
+        rows.sort_by(|a, b| a.0.cmp(&b.0));
+        let mut depths: Vec<(PathBuf, String, usize)> = Vec::new();
+        let mut sources = Vec::new();
+        for (project, file, mut source) in rows {
+            if !paths.insert(file) {
+                continue;
+            }
+            // The nearest enclosing module is the parent, within the
+            // contract's eight levels.
+            if let Some((_, parent, depth)) = depths
+                .iter()
+                .filter(|(folder, _, depth)| {
+                    project != *folder && project.starts_with(folder) && *depth < 7
+                })
+                .max_by_key(|(folder, _, _)| folder.components().count())
+            {
+                source["parent"] = json!(parent);
+                depths.push((
+                    project,
+                    source["id"].as_str().unwrap_or("").to_owned(),
+                    depth + 1,
+                ));
+            } else {
+                depths.push((project, source["id"].as_str().unwrap_or("").to_owned(), 0));
+            }
+            sources.push(source);
+        }
+        sources.extend(facet_sources);
+        if unreadable_facets > 0 {
+            // An error from `degraded` only means the arguments were invalid,
+            // so the page itself stands.
+            let _ = context.diagnostics().degraded(
+                context.function_id(),
+                "webFacetUnreadable",
+                Some(unreadable_facets),
+            );
+        }
+        Ok(sources)
+    }
     /// Prepares only the confirmed native source; publication belongs to the host.
-    pub fn edit(&self, params: Value, context: &Context) -> Result<Value, FunctionError> {
+    pub fn edit(
+        &self,
+        params: Value,
+        context: &Context,
+        session: &crate::settings_session::SettingsSession,
+    ) -> Result<Value, FunctionError> {
         let root = root(context)?;
         let id = params["sourceID"].as_str().ok_or_else(fail)?;
         let path = self
@@ -359,9 +762,13 @@ impl ProjectSettings {
         }
         let values = params["values"].as_object().ok_or_else(fail)?;
         let replacement = if path.ends_with(".classpath") {
-            edit_classpath(&bytes, values.get("libraries").ok_or_else(fail)?)?
+            crate::module_structure::edit(&bytes, parent, values)?
+        } else if path.ends_with(crate::web_facet::FILE) {
+            crate::web_facet::edit(&bytes, values)?
         } else if path.ends_with(SETTINGS) {
-            edit_json(&bytes, values.get("libraries").ok_or_else(fail)?)?
+            let workspace = context.workspace_context().ok_or_else(fail)?;
+            let options = session.model_options(workspace.context_id());
+            edit_settings(&root, &bytes, values, &options)?
         } else {
             edit_properties(&bytes, values)?
         };
@@ -394,19 +801,50 @@ impl ProjectSettings {
     }
 }
 
-/// Reads the actual upstream settings sources; used at startup and on every push.
-pub fn native_settings(root: &Path) -> Result<Value, FunctionError> {
+fn resolved_classpaths(context: &Context, uri: &str, timeout_ms: u64) -> Option<Vec<String>> {
+    // JDT reads the options from a JSON string, as vscode-java sends them.
+    let value = command_with_timeout(
+        context,
+        "java.project.getClasspaths",
+        json!([uri, r#"{"scope":"test"}"#]),
+        timeout_ms,
+    )
+    .ok()?;
+    Some(
+        value["classpaths"]
+            .as_array()?
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::to_owned)
+            .collect(),
+    )
+}
+
+/// Reads the actual upstream settings sources and overlays the detected
+/// project model; used at startup and on every push. Returns the `java`
+/// sections to overlay and the model they came from.
+pub fn native_settings(
+    root: &Path,
+    options: &ModelOptions,
+) -> Result<(Value, ProjectModel), FunctionError> {
     let mut settings = json!({});
     if read(&root.join(PREFS))?.1 != "missing" {
         settings["settings"] =
             json!({"url":Url::from_file_path(root.join(PREFS)).map_err(|_|fail())?.to_string()});
     }
     let (bytes, _) = read(&root.join(SETTINGS))?;
-    let source = native_json(&bytes)?;
-    if let Some(libraries) = source.get(LIBRARY_KEY) {
-        settings["project"] = json!({"referencedLibraries":libraries});
+    let explicit = Explicit::from_document(&native_json(&bytes)?);
+    let model = project_model::detect(root, options, &Environment::current());
+    let overlay = project_model::overlay(root, &model, &explicit);
+    for section in ["project", "lithe"] {
+        if overlay
+            .get(section)
+            .is_some_and(|value| value != &json!({}))
+        {
+            settings[section] = overlay[section].clone();
+        }
     }
-    Ok(settings)
+    Ok((settings, model))
 }
 fn native_json(bytes: &[u8]) -> Result<Value, FunctionError> {
     if bytes.is_empty() {
@@ -428,31 +866,301 @@ fn library_input(settings: &Value) -> Value {
         None => Value::Null,
     }
 }
-fn edit_json(bytes: &[u8], libraries: &Value) -> Result<Vec<u8>, FunctionError> {
+/// Applies the confirmed fields of the `.vscode/settings.json` source in
+/// order: libraries, source folders, then saving or removing the detected
+/// entries against the file as the first two left it.
+fn edit_settings(
+    root: &Path,
+    bytes: &[u8],
+    values: &serde_json::Map<String, Value>,
+    options: &ModelOptions,
+) -> Result<Vec<u8>, FunctionError> {
+    use crate::library_settings::{
+        CLASS_FOLDERS_FIELD, LIBRARIES_FIELD, SOURCE_PATHS_FIELD, STORE_DETECTED_FIELD,
+    };
+    let mut document = bytes.to_vec();
+    if let Some(libraries) = values.get(LIBRARIES_FIELD) {
+        document = edit_json(&document, LIBRARY_KEY, libraries)?;
+    }
+    if let Some(paths) = values.get(SOURCE_PATHS_FIELD) {
+        document = edit_json(&document, SOURCE_PATHS_KEY, paths)?;
+    }
+    if let Some(roots) = values.get(crate::module_structure::ROOTS_FIELD) {
+        let existing_explicit = Explicit::from_document(&native_json(&document)?);
+        let normalize_existing = |path: &str| -> String {
+            let normalized = path.replace('\\', "/");
+            if normalized == "." {
+                normalized
+            } else {
+                normalized.trim_end_matches('/').to_owned()
+            }
+        };
+        let existing_known: BTreeSet<String> = existing_explicit
+            .source_paths
+            .as_ref()
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .chain(
+                existing_explicit
+                    .source_roles
+                    .values()
+                    .flat_map(|paths| paths.iter().map(String::as_str)),
+            )
+            .map(normalize_existing)
+            .collect();
+        let canonical_root = dunce::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+        let mut roles = BTreeMap::<&str, Vec<String>>::new();
+        let paths = match roots {
+            Value::Null => Value::Null,
+            Value::Array(entries) if entries.len() <= 256 => {
+                let mut folders: Vec<(&str, String)> = Vec::new();
+                for entry in entries {
+                    let kind = entry["kind"]
+                        .as_str()
+                        .filter(|kind| {
+                            *kind == "folder"
+                                || project_model::SOURCE_ROLE_KEYS
+                                    .iter()
+                                    .any(|(role, _)| role == kind)
+                        })
+                        .ok_or_else(fail)?;
+                    let raw_path = entry["value"]
+                        .as_str()
+                        .filter(|path| crate::library_settings::valid_path(path))
+                        .ok_or_else(fail)?;
+                    let path = Path::new(raw_path);
+                    let candidate = if path.is_absolute() {
+                        path.to_path_buf()
+                    } else {
+                        canonical_root.join(path)
+                    };
+                    let relative = match dunce::canonicalize(&candidate) {
+                        Ok(resolved) => {
+                            if !resolved.is_dir() {
+                                return Err(fail());
+                            }
+                            project_model::relative_inside(&canonical_root, &resolved)
+                                .ok_or_else(fail)?
+                        }
+                        Err(_) => {
+                            let normalized = normalize_existing(raw_path);
+                            let safe_relative = !normalized.is_empty()
+                                && !Path::new(&normalized).is_absolute()
+                                && Path::new(&normalized).components().all(|part| {
+                                    matches!(
+                                        part,
+                                        std::path::Component::Normal(_)
+                                            | std::path::Component::CurDir
+                                    )
+                                });
+                            if !safe_relative || !existing_known.contains(&normalized) {
+                                return Err(fail());
+                            }
+                            normalized
+                        }
+                    };
+                    if relative.contains(['*', '?', '|']) || (kind == "excluded" && relative == ".")
+                    {
+                        return Err(fail());
+                    }
+                    if let Some((mark, _)) = folders.iter_mut().find(|(_, path)| *path == relative)
+                    {
+                        *mark = kind;
+                    } else {
+                        folders.push((kind, relative));
+                    }
+                }
+                let mut paths = Vec::new();
+                for (kind, relative) in folders {
+                    if kind != "folder" {
+                        roles.entry(kind).or_default().push(relative.clone());
+                    }
+                    if kind != "excluded" {
+                        paths.push(relative);
+                    }
+                }
+                json!(paths)
+            }
+            _ => return Err(fail()),
+        };
+        document = edit_json(&document, SOURCE_PATHS_KEY, &paths)?;
+        let current = native_json(&document)?;
+        for (kind, key) in project_model::SOURCE_ROLE_KEYS {
+            let value = roles.remove(kind).map_or(Value::Null, |paths| json!(paths));
+            if current.get(key).unwrap_or(&Value::Null) != &value {
+                document = edit_json(&document, key, &value)?;
+            }
+        }
+    }
+    if let Some(paths) = values.get(CLASS_FOLDERS_FIELD) {
+        document = edit_json(&document, project_model::CLASS_FOLDERS_KEY, paths)?;
+    }
+    if let Some(entries) = values.get(crate::module_structure::DEPENDENCIES_FIELD) {
+        document = edit_workspace_dependencies(root, &document, entries)?;
+    }
+    if let Some(output) = values.get(crate::module_structure::OUTPUT_FIELD) {
+        let output = match output {
+            Value::Null => Value::Null,
+            Value::String(path) if path.trim().is_empty() => Value::Null,
+            Value::String(path)
+                if crate::library_settings::valid_path(path)
+                    && Path::new(path).components().all(|part| {
+                        matches!(
+                            part,
+                            std::path::Component::Normal(_) | std::path::Component::CurDir
+                        )
+                    }) =>
+            {
+                output.clone()
+            }
+            _ => return Err(fail()),
+        };
+        document = edit_json(&document, OUTPUT_KEY, &output)?;
+    }
+    if let Some(store) = values.get(STORE_DETECTED_FIELD) {
+        let store = match store {
+            Value::Bool(store) => *store,
+            Value::Null => false,
+            _ => return Err(fail()),
+        };
+        let explicit = Explicit::from_document(&native_json(&document)?);
+        let model = project_model::detect(root, options, &Environment::current());
+        let page = crate::library_settings::Page {
+            zh: false,
+            root,
+            model: &model,
+            explicit: &explicit,
+            described: None,
+        };
+        let (libraries, source_paths) = crate::library_settings::stored_entries(&page, store);
+        if let Some(libraries) = libraries {
+            document = edit_json(&document, LIBRARY_KEY, &libraries)?;
+        }
+        if let Some(source_paths) = source_paths {
+            document = edit_json(
+                &document,
+                SOURCE_PATHS_KEY,
+                &source_paths.unwrap_or(Value::Null),
+            )?;
+        }
+    }
+    Ok(document)
+}
+
+fn edit_workspace_dependencies(
+    root: &Path,
+    bytes: &[u8],
+    entries: &Value,
+) -> Result<Vec<u8>, FunctionError> {
+    use crate::library_settings::{
+        jar_directory, valid_path, ARCHIVE, CLASS_FOLDER, JAR_DIRECTORY,
+    };
+    let settings = native_json(bytes)?;
+    let original = Explicit::from_document(&settings);
+    let mut include = Vec::new();
+    let mut classes = Vec::new();
+    if !entries.is_null() {
+        let entries = entries
+            .as_array()
+            .filter(|items| items.len() <= 256)
+            .ok_or_else(fail)?;
+        for entry in entries {
+            let path = entry["value"]
+                .as_str()
+                .filter(|path| valid_path(path))
+                .ok_or_else(fail)?;
+            let (list, value) = match entry["kind"].as_str() {
+                Some(ARCHIVE) => (&mut include, path.to_owned()),
+                Some(CLASS_FOLDER) => (&mut classes, path.to_owned()),
+                Some(JAR_DIRECTORY) => {
+                    let normalized = path.replace('\\', "/");
+                    let pattern = if jar_directory(&normalized).is_some() {
+                        path.to_owned()
+                    } else {
+                        let canonical_root =
+                            dunce::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+                        let input_path = Path::new(path);
+                        let candidate = if input_path.is_absolute() {
+                            dunce::canonicalize(input_path)
+                                .unwrap_or_else(|_| input_path.to_path_buf())
+                        } else {
+                            dunce::canonicalize(canonical_root.join(input_path))
+                                .unwrap_or_else(|_| input_path.to_path_buf())
+                        };
+                        let base = project_model::relative_inside(&canonical_root, &candidate)
+                            .or_else(|| project_model::relative_inside(root, input_path))
+                            .unwrap_or(normalized);
+                        format!("{}/*.jar", base.trim_end_matches('/'))
+                    };
+                    if !valid_path(&pattern) {
+                        return Err(fail());
+                    }
+                    (&mut include, pattern)
+                }
+                _ => return Err(fail()),
+            };
+            if !list.contains(&value) {
+                list.push(value);
+            }
+        }
+    }
+    let mut document = bytes.to_vec();
+    let implicit = [project_model::UPSTREAM_DEFAULT_LIBRARIES];
+    if entries.is_null() || !(original.libraries.is_none() && include == implicit) {
+        let libraries = if entries.is_null() {
+            Value::Null
+        } else {
+            json!(include)
+        };
+        if library_input(&settings) != libraries {
+            document = edit_json(&document, LIBRARY_KEY, &libraries)?;
+        }
+    }
+    let classes = if classes.is_empty() {
+        Value::Null
+    } else {
+        json!(classes)
+    };
+    if original.class_folders.unwrap_or(Value::Null) != classes {
+        document = edit_json(&document, project_model::CLASS_FOLDERS_KEY, &classes)?;
+    }
+    Ok(document)
+}
+
+/// Sets or (with null) removes `key`; a rich
+/// `referencedLibraries` object keeps its excludes and sources and only
+/// its `include` changes.
+fn edit_json(bytes: &[u8], key: &str, libraries: &Value) -> Result<Vec<u8>, FunctionError> {
     native_json(bytes)?;
     let text = std::str::from_utf8(bytes).map_err(|_| fail())?;
     let root = CstRootNode::parse(text, &Default::default()).map_err(|_| fail())?;
     let object = root.object_value_or_create().ok_or_else(fail)?;
-    let rich = object.get(LIBRARY_KEY).and_then(|prop| prop.object_value());
-    let (target, key) = rich
-        .map(|rich| (rich, "include"))
-        .unwrap_or((object, LIBRARY_KEY));
+    let rich = (key == LIBRARY_KEY)
+        .then(|| object.get(LIBRARY_KEY).and_then(|prop| prop.object_value()))
+        .flatten();
+    let (target, key) = rich.map(|rich| (rich, "include")).unwrap_or((object, key));
     if libraries.is_null() {
         if let Some(prop) = target.get(key) {
             prop.remove();
         }
     } else {
-        let values = libraries
-            .as_array()
-            .ok_or_else(fail)?
-            .iter()
-            .map(|v| {
-                v.as_str()
-                    .map(|s| CstInputValue::String(s.to_owned()))
-                    .ok_or_else(fail)
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let input = CstInputValue::Array(values);
+        let input = if key == OUTPUT_KEY {
+            CstInputValue::String(libraries.as_str().ok_or_else(fail)?.to_owned())
+        } else {
+            let values = libraries
+                .as_array()
+                .ok_or_else(fail)?
+                .iter()
+                .map(|v| {
+                    v.as_str()
+                        .map(|s| CstInputValue::String(s.to_owned()))
+                        .ok_or_else(fail)
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            CstInputValue::Array(values)
+        };
         if let Some(prop) = target.get(key) {
             prop.set_value(input);
         } else {
@@ -461,55 +1169,13 @@ fn edit_json(bytes: &[u8], libraries: &Value) -> Result<Vec<u8>, FunctionError> 
     }
     Ok(root.to_string().into_bytes())
 }
-fn classpath_libraries(bytes: &[u8]) -> Result<Vec<String>, FunctionError> {
-    let doc = xmltree::Element::parse(bytes).map_err(|_| fail())?;
-    if doc.name != "classpath" {
-        return Err(fail());
-    }
-    Ok(doc
-        .children
-        .iter()
-        .filter_map(xmltree::XMLNode::as_element)
-        .filter(|e| {
-            e.name == "classpathentry" && e.attributes.get("kind").is_some_and(|v| v == "lib")
-        })
-        .filter_map(|e| e.attributes.get("path").cloned())
-        .collect())
-}
-fn edit_classpath(bytes: &[u8], libraries: &Value) -> Result<Vec<u8>, FunctionError> {
-    let mut doc = xmltree::Element::parse(bytes).map_err(|_| fail())?;
-    if doc.name != "classpath" {
-        return Err(fail());
-    }
-    let paths = libraries
-        .as_array()
-        .map(|v| {
-            v.iter()
-                .map(|p| p.as_str().map(str::to_owned).ok_or_else(fail))
-                .collect::<Result<BTreeSet<_>, _>>()
-        })
-        .transpose()?
-        .unwrap_or_default();
-    let mut retained = BTreeSet::new();
-    doc.children.retain(|node| match node.as_element() {
-        Some(e)
-            if e.name == "classpathentry"
-                && e.attributes.get("kind").is_some_and(|v| v == "lib") =>
-        {
-            e.attributes
-                .get("path")
-                .is_some_and(|path| paths.contains(path) && retained.insert(path.clone()))
-        }
-        _ => true,
-    });
-    for path in paths.difference(&retained) {
-        let mut entry = xmltree::Element::new("classpathentry");
-        entry.attributes.insert("kind".into(), "lib".into());
-        entry.attributes.insert("path".into(), path.clone());
-        doc.children.push(xmltree::XMLNode::Element(entry));
-    }
-    // Preserve nodes outside the root too, including comments and processing
-    // instructions. xmltree validates each node before this serialization.
+/// Serializes an edited `.classpath` root in place of the original one,
+/// keeping the nodes outside the root, including comments and processing
+/// instructions. xmltree validates each node before this serialization.
+pub(crate) fn write_classpath(
+    bytes: &[u8],
+    doc: &xmltree::Element,
+) -> Result<Vec<u8>, FunctionError> {
     let nodes = xmltree::Element::parse_all(bytes).map_err(|_| fail())?;
     let mut out = b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n".to_vec();
     for node in nodes {
@@ -517,8 +1183,11 @@ fn edit_classpath(bytes: &[u8], libraries: &Value) -> Result<Vec<u8>, FunctionEr
             xmltree::XMLNode::Element(_) => doc
                 .write_with_config(
                     &mut out,
+                    // Eclipse writes `<entry .../>`; matching it keeps a
+                    // save from rewriting every self-closing line.
                     xmltree::EmitterConfig::new()
                         .perform_indent(true)
+                        .pad_self_closing(false)
                         .write_document_declaration(false),
                 )
                 .map_err(|_| fail())?,
@@ -685,6 +1354,65 @@ mod tests {
         }
     }
     #[test]
+    fn selecting_another_role_for_a_source_folder_replaces_the_previous_role() {
+        let directory = TestDirectory::new();
+        let root = dunce::canonicalize(&directory.0).unwrap();
+        fs::create_dir(root.join("src")).unwrap();
+        let values = json!({"roots":[{"kind":"folder","value":"src"},{"kind":"test","value":root.join("src")}]});
+        let updated = edit_settings(
+            &root,
+            b"{}",
+            values.as_object().unwrap(),
+            &ModelOptions::default(),
+        )
+        .unwrap();
+        let document = native_json(&updated).unwrap();
+        assert_eq!(document[SOURCE_PATHS_KEY], json!(["src"]));
+        assert_eq!(document["java.lithe.testSourceFolders"], json!(["src"]));
+    }
+
+    #[test]
+    fn jar_directory_with_uncanonicalized_root_writes_relative_glob() {
+        let directory = TestDirectory::new();
+        let lib_dir = directory.0.join("WebRoot/WEB-INF/lib");
+        fs::create_dir_all(&lib_dir).unwrap();
+        let canonical_root = dunce::canonicalize(&directory.0).unwrap();
+        let entries = json!([{"kind":"jar-directory","value":lib_dir}]);
+        let updated = edit_workspace_dependencies(&canonical_root, b"{}", &entries).unwrap();
+        let parsed = native_json(&updated).unwrap();
+        assert_eq!(parsed[LIBRARY_KEY], json!(["WebRoot/WEB-INF/lib/*.jar"]));
+    }
+
+    #[test]
+    fn editing_roots_preserves_existing_missing_folder_but_rejects_new_missing_folder() {
+        let directory = TestDirectory::new();
+        let root = dunce::canonicalize(&directory.0).unwrap();
+        fs::create_dir(root.join("test")).unwrap();
+        let initial = br#"{"java.project.sourcePaths":["missing-src"]}"#;
+        let updated = edit_settings(
+            &root,
+            initial,
+            json!({"roots":[{"kind":"folder","value":"missing-src"},{"kind":"test","value":"test"}]})
+                .as_object()
+                .unwrap(),
+            &ModelOptions::default(),
+        )
+        .unwrap();
+        let parsed = native_json(&updated).unwrap();
+        assert_eq!(parsed[SOURCE_PATHS_KEY], json!(["missing-src", "test"]));
+        assert_eq!(parsed["java.lithe.testSourceFolders"], json!(["test"]));
+        assert!(edit_settings(
+            &root,
+            initial,
+            json!({"roots":[{"kind":"folder","value":"never-existed"}]})
+                .as_object()
+                .unwrap(),
+            &ModelOptions::default(),
+        )
+        .is_err());
+    }
+
+    #[test]
     fn rich_library_configuration_keeps_excludes_sources_and_comments() {
         let source = br#"{ // private comment
           "java.project.referencedLibraries": {
@@ -693,21 +1421,56 @@ mod tests {
             "sources": {"old.jar": "old-sources.jar"}
           }, "privateToken": "untouched"
         }"#;
-        let updated = edit_json(source, &json!(["new.jar"])).unwrap();
+        let updated = edit_workspace_dependencies(
+            Path::new("."),
+            source,
+            &json!([{"kind":"archive","value":"new.jar"},{"kind":"classes","value":"WebRoot/WEB-INF/classes"}]),
+        ).unwrap();
         let parsed = native_json(&updated).unwrap();
         assert_eq!(parsed[LIBRARY_KEY]["include"], json!(["new.jar"]));
+        assert_eq!(
+            parsed[project_model::CLASS_FOLDERS_KEY],
+            json!(["WebRoot/WEB-INF/classes"])
+        );
         assert_eq!(parsed[LIBRARY_KEY]["exclude"], json!(["secret/**/*.jar"]));
         assert_eq!(parsed[LIBRARY_KEY]["sources"]["old.jar"], "old-sources.jar");
         assert!(String::from_utf8(updated.clone())
             .unwrap()
             .contains("private comment"));
-        let reset = native_json(&edit_json(&updated, &Value::Null).unwrap()).unwrap();
+        let reset = native_json(&edit_json(&updated, LIBRARY_KEY, &Value::Null).unwrap()).unwrap();
         assert!(reset[LIBRARY_KEY].get("include").is_none());
         assert_eq!(
             reset[LIBRARY_KEY]["exclude"],
             parsed[LIBRARY_KEY]["exclude"]
         );
         assert_eq!(reset["privateToken"], "untouched");
+    }
+
+    #[test]
+    fn editing_class_folders_keeps_the_default_jar_rule_until_it_is_removed() {
+        let source = br#"{"editor.tabSize":4}"#;
+        let entries = json!([
+            {"kind":"jar-directory","value":"lib/**"},
+            {"kind":"classes","value":"WEB-INF/classes"}
+        ]);
+        let source = edit_workspace_dependencies(Path::new("."), source, &entries).unwrap();
+        let parsed = native_json(&source).unwrap();
+        assert!(parsed.get(LIBRARY_KEY).is_none());
+        assert_eq!(
+            parsed[project_model::CLASS_FOLDERS_KEY],
+            json!(["WEB-INF/classes"])
+        );
+        let removed = edit_workspace_dependencies(Path::new("."), &source, &json!([])).unwrap();
+        let parsed = native_json(&removed).unwrap();
+        assert_eq!(parsed[LIBRARY_KEY], json!([]));
+        assert!(parsed.get(project_model::CLASS_FOLDERS_KEY).is_none());
+        assert_eq!(parsed["editor.tabSize"], 4);
+        assert!(edit_workspace_dependencies(
+            Path::new("."),
+            &removed,
+            &json!([{"kind":"unsupported","value":"lib"}])
+        )
+        .is_err());
     }
 
     #[test]
@@ -733,7 +1496,12 @@ mod tests {
     #[test]
     fn jsonc_library_edits_preserve_comments_unknown_settings_and_spaces() {
         let source=b"{ // keep comment\n \"privateToken\": \"private-value\",\n \"java.project.referencedLibraries\": [\"old.jar\"],\n}";
-        let updated = edit_json(source, &json!(["C:\\Program Files\\Java\\external.jar"])).unwrap();
+        let updated = edit_json(
+            source,
+            LIBRARY_KEY,
+            &json!(["C:\\Program Files\\Java\\external.jar"]),
+        )
+        .unwrap();
         assert!(String::from_utf8_lossy(&updated).contains("// keep comment"));
         let value = native_json(&updated).unwrap();
         assert_eq!(
@@ -741,30 +1509,8 @@ mod tests {
             json!(["C:\\Program Files\\Java\\external.jar"])
         );
         assert_eq!(value["privateToken"], "private-value");
-        let reset = edit_json(&updated, &Value::Null).unwrap();
+        let reset = edit_json(&updated, LIBRARY_KEY, &Value::Null).unwrap();
         assert!(native_json(&reset).unwrap().get(LIBRARY_KEY).is_none());
-    }
-    #[test]
-    fn eclipse_classpath_edits_preserve_containers_source_roots_attachments_and_comments() {
-        let source=br#"<?xml version="1.0"?><!-- before --><classpath><!-- inside --><classpathentry kind="src" path="src"/><classpathentry kind="con" path="org.eclipse.jdt.launching.JRE_CONTAINER"/><classpathentry kind="lib" path="keep.jar" sourcepath="keep-sources.jar"><attributes><attribute name="javadoc_location" value="https://example.test/docs"/></attributes></classpathentry><classpathentry kind="lib" path="remove.jar"/><classpathentry kind="output" path="bin"/></classpath><!-- after -->"#;
-        let updated = edit_classpath(source, &json!(["keep.jar", "External Library.jar"])).unwrap();
-        let text = String::from_utf8_lossy(&updated);
-        for item in [
-            "<!-- before -->",
-            "<!-- inside -->",
-            "<!-- after -->",
-            "keep-sources.jar",
-            "javadoc_location",
-            "JRE_CONTAINER",
-            "kind=\"src\"",
-            "kind=\"output\"",
-        ] {
-            assert!(text.contains(item), "{item}: {text}");
-        }
-        assert_eq!(
-            classpath_libraries(&updated).unwrap(),
-            vec!["keep.jar", "External Library.jar"]
-        );
     }
     #[test]
     fn complete_configuration_keeps_runtime_and_imports_when_native_keys_are_added() {
@@ -777,8 +1523,12 @@ mod tests {
         )
         .unwrap();
         let original = json!({"java":{"configuration":{"runtimes":[{"name":"JavaSE-17","path":"/selected/jdk"}]},"import":{"maven":{"enabled":true}}}});
-        let updated =
-            crate::settings_session::with_native_settings(original.clone(), root).unwrap();
+        let updated = crate::settings_session::with_native_settings(
+            original.clone(),
+            root,
+            &ModelOptions::default(),
+        )
+        .unwrap();
         assert_eq!(
             updated["java"]["configuration"],
             original["java"]["configuration"]

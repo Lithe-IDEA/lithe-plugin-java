@@ -48,10 +48,11 @@ backend_path=$(/usr/bin/plutil -extract backend.launch.path raw -o - "$PLUGIN_DI
 
 jdtls_root=$(LITHE_ARCH="$ARCH" "$ROOT_DIR/scripts/prepare-jdtls.sh")
 extensions="$OUTPUT_DIR/jdtls-extensions"
-rm -rf "$extensions" "$OUTPUT_DIR/icons" "$OUTPUT_DIR/templates" "$OUTPUT_DIR/l10n" "$OUTPUT_DIR/bin"
+rm -rf "$extensions" "$OUTPUT_DIR/icons" "$OUTPUT_DIR/templates" "$OUTPUT_DIR/l10n" "$OUTPUT_DIR/grammars" "$OUTPUT_DIR/bin"
 cp -R "$PLUGIN_DIR/icons" "$OUTPUT_DIR/icons"
 cp -R "$PLUGIN_DIR/templates" "$OUTPUT_DIR/templates"
 cp -R "$PLUGIN_DIR/l10n" "$OUTPUT_DIR/l10n"
+cp -R "$PLUGIN_DIR/grammars" "$OUTPUT_DIR/grammars"
 mkdir -p "$extensions"
 
 # Only the extensions are packaged, with their licenses and the pins they
@@ -63,6 +64,9 @@ for entry in lombok java-debug java-test manifest.json; do
     }
     cp -R "$jdtls_root/$entry" "$extensions/$entry"
 done
+# The plugin's own extension bundle (Eclipse WTP containers, servlet
+# container variables) is compiled here against the prepared JDT LS release.
+node "$ROOT_DIR/scripts/package/project-model-bundle.mjs" "$jdtls_root" "$extensions" >&2
 
 # The plugin backend is one Mach-O binary: a single architecture is copied as
 # built, a universal package joins the two with lipo. Both targets must be
@@ -102,7 +106,7 @@ for declared in \
         exit 1
     }
 done
-for directory in jdtls-extensions/java-debug jdtls-extensions/java-test/extensions; do
+for directory in jdtls-extensions/java-debug jdtls-extensions/java-test/extensions jdtls-extensions/project-model; do
     [[ -n "$(find "$OUTPUT_DIR/$directory" -maxdepth 1 -name '*.jar' -print -quit 2>/dev/null)" ]] || {
         print -u2 -- "extension bundle directory $directory holds no bundles"
         exit 1
